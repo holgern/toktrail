@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 
 TOKTRAIL_DB_ENV = "TOKTRAIL_DB"
+COPILOT_FILE_ENV = "TOKTRAIL_COPILOT_FILE"
 
 
 def default_toktrail_db_path() -> Path:
@@ -37,3 +38,12 @@ def resolve_opencode_db_path(cli_value: Path | None = None) -> Path:
         if candidate.exists():
             return candidate
     return default_opencode_db_path()
+
+
+def resolve_copilot_file_path(cli_value: Path | None = None) -> Path | None:
+    if cli_value is not None:
+        return cli_value.expanduser()
+    env_value = os.environ.get(COPILOT_FILE_ENV)
+    if env_value:
+        return Path(env_value).expanduser()
+    return None

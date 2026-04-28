@@ -22,6 +22,13 @@ def create_source_db(path: Path) -> None:
     conn.close()
 
 
+def create_copilot_file(path: Path) -> None:
+    path.write_text(
+        '{"type":"span","traceId":"trace-1","spanId":"span-1","name":"chat claude-sonnet-4","endTime":[1775934264,967317833],"attributes":{"gen_ai.operation.name":"chat","gen_ai.response.model":"claude-sonnet-4","gen_ai.conversation.id":"conv-1","gen_ai.usage.input_tokens":100,"gen_ai.usage.output_tokens":5}}\n',
+        encoding="utf-8",
+    )
+
+
 def test_cli_init_start_import_status_stop(tmp_path) -> None:
     runner = CliRunner()
     state_db = tmp_path / "toktrail.db"
@@ -116,4 +123,101 @@ def test_cli_watch_opencode_exits_cleanly_on_ctrl_c(tmp_path, monkeypatch) -> No
 
     assert result.exit_code == 0, result.output
     assert "Stopped watching OpenCode." in result.output
+    assert "rows imported: 1" in result.output
+
+
+def test_cli_import_copilot_status(tmp_path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    copilot_file = tmp_path / "copilot.jsonl"
+    create_copilot_file(copilot_file)
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    runner.invoke(app, ["--db", str(state_db), "start", "--name", "test-session"])
+    result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "import",
+            "copilot",
+            "--copilot-file",
+            str(copilot_file),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Imported Copilot usage:" in result.output
+    assert "rows imported: 1" in result.output
+
+    status = runner.invoke(app, ["--db", str(state_db), "status", "1", "--json"])
+    payload = json.loads(status.output)
+    assert payload["by_harness"][0]["harness"] == "copilot"
+    assert payload["totals"]["input"] == 100
+    assert payload["totals"]["output"] == 5
+
+
+def test_cli_import_missing_copilot_file_fails(tmp_path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    runner.invoke(app, ["--db", str(state_db), "start", "--name", "test-session"])
+    result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "import",
+            "copilot",
+            "--copilot-file",
+            str(tmp_path / "missing.jsonl"),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "Copilot telemetry file not found" in result.output
+
+
+def test_cli_import_copilot_without_file_or_env_fails(tmp_path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    runner.invoke(app, ["--db", str(state_db), "start", "--name", "test-session"])
+    result = runner.invoke(app, ["--db", str(state_db), "import", "copilot"])
+
+    assert result.exit_code == 1
+    assert "--copilot-file or TOKTRAIL_COPILOT_FILE" in result.output
+
+
+def test_cli_watch_copilot_exits_cleanly_on_ctrl_c(tmp_path, monkeypatch) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    copilot_file = tmp_path / "copilot.jsonl"
+    create_copilot_file(copilot_file)
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    runner.invoke(app, ["--db", str(state_db), "start", "--name", "test-session"])
+
+    def interrupt_after_first_sleep(_interval: float) -> None:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("toktrail.cli.time.sleep", interrupt_after_first_sleep)
+    result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "watch",
+            "copilot",
+            "--copilot-file",
+            str(copilot_file),
+            "--interval",
+            "0.1",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Stopped watching Copilot." in result.output
     assert "rows imported: 1" in result.output
