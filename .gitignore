@@ -218,3 +218,5 @@ __marimo__/
 .streamlit/secrets.toml
 .taskledger/
 context_toktrail*
+todo.md
+toktrail/_version.py
