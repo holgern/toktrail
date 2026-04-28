@@ -1,0 +1,100 @@
+[build-system]
+requires = ["setuptools>=45", "wheel", "setuptools_scm[toml]>=6.2"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["toktrail*"]
+
+[tool.setuptools.package-data]
+taskledger = [
+    "py.typed",
+]
+
+[tool.pytest.ini_options]
+addopts = "-p no:odoo"
+testpaths = ["tests"]
+python_files = "test_*.py"
+
+[project]
+name = "toktrail"
+description = "token tracker of a single session"
+authors = [{name = "Holger Nahrstaedt"}]
+requires-python = ">=3.10"
+readme = "README.md"
+license = "MIT"
+keywords = ["cli", "developer-tools", "token"]
+dependencies = [
+    "typer",
+    "PyYAML",
+    'tomli; python_version < "3.11"',
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS :: MacOS X",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development",
+    "Topic :: Utilities",
+]
+
+dynamic=["version"]
+
+[project.scripts]
+toktrail = "toktrail.cli:cli_main"
+
+[project.urls]
+Homepage = "https://github.com/holgern/toktrail"
+Repository = "https://github.com/holgern/toktrail"
+Issues = "https://github.com/holgern/toktrail/issues"
+Changelog = "https://github.com/holgern/toktrail/releases"
+
+[project.optional-dependencies]
+dev = [
+    "build",
+    "mypy",
+    "pytest",
+    "ruff",
+    "twine",
+    "types-PyYAML",
+]
+rich = [
+    "rich",
+]
+
+[tool.setuptools_scm]
+write_to = "toktrail/_version.py"
+
+[tool.tox]
+legacy_tox_ini = """
+
+[testenv]
+deps =
+    pytest
+    pytest-cov[all]
+commands =
+    pytest -p no:odoo
+"""
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_untyped_decorators = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+warn_unreachable = true
+strict_equality = true
+exclude = [
+]
