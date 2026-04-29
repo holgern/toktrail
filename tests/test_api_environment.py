@@ -6,18 +6,26 @@ from toktrail.api.environment import prepare_environment
 from toktrail.errors import InvalidAPIUsageError
 
 
-def test_prepare_environment_for_opencode_and_pi_returns_empty_env(tmp_path) -> None:
+def test_prepare_environment_for_opencode_pi_and_codex_returns_empty_env(
+    tmp_path,
+) -> None:
     opencode_path = tmp_path / "opencode.db"
     pi_path = tmp_path / "sessions"
+    codex_path = tmp_path / "codex-sessions"
 
     opencode_env = prepare_environment("opencode", source_path=opencode_path)
     pi_env = prepare_environment("pi", source_path=pi_path)
+    codex_env = prepare_environment("codex", source_path=codex_path)
 
     assert opencode_env.source_path == opencode_path
     assert opencode_env.env == {}
     assert opencode_env.shell_exports == ()
     assert pi_env.source_path == pi_path
     assert pi_env.env == {}
+    assert pi_env.shell_exports == ()
+    assert codex_env.source_path == codex_path
+    assert codex_env.env == {}
+    assert codex_env.shell_exports == ()
 
 
 @pytest.mark.parametrize(

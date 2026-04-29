@@ -108,3 +108,46 @@ def create_pi_session_file(path: Path) -> None:
             },
         ],
     )
+
+
+def create_codex_session_file(path: Path) -> None:
+    write_jsonl_rows(
+        path,
+        [
+            {
+                "type": "session_meta",
+                "payload": {
+                    "source": "interactive",
+                    "model_provider": "openai",
+                    "agent_nickname": "builder",
+                },
+            },
+            {
+                "type": "turn_context",
+                "payload": {
+                    "model": "gpt-5.2-codex",
+                },
+            },
+            {
+                "timestamp": "2026-01-01T00:00:01Z",
+                "type": "event_msg",
+                "payload": {
+                    "type": "token_count",
+                    "info": {
+                        "total_token_usage": {
+                            "input_tokens": 120,
+                            "cached_input_tokens": 20,
+                            "output_tokens": 30,
+                            "reasoning_output_tokens": 5,
+                        },
+                        "last_token_usage": {
+                            "input_tokens": 120,
+                            "cached_input_tokens": 20,
+                            "output_tokens": 30,
+                            "reasoning_output_tokens": 5,
+                        },
+                    },
+                },
+            },
+        ],
+    )

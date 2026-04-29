@@ -4,8 +4,10 @@ import os
 from datetime import datetime
 
 from toktrail.paths import (
+    default_codex_sessions_path,
     default_toktrail_config_path,
     new_copilot_otel_file_path,
+    resolve_codex_sessions_path,
     resolve_copilot_file_path,
     resolve_copilot_source_path,
     resolve_toktrail_config_path,
@@ -69,3 +71,24 @@ def test_resolve_toktrail_config_path_prefers_cli_over_env(
 
     assert resolve_toktrail_config_path(cli_path) == cli_path
     assert resolve_toktrail_config_path(None) == env_path
+
+
+def test_default_codex_sessions_path_uses_home(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    assert default_codex_sessions_path() == tmp_path / ".codex" / "sessions"
+
+
+def test_resolve_codex_sessions_path_prefers_env(monkeypatch, tmp_path) -> None:
+    path = tmp_path / "codex-sessions"
+    monkeypatch.setenv("TOKTRAIL_CODEX_SESSIONS", str(path))
+
+    assert resolve_codex_sessions_path(None) == path
+
+
+def test_resolve_codex_sessions_path_prefers_cli(monkeypatch, tmp_path) -> None:
+    env_path = tmp_path / "env"
+    cli_path = tmp_path / "cli"
+    monkeypatch.setenv("TOKTRAIL_CODEX_SESSIONS", str(env_path))
+
+    assert resolve_codex_sessions_path(cli_path) == cli_path

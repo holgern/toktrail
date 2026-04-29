@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import importlib
+from pathlib import Path
 
+from toktrail.api.harnesses import supported_harnesses
 from toktrail.api.models import CostTotals, TokenBreakdown, UsageEvent
+from toktrail.api.paths import default_source_path, resolve_source_path
 
 
 def test_public_modules_import_successfully() -> None:
@@ -80,3 +83,19 @@ def test_public_models_preserve_raw_json_privacy_by_default() -> None:
     assert event.as_dict(include_raw_json=True)["raw_json"] == '{"secret": true}'
     assert event.as_dict()["thinking_level"] == "high"
     assert CostTotals(actual_cost_usd=1.0, virtual_cost_usd=2.5).savings_usd == 1.5
+
+
+def test_public_harness_metadata_and_paths_include_codex(monkeypatch, tmp_path) -> None:
+    codex_env_path = tmp_path / "codex-sessions"
+    copilot_env_path = tmp_path / "copilot.jsonl"
+    monkeypatch.setenv("TOKTRAIL_CODEX_SESSIONS", str(codex_env_path))
+    monkeypatch.setenv("TOKTRAIL_COPILOT_FILE", str(copilot_env_path))
+
+    harness_names = {definition.name for definition in supported_harnesses()}
+
+    assert "codex" in harness_names
+    assert default_source_path("codex") == Path.home() / ".codex" / "sessions"
+    assert resolve_source_path("codex", tmp_path / "explicit-codex") == (
+        tmp_path / "explicit-codex"
+    )
+    assert resolve_source_path("codex") == codex_env_path

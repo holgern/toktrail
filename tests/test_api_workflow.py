@@ -6,6 +6,7 @@ import pytest
 
 from tests.helpers import (
     VALID_ASSISTANT,
+    create_codex_session_file,
     create_opencode_db,
     insert_message,
     write_jsonl_rows,
@@ -72,6 +73,34 @@ def test_finalize_manual_run_detects_updated_source_session_for_opencode(
 
     assert finalized.source_session.source_session_id == "ses-1"
     assert finalized.import_result.rows_imported == 2
+    assert finalized.tracking_session.active is False
+
+
+def test_prepare_and_finalize_manual_run_for_codex(tmp_path) -> None:
+    state_db = tmp_path / "toktrail.db"
+    codex_file = tmp_path / "codex" / "session-001.jsonl"
+    create_codex_session_file(codex_file)
+
+    prepared = prepare_manual_run(
+        state_db,
+        "codex",
+        name="workflow-codex",
+        source_path=codex_file,
+    )
+
+    with codex_file.open("a", encoding="utf-8") as handle:
+        handle.write(
+            '{"timestamp":"2026-01-01T00:00:02Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":200,"cached_input_tokens":20,"output_tokens":40,"reasoning_output_tokens":5},"last_token_usage":{"input_tokens":80,"output_tokens":10}}}}\n'
+        )
+
+    finalized = finalize_manual_run(state_db, prepared)
+
+    assert finalized.source_session.source_session_id == "session-001"
+    assert finalized.import_result.rows_imported == 2
+    assert finalized.report.totals.tokens.input == 180
+    assert finalized.report.totals.tokens.cache_read == 20
+    assert finalized.report.totals.tokens.output == 40
+    assert finalized.report.totals.tokens.reasoning == 5
     assert finalized.tracking_session.active is False
 
 

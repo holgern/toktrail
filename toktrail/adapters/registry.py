@@ -5,10 +5,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from toktrail.adapters.base import ScanResult, SourceSessionSummary
+from toktrail.adapters.codex import list_codex_sessions, scan_codex_path
 from toktrail.adapters.copilot import list_copilot_sessions, scan_copilot_path
 from toktrail.adapters.opencode import list_opencode_sessions, scan_opencode_sqlite
 from toktrail.adapters.pi import list_pi_sessions, scan_pi_path
 from toktrail.paths import (
+    resolve_codex_sessions_path,
     resolve_copilot_source_path,
     resolve_opencode_db_path,
     resolve_pi_sessions_path,
@@ -45,6 +47,13 @@ HARNESS_REGISTRY: dict[str, HarnessDefinition] = {
         resolve_source_path=resolve_copilot_source_path,
         scan=scan_copilot_path,
         list_sessions=list_copilot_sessions,
+    ),
+    "codex": HarnessDefinition(
+        name="codex",
+        display_name="Codex",
+        resolve_source_path=resolve_codex_sessions_path,
+        scan=scan_codex_path,
+        list_sessions=list_codex_sessions,
     ),
 }
 

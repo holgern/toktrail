@@ -5,12 +5,16 @@ from pathlib import Path
 from toktrail.api.harnesses import get_harness_definition
 from toktrail.errors import StateDatabaseError
 from toktrail.paths import (
+    default_codex_sessions_path as _default_codex_sessions_path,
+)
+from toktrail.paths import (
     default_toktrail_config_path as _default_toktrail_config_path,
 )
 from toktrail.paths import (
     default_toktrail_db_path as _default_toktrail_db_path,
 )
 from toktrail.paths import (
+    resolve_codex_sessions_path,
     resolve_copilot_source_path,
     resolve_opencode_db_path,
     resolve_pi_sessions_path,
@@ -48,6 +52,10 @@ def default_source_path(harness: str) -> Path | None:
     return get_harness_definition(harness).default_source_path
 
 
+def default_codex_sessions_path() -> Path:
+    return _default_codex_sessions_path()
+
+
 def resolve_source_path(
     harness: str,
     source_path: Path | None = None,
@@ -57,10 +65,16 @@ def resolve_source_path(
         return resolve_opencode_db_path(source_path)
     if normalized == "pi":
         return resolve_pi_sessions_path(source_path)
-    return resolve_copilot_source_path(source_path)
+    if normalized == "copilot":
+        return resolve_copilot_source_path(source_path)
+    if normalized == "codex":
+        return resolve_codex_sessions_path(source_path)
+    msg = f"Unsupported harness: {harness}"
+    raise StateDatabaseError(msg)
 
 
 __all__ = [
+    "default_codex_sessions_path",
     "default_source_path",
     "default_toktrail_config_path",
     "default_toktrail_db_path",

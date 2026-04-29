@@ -207,6 +207,14 @@ PiPathOption = Annotated[
     Path | None,
     typer.Option("--pi-path", "--path", help="Override Pi sessions file or directory."),
 ]
+CodexPathOption = Annotated[
+    Path | None,
+    typer.Option(
+        "--codex-path",
+        "--path",
+        help="Override Codex sessions file or directory.",
+    ),
+]
 SinceStartOption = Annotated[bool, typer.Option("--since-start")]
 NoRawOption = Annotated[bool, typer.Option("--no-raw")]
 IntervalOption = Annotated[float, typer.Option("--interval", min=0.1)]
@@ -774,6 +782,27 @@ def import_pi(
     _print_import_result(result)
 
 
+@import_app.command("codex")
+def import_codex(
+    ctx: typer.Context,
+    session_id: SessionOption = None,
+    source_session_id: SourceSessionOption = None,
+    codex_path: CodexPathOption = None,
+    since_start: SinceStartOption = False,
+    no_raw: NoRawOption = False,
+) -> None:
+    result = _run_harness_import(
+        ctx,
+        harness_name="codex",
+        source_path=codex_path,
+        tracking_session_id=session_id,
+        source_session_id=source_session_id,
+        since_start=since_start,
+        no_raw=no_raw,
+    )
+    _print_import_result(result)
+
+
 @watch_app.command("opencode")
 def watch_opencode(
     ctx: typer.Context,
@@ -840,6 +869,28 @@ def watch_pi(
     )
 
 
+@watch_app.command("codex")
+def watch_codex(
+    ctx: typer.Context,
+    session_id: SessionOption = None,
+    source_session_id: SourceSessionOption = None,
+    codex_path: CodexPathOption = None,
+    interval: IntervalOption = 2.0,
+    since_start: SinceStartOption = False,
+    no_raw: NoRawOption = False,
+) -> None:
+    _watch_harness(
+        ctx,
+        harness_name="codex",
+        source_path=codex_path,
+        tracking_session_id=session_id,
+        source_session_id=source_session_id,
+        interval=interval,
+        since_start=since_start,
+        no_raw=no_raw,
+    )
+
+
 @sessions_app.command("opencode")
 def sessions_opencode(
     ctx: typer.Context,
@@ -888,6 +939,36 @@ def sessions_pi(
         ctx,
         "pi",
         source_path=pi_path,
+        source_session_id=source_session_id,
+        last=last,
+        breakdown=breakdown,
+        json_output=json_output,
+        utc=utc,
+        limit=limit,
+        sort=sort,
+        columns=columns,
+        rich_output=rich_output,
+    )
+
+
+@sessions_app.command("codex")
+def sessions_codex(
+    ctx: typer.Context,
+    source_session_id: SourceSessionArgument = None,
+    codex_path: CodexPathOption = None,
+    last: LastOption = False,
+    breakdown: BreakdownOption = False,
+    json_output: JsonOption = False,
+    utc: UtcOption = False,
+    limit: LimitOption = None,
+    sort: SortOption = "last",
+    columns: ColumnsOption = None,
+    rich_output: RichOption = False,
+) -> None:
+    _run_source_sessions_command(
+        ctx,
+        "codex",
+        source_path=codex_path,
         source_session_id=source_session_id,
         last=last,
         breakdown=breakdown,

@@ -6,6 +6,7 @@ import pytest
 
 from tests.helpers import (
     VALID_ASSISTANT,
+    create_codex_session_file,
     create_copilot_file,
     create_opencode_db,
     create_pi_session_file,
@@ -52,12 +53,19 @@ def _build_copilot_source(tmp_path):
     return copilot_file
 
 
+def _build_codex_source(tmp_path):
+    codex_file = tmp_path / "codex" / "session-001.jsonl"
+    create_codex_session_file(codex_file)
+    return codex_file
+
+
 @pytest.mark.parametrize(
     ("harness", "builder", "source_session_id"),
     (
         ("opencode", _build_opencode_source, "ses-1"),
         ("pi", _build_pi_source, "pi_ses_001"),
         ("copilot", _build_copilot_source, "conv-1"),
+        ("codex", _build_codex_source, "session-001"),
     ),
 )
 def test_capture_source_snapshot_supports_all_harnesses(

@@ -78,6 +78,9 @@ resolution rules.
 Public functions never print, never parse CLI arguments, never call `sys.exit`
 or `typer.Exit`, and return dataclasses or plain values.
 
+Supported harness names across the public API are `opencode`, `pi`, `codex`,
+and `copilot`.
+
 ## Models
 
 Key public models:
@@ -155,16 +158,18 @@ toktrail does not fall back to inferred provider aliases from the model name.
 from pathlib import Path
 
 from toktrail.api.imports import import_usage
+from toktrail.api.sources import capture_source_snapshot, list_source_sessions
 from toktrail.api.reports import session_report, usage_report
 from toktrail.api.sessions import init_state, start_session
 
 db_path = Path(".toktrail/toktrail.db")
-source_path = Path("tests/fixtures/opencode.db")
+source_path = Path("~/.codex/sessions").expanduser()
 
 init_state(db_path)
-result = import_usage(db_path, "opencode", source_path=source_path)
+snapshot = capture_source_snapshot("codex", source_path=source_path)
 session = start_session(db_path, name="benchmark-1")
-result = import_usage(db_path, "opencode", session_id=session.id, source_path=source_path)
+result = import_usage(db_path, "codex", session_id=session.id, source_path=source_path)
+source_sessions = list_source_sessions("codex", source_path=source_path, limit=5)
 report = session_report(db_path, session.id)
 window = usage_report(db_path, period="today", timezone="UTC")
 ```
@@ -172,6 +177,10 @@ window = usage_report(db_path, period="today", timezone="UTC")
 `import_usage()` can import canonical usage rows without an active session. A
 later import into a specific tracking session links existing canonical rows to
 that session idempotently instead of duplicating them.
+
+`capture_source_snapshot()` and `list_source_sessions()` use the same supported
+harness set, so Codex source sessions can be inspected before import with the
+same public API used for OpenCode, Pi, and Copilot.
 
 `usage_report()` no longer requires `session_id`. When used for canonical
 period/time-range reporting, it returns `TrackingSessionReport(session=None, ...)`.
@@ -188,8 +197,9 @@ from toktrail.api.workflow import finalize_manual_run, prepare_manual_run
 
 prepared = prepare_manual_run(
     Path(".toktrail/solvecost.db"),
-    "pi",
+    "codex",
     name="solvecost:benchmark-1:problem-001:attempt-1",
+    source_path=Path("~/.codex/sessions").expanduser(),
 )
 
 # The caller asks the user to run the agent manually here.
@@ -212,4 +222,6 @@ record = {
 
 For Copilot, use `prepare_environment()` or `prepare_manual_run(..., shell="nu")`
 to get the OTEL environment variables and shell exports without launching any
-processes.
+processes. For Codex, `prepare_environment("codex", ...)` returns the selected
+source path with an empty environment because Codex writes session logs
+natively.

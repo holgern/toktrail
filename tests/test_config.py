@@ -23,6 +23,7 @@ def test_load_costing_config_missing_file_returns_default_config(tmp_path) -> No
         "opencode",
         "pi",
         "copilot",
+        "codex",
     ]
     assert config.virtual_prices == ()
     assert config.actual_prices == ()
@@ -37,7 +38,12 @@ def test_load_costing_config_parses_minimal_config(tmp_path) -> None:
     assert config.default_actual_mode == "source"
     assert config.default_virtual_mode == "pricing"
     assert config.missing_price == "warn"
-    assert [rule.mode for rule in config.actual_rules] == ["source", "zero", "zero"]
+    assert [rule.mode for rule in config.actual_rules] == [
+        "source",
+        "zero",
+        "zero",
+        "zero",
+    ]
 
 
 def test_load_toktrail_config_parses_import_settings(tmp_path) -> None:
@@ -46,10 +52,11 @@ def test_load_toktrail_config_parses_import_settings(tmp_path) -> None:
 
     config = load_toktrail_config(config_path)
 
-    assert config.imports.harnesses == ("opencode", "pi", "copilot")
+    assert config.imports.harnesses == ("opencode", "pi", "copilot", "codex")
     assert config.imports.missing_source == "warn"
     assert config.imports.include_raw_json is False
     assert config.imports.sources["opencode"].name == "opencode.db"
+    assert config.imports.sources["codex"].name == "sessions"
 
 
 def test_load_costing_config_parses_copilot_template(tmp_path) -> None:

@@ -1,12 +1,12 @@
 # toktrail
 
-`toktrail` is a Python CLI for tracking OpenCode, Pi, and GitHub Copilot CLI
-token usage inside a local toktrail SQLite database.
+`toktrail` is a Python CLI for tracking OpenCode, Pi, Codex, and GitHub
+Copilot CLI token usage inside a local toktrail SQLite database.
 
 The first implementation focuses on:
 
-- OpenCode SQLite, Pi JSONL sessions, and GitHub Copilot CLI OTEL JSONL as
-  supported source harnesses
+- OpenCode SQLite, Pi JSONL sessions, Codex JSONL sessions, and GitHub Copilot
+  CLI OTEL JSONL as supported source harnesses
 - local SQLite for both the OpenCode source database and toktrail state
 - reporting totals by tracking session, harness, model, and agent/mode
 
@@ -16,6 +16,7 @@ The first implementation focuses on:
 - an OpenCode SQLite database, typically at
   `~/.local/share/opencode/opencode.db`, and/or
 - Pi session JSONL files, typically under `~/.pi/agent/sessions`, and/or
+- Codex session JSONL files, typically under `~/.codex/sessions`, and/or
 - GitHub Copilot CLI OTEL JSONL export files, typically under `~/.copilot/otel`
 
 toktrail reads supported source data in read-only mode and does not modify the
@@ -79,9 +80,14 @@ Import usage from config or a single harness:
 toktrail config init
 toktrail import
 toktrail import --harness opencode --source tests/fixtures/opencode.db
+toktrail import --harness codex --source ~/.codex/sessions
 toktrail import --no-session
 toktrail import opencode
 toktrail import pi
+toktrail import codex
+toktrail import codex --codex-path ~/.codex/sessions
+toktrail import codex --source-session session-001
+toktrail import codex --since-start --no-raw
 toktrail import pi --pi-path ~/.pi/agent/sessions
 toktrail import pi --pi-path ~/.pi/agent/sessions/<encoded-cwd>/session.jsonl
 toktrail import pi --source-session pi_ses_001
@@ -142,6 +148,7 @@ toktrail stop 3
 toktrail sessions
 toktrail sessions pi
 toktrail sessions opencode
+toktrail sessions codex
 toktrail sessions copilot
 ```
 
@@ -166,6 +173,7 @@ Import usage:
 toktrail import
 toktrail import --harness opencode --source /path/to/opencode.db
 toktrail import --harness pi --source ~/.pi/agent/sessions
+toktrail import --harness codex --source ~/.codex/sessions
 toktrail import --session 3
 toktrail import --no-session
 toktrail import --raw
@@ -174,7 +182,8 @@ toktrail import --no-raw
 
 The plain `toktrail import` command reads enabled harnesses and source paths from
 `[imports]` and `[imports.sources]` in `config.toml`. Legacy
-`toktrail import opencode|pi|copilot` subcommands still work for compatibility.
+`toktrail import opencode|pi|copilot|codex` subcommands still work for
+compatibility.
 
 Import or watch OpenCode usage:
 
@@ -202,6 +211,20 @@ toktrail import pi --no-raw
 
 toktrail watch pi --interval 2
 toktrail watch pi --pi-path ~/.pi/agent/sessions
+```
+
+Import or watch Codex usage:
+
+```bash
+toktrail import codex
+toktrail import codex --codex-path ~/.codex/sessions
+toktrail import codex --codex-path ~/.codex/sessions/2026/04/29/session-001.jsonl
+toktrail import codex --source-session session-001
+toktrail import codex --since-start
+toktrail import codex --no-raw
+
+toktrail watch codex --interval 2
+toktrail watch codex --codex-path ~/.codex/sessions
 ```
 
 Import or watch GitHub Copilot CLI OTEL JSONL usage:
@@ -256,6 +279,10 @@ toktrail sessions pi --pi-path ~/.pi/agent/sessions
 toktrail sessions pi --last --breakdown
 toktrail sessions pi --sort tokens --limit 5 --columns source_session_id,total,actual,virtual,savings --rich
 toktrail sessions pi pi_ses_001 --json
+toktrail sessions codex
+toktrail sessions codex --codex-path ~/.codex/sessions
+toktrail sessions codex --last --breakdown
+toktrail sessions codex --sort tokens --limit 5 --columns source_session_id,total,actual,virtual,savings
 toktrail sessions copilot
 toktrail sessions copilot --copilot-path ~/.copilot/otel
 toktrail --config ~/.config/toktrail/config.toml sessions copilot --sort virtual --limit 5
@@ -295,11 +322,11 @@ override the pricing config path. Missing config files are safe: toktrail falls
 back to built-in defaults and still reports source and actual costs.
 
 Usage imports store normalized usage metadata locally and store raw source JSON
-by default for local debugging and reprocessing. Pi imports store raw JSONL
-entry lines by default. Use `--no-raw` with import or watch commands to
+by default for local debugging and reprocessing. Pi and Codex imports store raw
+JSONL entry lines by default. Use `--no-raw` with import or watch commands to
 suppress raw JSON storage.
 
-toktrail never prints raw OpenCode, Pi, or Copilot JSON in CLI output.
+toktrail never prints raw OpenCode, Pi, Codex, or Copilot JSON in CLI output.
 
 ## Reporting
 
@@ -328,7 +355,7 @@ shape for automation, including `unconfigured_models` and `display_filters`.
 By default:
 
 - OpenCode keeps imported source cost as actual cost
-- Pi and Copilot treat actual cost as `$0.00`
+- Pi, Codex, and Copilot treat actual cost as `$0.00`
 - virtual cost uses configured pricing tables when available
 
 This makes Copilot subscription analysis straightforward: source and actual cost

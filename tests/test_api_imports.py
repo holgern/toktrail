@@ -5,7 +5,12 @@ from copy import deepcopy
 
 import pytest
 
-from tests.helpers import VALID_ASSISTANT, create_opencode_db, insert_message
+from tests.helpers import (
+    VALID_ASSISTANT,
+    create_codex_session_file,
+    create_opencode_db,
+    insert_message,
+)
 from toktrail.api.imports import import_configured_usage, import_usage
 from toktrail.api.reports import session_report
 from toktrail.api.sessions import init_state, start_session
@@ -132,23 +137,56 @@ def test_import_usage_can_ignore_active_session_when_requested(tmp_path) -> None
     assert result.rows_imported == 2
 
 
+def test_import_usage_supports_codex_source(tmp_path) -> None:
+    state_db = tmp_path / "toktrail.db"
+    codex_file = tmp_path / "codex" / "session-001.jsonl"
+    create_codex_session_file(codex_file)
+    init_state(state_db)
+    session = start_session(state_db, name="codex")
+
+    first = import_usage(
+        state_db,
+        "codex",
+        source_path=codex_file,
+        session_id=session.id,
+    )
+    second = import_usage(
+        state_db,
+        "codex",
+        source_path=codex_file,
+        session_id=session.id,
+    )
+    report = session_report(state_db, session.id)
+
+    assert first.rows_imported == 1
+    assert second.rows_imported == 0
+    assert report.totals.tokens.input == 100
+    assert report.totals.tokens.cache_read == 20
+    assert report.totals.tokens.output == 30
+    assert report.totals.tokens.reasoning == 5
+    assert report.totals.tokens.total == 155
+
+
 def test_import_configured_usage_imports_all_configured_harnesses(tmp_path) -> None:
     state_db = tmp_path / "toktrail.db"
     source_db = tmp_path / "opencode.db"
+    codex_file = tmp_path / "codex" / "session-001.jsonl"
     _create_opencode_messages(source_db)
+    create_codex_session_file(codex_file)
     config_path = tmp_path / "toktrail.toml"
     config_path.write_text(
         f"""
 config_version = 1
 
 [imports]
-harnesses = ["opencode", "pi"]
+harnesses = ["opencode", "pi", "codex"]
 missing_source = "warn"
 include_raw_json = false
 
 [imports.sources]
 opencode = "{source_db}"
 pi = "{tmp_path / 'missing-pi'}"
+codex = "{codex_file}"
 """.strip(),
         encoding="utf-8",
     )
@@ -161,6 +199,7 @@ pi = "{tmp_path / 'missing-pi'}"
     ] == [
         ("opencode", "ok", 2),
         ("pi", "skipped", 0),
+        ("codex", "ok", 1),
     ]
 
 
