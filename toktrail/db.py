@@ -129,12 +129,17 @@ def migrate(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
-def create_tracking_session(conn: sqlite3.Connection, name: str | None) -> int:
+def create_tracking_session(
+    conn: sqlite3.Connection,
+    name: str | None,
+    *,
+    started_at_ms: int | None = None,
+) -> int:
     active_session_id = get_active_tracking_session(conn)
     if active_session_id is not None:
         msg = f"Tracking session {active_session_id} is already active."
         raise ValueError(msg)
-    now_ms = _now_ms()
+    now_ms = started_at_ms if started_at_ms is not None else _now_ms()
     cursor = conn.execute(
         """
         INSERT INTO tracking_sessions (
@@ -151,8 +156,13 @@ def create_tracking_session(conn: sqlite3.Connection, name: str | None) -> int:
     return _required_lastrowid(cursor.lastrowid)
 
 
-def end_tracking_session(conn: sqlite3.Connection, session_id: int) -> None:
-    now_ms = _now_ms()
+def end_tracking_session(
+    conn: sqlite3.Connection,
+    session_id: int,
+    *,
+    ended_at_ms: int | None = None,
+) -> None:
+    now_ms = ended_at_ms if ended_at_ms is not None else _now_ms()
     cursor = conn.execute(
         """
         UPDATE tracking_sessions

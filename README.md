@@ -33,6 +33,30 @@ For development:
 python -m pip install -e ".[dev]"
 ```
 
+## Public Python API
+
+Automation should prefer the stable Python API in `toktrail.api.*` instead of
+importing internals like `toktrail.db` or `toktrail.adapters.*`.
+
+```python
+from pathlib import Path
+
+from toktrail.api.imports import import_usage
+from toktrail.api.reports import session_report
+from toktrail.api.sessions import init_state, start_session
+
+db_path = Path(".toktrail/toktrail.db")
+source_path = Path("tests/fixtures/opencode.db")
+
+init_state(db_path)
+session = start_session(db_path, name="benchmark-run")
+import_usage(db_path, "opencode", session_id=session.id, source_path=source_path)
+report = session_report(db_path, session.id)
+```
+
+See [`API.md`](API.md) for the stable import boundary, public models, workflow
+API, canonical errors, and privacy defaults.
+
 ## Quickstart
 
 Initialize the toktrail state database:

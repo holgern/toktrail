@@ -1,0 +1,158 @@
+from __future__ import annotations
+
+import sqlite3
+from pathlib import Path
+
+from toktrail import db as db_module
+from toktrail.api._common import _open_state_db
+from toktrail.api._conversions import _to_public_tracking_session
+from toktrail.api.models import TrackingSession
+from toktrail.errors import (
+    ActiveSessionExistsError,
+    NoActiveSessionError,
+    SessionAlreadyEndedError,
+    SessionNotFoundError,
+    StateDatabaseError,
+)
+
+
+def init_state(db_path: Path | None = None) -> Path:
+    conn, resolved = _open_state_db(db_path)
+    conn.close()
+    return resolved
+
+
+def start_session(
+    db_path: Path | None,
+    *,
+    name: str | None = None,
+    started_at_ms: int | None = None,
+) -> TrackingSession:
+    conn, _ = _open_state_db(db_path)
+    try:
+        session_id = db_module.create_tracking_session(
+            conn,
+            name,
+            started_at_ms=started_at_ms,
+        )
+        session = db_module.get_tracking_session(conn, session_id)
+    except ValueError as exc:
+        if "already active" in str(exc):
+            raise ActiveSessionExistsError(str(exc)) from exc
+        raise StateDatabaseError(str(exc)) from exc
+    except sqlite3.Error as exc:
+        raise StateDatabaseError(str(exc)) from exc
+    finally:
+        conn.close()
+    if session is None:
+        msg = f"Tracking session not found after creation: {session_id}"
+        raise StateDatabaseError(msg)
+    return _to_public_tracking_session(session)
+
+
+def stop_session(
+    db_path: Path | None,
+    session_id: int | None = None,
+    *,
+    ended_at_ms: int | None = None,
+) -> TrackingSession:
+    conn, _ = _open_state_db(db_path)
+    try:
+        selected_session_id = session_id
+        if selected_session_id is None:
+            active = db_module.get_active_tracking_session(conn)
+            if active is None:
+                raise NoActiveSessionError(
+                    "An active tracking session is required, but none exists."
+                )
+            selected_session_id = active
+        session = db_module.get_tracking_session(conn, selected_session_id)
+        if session is None:
+            msg = f"Tracking session not found: {selected_session_id}"
+            raise SessionNotFoundError(msg)
+        if session.ended_at_ms is not None:
+            msg = f"Tracking session {selected_session_id} has already ended."
+            raise SessionAlreadyEndedError(msg)
+        db_module.end_tracking_session(
+            conn,
+            selected_session_id,
+            ended_at_ms=ended_at_ms,
+        )
+        updated = db_module.get_tracking_session(conn, selected_session_id)
+    except sqlite3.Error as exc:
+        raise StateDatabaseError(str(exc)) from exc
+    finally:
+        conn.close()
+    if updated is None:
+        msg = f"Tracking session not found after stop: {selected_session_id}"
+        raise StateDatabaseError(msg)
+    return _to_public_tracking_session(updated)
+
+
+def get_active_session(db_path: Path | None) -> TrackingSession | None:
+    conn, _ = _open_state_db(db_path)
+    try:
+        session_id = db_module.get_active_tracking_session(conn)
+        if session_id is None:
+            return None
+        session = db_module.get_tracking_session(conn, session_id)
+    finally:
+        conn.close()
+    if session is None:
+        msg = f"Tracking session not found: {session_id}"
+        raise StateDatabaseError(msg)
+    return _to_public_tracking_session(session)
+
+
+def require_active_session(db_path: Path | None) -> TrackingSession:
+    session = get_active_session(db_path)
+    if session is None:
+        msg = "An active tracking session is required, but none exists."
+        raise NoActiveSessionError(msg)
+    return session
+
+
+def get_session(db_path: Path | None, session_id: int) -> TrackingSession:
+    conn, _ = _open_state_db(db_path)
+    try:
+        session = db_module.get_tracking_session(conn, session_id)
+    finally:
+        conn.close()
+    if session is None:
+        msg = f"Tracking session not found: {session_id}"
+        raise SessionNotFoundError(msg)
+    return _to_public_tracking_session(session)
+
+
+def list_sessions(
+    db_path: Path | None,
+    *,
+    limit: int | None = None,
+    include_ended: bool = True,
+) -> tuple[TrackingSession, ...]:
+    conn, _ = _open_state_db(db_path)
+    try:
+        sessions = db_module.list_tracking_sessions(conn)
+    finally:
+        conn.close()
+    public_sessions = tuple(
+        _to_public_tracking_session(session) for session in sessions
+    )
+    if not include_ended:
+        public_sessions = tuple(
+            session for session in public_sessions if session.active
+        )
+    if limit is not None:
+        public_sessions = public_sessions[:limit]
+    return public_sessions
+
+
+__all__ = [
+    "get_active_session",
+    "get_session",
+    "init_state",
+    "list_sessions",
+    "require_active_session",
+    "start_session",
+    "stop_session",
+]

@@ -46,3 +46,65 @@ def insert_message(
         "INSERT INTO message (id, session_id, data) VALUES (?, ?, ?)",
         (row_id, session_id, json.dumps(data)),
     )
+
+
+def write_jsonl_rows(path: Path, rows: list[dict[str, object]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "".join(f"{json.dumps(row)}\n" for row in rows),
+        encoding="utf-8",
+    )
+
+
+def create_copilot_file(path: Path) -> None:
+    write_jsonl_rows(
+        path,
+        [
+            {
+                "type": "span",
+                "traceId": "trace-1",
+                "spanId": "span-1",
+                "name": "chat claude-sonnet-4",
+                "endTime": [1775934264, 967317833],
+                "attributes": {
+                    "gen_ai.operation.name": "chat",
+                    "gen_ai.response.model": "claude-sonnet-4",
+                    "gen_ai.conversation.id": "conv-1",
+                    "gen_ai.usage.input_tokens": 100,
+                    "gen_ai.usage.output_tokens": 5,
+                },
+            }
+        ],
+    )
+
+
+def create_pi_session_file(path: Path) -> None:
+    write_jsonl_rows(
+        path,
+        [
+            {
+                "type": "session",
+                "id": "pi_ses_001",
+                "timestamp": "2026-01-01T00:00:00.000Z",
+                "cwd": "/tmp",
+            },
+            {
+                "type": "message",
+                "id": "msg_001",
+                "parentId": None,
+                "timestamp": "2026-01-01T00:00:01.000Z",
+                "message": {
+                    "role": "assistant",
+                    "model": "claude-3-5-sonnet",
+                    "provider": "anthropic",
+                    "usage": {
+                        "input": 100,
+                        "output": 50,
+                        "cacheRead": 10,
+                        "cacheWrite": 5,
+                        "totalTokens": 165,
+                    },
+                },
+            },
+        ],
+    )

@@ -19,6 +19,7 @@ from toktrail.adapters.summary import (
     summarize_events_by_agent,
     summarize_events_by_model,
 )
+from toktrail.api.environment import prepare_environment as prepare_api_environment
 from toktrail.config import (
     DEFAULT_TEMPLATE_NAME,
     CostingConfig,
@@ -38,6 +39,7 @@ from toktrail.db import (
     migrate,
     summarize_usage,
 )
+from toktrail.errors import InvalidAPIUsageError
 from toktrail.formatting import format_epoch_ms_compact
 from toktrail.models import UsageEvent
 from toktrail.paths import (
@@ -668,12 +670,18 @@ def copilot_env(
     otel_file: Annotated[Path | None, typer.Option("--otel-file")] = None,
     json_output: JsonOption = False,
 ) -> None:
-    path = (otel_file or new_copilot_otel_file_path()).expanduser()
-    env_vars = _copilot_env_vars(path)
+    try:
+        environment = prepare_api_environment(
+            "copilot",
+            source_path=otel_file,
+            shell=shell,
+        )
+    except InvalidAPIUsageError as exc:
+        _exit_with_error(str(exc))
     if json_output:
-        typer.echo(_render_copilot_env_json(env_vars), nl=False)
+        typer.echo(json.dumps(environment.env, indent=2) + "\n", nl=False)
         return
-    for line in _render_copilot_env_lines(shell, env_vars):
+    for line in environment.shell_exports:
         typer.echo(line)
 
 
