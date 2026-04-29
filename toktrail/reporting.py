@@ -201,6 +201,32 @@ class ModelSummaryRow:
 
 
 @dataclass(frozen=True)
+class UnconfiguredModelRow:
+    required: tuple[str, ...]
+    harness: str
+    provider_id: str
+    model_id: str
+    thinking_level: str | None
+    message_count: int
+    tokens: TokenBreakdown
+
+    @property
+    def total_tokens(self) -> int:
+        return self.tokens.total
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "required": list(self.required),
+            "harness": self.harness,
+            "provider_id": self.provider_id,
+            "model_id": self.model_id,
+            "thinking_level": self.thinking_level,
+            "message_count": self.message_count,
+            **self.tokens.as_dict(),
+        }
+
+
+@dataclass(frozen=True)
 class AgentSummaryRow:
     agent: str
     message_count: int
@@ -243,6 +269,7 @@ class TrackingSessionReport:
     by_harness: list[HarnessSummaryRow]
     by_model: list[ModelSummaryRow]
     by_agent: list[AgentSummaryRow]
+    unconfigured_models: list[UnconfiguredModelRow] = field(default_factory=list)
     filters: UsageReportFilter = field(default_factory=UsageReportFilter)
 
     def as_dict(self) -> dict[str, object]:
@@ -260,4 +287,7 @@ class TrackingSessionReport:
             "by_harness": [row.as_dict() for row in self.by_harness],
             "by_model": [row.as_dict() for row in self.by_model],
             "by_agent": [row.as_dict() for row in self.by_agent],
+            "unconfigured_models": [
+                row.as_dict() for row in self.unconfigured_models
+            ],
         }

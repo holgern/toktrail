@@ -11,6 +11,7 @@ from toktrail.api.models import (
     TokenBreakdown,
     TrackingSession,
     TrackingSessionReport,
+    UnconfiguredModelRow,
     UsageEvent,
 )
 from toktrail.models import (
@@ -39,6 +40,9 @@ from toktrail.reporting import (
 )
 from toktrail.reporting import (
     TrackingSessionReport as InternalTrackingSessionReport,
+)
+from toktrail.reporting import (
+    UnconfiguredModelRow as InternalUnconfiguredModelRow,
 )
 
 
@@ -157,10 +161,27 @@ def _to_public_agent_row(value: InternalAgentSummaryRow) -> AgentSummaryRow:
     )
 
 
+def _to_public_unconfigured_model_row(
+    value: InternalUnconfiguredModelRow,
+) -> UnconfiguredModelRow:
+    return UnconfiguredModelRow(
+        required=value.required,
+        harness=value.harness,
+        provider_id=value.provider_id,
+        model_id=value.model_id,
+        thinking_level=value.thinking_level,
+        message_count=value.message_count,
+        tokens=_to_public_token_breakdown(value.tokens),
+    )
+
+
 def _to_public_report(value: InternalTrackingSessionReport) -> TrackingSessionReport:
     by_harness = tuple(_to_public_harness_row(row) for row in value.by_harness)
     by_model = tuple(_to_public_model_row(row) for row in value.by_model)
     by_agent = tuple(_to_public_agent_row(row) for row in value.by_agent)
+    unconfigured_models = tuple(
+        _to_public_unconfigured_model_row(row) for row in value.unconfigured_models
+    )
     message_count = sum(row.message_count for row in by_harness)
     filters: dict[str, object] = {
         key: filter_value for key, filter_value in value.filters.as_dict().items()
@@ -171,6 +192,7 @@ def _to_public_report(value: InternalTrackingSessionReport) -> TrackingSessionRe
         by_harness=by_harness,
         by_model=by_model,
         by_agent=by_agent,
+        unconfigured_models=unconfigured_models,
         filters=filters,
     )
 
@@ -185,5 +207,6 @@ __all__ = [
     "_to_public_source_summary",
     "_to_public_token_breakdown",
     "_to_public_tracking_session",
+    "_to_public_unconfigured_model_row",
     "_to_public_usage_event",
 ]

@@ -52,6 +52,92 @@ def create_thinking_source_db(path: Path) -> None:
     conn.close()
 
 
+def create_pricing_source_db(path: Path) -> None:
+    conn = create_opencode_db(path)
+    insert_message(
+        conn,
+        row_id="row-1",
+        session_id="ses-1",
+        data=deepcopy(VALID_ASSISTANT),
+    )
+    unpriced = deepcopy(VALID_ASSISTANT)
+    unpriced["id"] = "msg-unpriced"
+    unpriced["modelID"] = "gpt-5.2-codex"
+    unpriced["providerID"] = "openai-codex"
+    unpriced["cost"] = 0.10
+    unpriced["tokens"] = {
+        "input": 400,
+        "output": 40,
+        "reasoning": 10,
+        "cache": {"read": 0, "write": 0},
+    }
+    insert_message(conn, row_id="row-2", session_id="ses-1", data=unpriced)
+    conn.commit()
+    conn.close()
+
+
+def write_pricing_config(path: Path) -> None:
+    path.write_text(
+        """
+config_version = 1
+
+[costing]
+default_actual_mode = "source"
+default_virtual_mode = "pricing"
+missing_price = "warn"
+
+[[actual_cost]]
+harness = "opencode"
+mode = "source"
+
+[[actual_cost]]
+harness = "pi"
+mode = "zero"
+
+[[actual_cost]]
+harness = "copilot"
+mode = "zero"
+
+[[pricing.virtual]]
+provider = "anthropic"
+model = "claude-sonnet-4"
+aliases = ["Claude Sonnet 4", "claude-sonnet-4"]
+input_usd_per_1m = 3.0
+cached_input_usd_per_1m = 0.3
+cache_write_usd_per_1m = 3.75
+output_usd_per_1m = 15.0
+category = "Versatile"
+release_status = "GA"
+""".strip(),
+        encoding="utf-8",
+    )
+
+
+def setup_pricing_status_fixture(tmp_path: Path) -> tuple[CliRunner, Path, Path]:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    source_db = tmp_path / "pricing.db"
+    config_path = tmp_path / "toktrail.toml"
+    create_pricing_source_db(source_db)
+    write_pricing_config(config_path)
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    runner.invoke(app, ["--db", str(state_db), "start", "--name", "pricing-session"])
+    runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "--config",
+            str(config_path),
+            "import",
+            "opencode",
+            "--opencode-db",
+            str(source_db),
+        ],
+    )
+    return runner, state_db, config_path
+
+
 def create_copilot_file(path: Path) -> None:
     write_jsonl_rows(
         path,
@@ -650,6 +736,118 @@ def test_cli_config_path_init_and_validate(tmp_path) -> None:
     assert "virtual prices:" in validate_result.output
 
 
+def test_cli_config_prices_lists_virtual_prices(tmp_path) -> None:
+    runner = CliRunner()
+    config_path = tmp_path / "config" / "toktrail.toml"
+    runner.invoke(
+        app,
+        ["--config", str(config_path), "config", "init", "--template", "copilot"],
+    )
+
+    result = runner.invoke(
+        app,
+        ["--config", str(config_path), "config", "prices", "--provider", "openai"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "table" in result.output
+    assert "provider" in result.output
+    assert "model" in result.output
+    assert "gpt-5-mini" in result.output
+
+
+def test_cli_config_prices_json_includes_effective_fallback_prices(tmp_path) -> None:
+    runner = CliRunner()
+    config_path = tmp_path / "config" / "toktrail.toml"
+    runner.invoke(
+        app,
+        ["--config", str(config_path), "config", "init", "--template", "copilot"],
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config_path),
+            "config",
+            "prices",
+            "--model",
+            "gpt-5-mini",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload[0]["cache_write_usd_per_1m"] is None
+    assert payload[0]["effective_cache_write_usd_per_1m"] == 0.25
+    assert payload[0]["reasoning_usd_per_1m"] is None
+    assert payload[0]["effective_reasoning_usd_per_1m"] == 2.0
+
+
+def test_cli_config_prices_filters_provider_model_query_category_release(
+    tmp_path,
+) -> None:
+    runner = CliRunner()
+    config_path = tmp_path / "config" / "toktrail.toml"
+    runner.invoke(
+        app,
+        ["--config", str(config_path), "config", "init", "--template", "copilot"],
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config_path),
+            "config",
+            "prices",
+            "--table",
+            "all",
+            "--provider",
+            "openai",
+            "--model",
+            "GPT 5 mini",
+            "--query",
+            "mini",
+            "--category",
+            "Lightweight",
+            "--release-status",
+            "ga",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert len(payload) == 1
+    assert payload[0]["provider"] == "openai"
+    assert payload[0]["model"] == "gpt-5-mini"
+
+
+def test_cli_config_prices_rejects_invalid_filter_values(tmp_path) -> None:
+    runner = CliRunner()
+    config_path = tmp_path / "config" / "toktrail.toml"
+    runner.invoke(
+        app,
+        ["--config", str(config_path), "config", "init", "--template", "copilot"],
+    )
+
+    bad_table = runner.invoke(
+        app,
+        ["--config", str(config_path), "config", "prices", "--table", "bogus"],
+    )
+    bad_sort = runner.invoke(
+        app,
+        ["--config", str(config_path), "config", "prices", "--sort", "bogus"],
+    )
+
+    assert bad_table.exit_code == 1
+    assert "Unsupported --table" in bad_table.output
+    assert bad_sort.exit_code == 1
+    assert "Unsupported --sort" in bad_sort.output
+
+
 def test_cli_status_with_template_config_computes_copilot_virtual_cost(
     tmp_path,
 ) -> None:
@@ -718,6 +916,182 @@ def test_cli_status_human_output_contains_actual_virtual_and_savings(tmp_path) -
     assert "actual:" in result.output
     assert "virtual:" in result.output
     assert "savings:" in result.output
+
+
+def test_cli_status_human_output_lists_unconfigured_models(tmp_path) -> None:
+    runner, state_db, config_path = setup_pricing_status_fixture(tmp_path)
+
+    result = runner.invoke(
+        app,
+        ["--db", str(state_db), "--config", str(config_path), "status", "1"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Unconfigured models" in result.output
+    assert "openai-codex/gpt-5.2-codex" in result.output
+    assert result.output.index("Unconfigured models") < result.output.index(
+        "By harness"
+    )
+
+
+def test_cli_status_json_contains_unconfigured_models(tmp_path) -> None:
+    runner, state_db, config_path = setup_pricing_status_fixture(tmp_path)
+
+    result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "--config",
+            str(config_path),
+            "status",
+            "1",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["unconfigured_models"] == [
+        {
+            "required": ["virtual"],
+            "harness": "opencode",
+            "provider_id": "openai-codex",
+            "model_id": "gpt-5.2-codex",
+            "thinking_level": None,
+            "message_count": 1,
+            "input": 400,
+            "output": 40,
+            "reasoning": 10,
+            "cache_read": 0,
+            "cache_write": 0,
+            "total": 450,
+        }
+    ]
+
+
+def test_cli_status_price_state_unpriced_filters_model_table(tmp_path) -> None:
+    runner, state_db, config_path = setup_pricing_status_fixture(tmp_path)
+
+    result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "--config",
+            str(config_path),
+            "status",
+            "1",
+            "--json",
+            "--price-state",
+            "unpriced",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["display_filters"]["price_state"] == "unpriced"
+    assert [row["model_id"] for row in payload["by_model"]] == ["gpt-5.2-codex"]
+    assert payload["unconfigured_models"][0]["model_id"] == "gpt-5.2-codex"
+
+
+def test_cli_status_sort_and_limit_apply_to_model_rows_only(tmp_path) -> None:
+    runner, state_db, config_path = setup_pricing_status_fixture(tmp_path)
+
+    result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "--config",
+            str(config_path),
+            "status",
+            "1",
+            "--json",
+            "--sort",
+            "provider",
+            "--limit",
+            "1",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["display_filters"] == {
+        "price_state": "all",
+        "min_messages": None,
+        "min_tokens": None,
+        "sort": "provider",
+        "limit": 1,
+    }
+    assert [row["provider_id"] for row in payload["by_model"]] == ["anthropic"]
+    assert payload["totals"]["total"] == 2300
+    assert payload["unconfigured_models"][0]["provider_id"] == "openai-codex"
+
+
+def test_cli_usage_supports_price_state_sort_limit(tmp_path) -> None:
+    runner, state_db, config_path = setup_pricing_status_fixture(tmp_path)
+
+    result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "--config",
+            str(config_path),
+            "usage",
+            "--json",
+            "--price-state",
+            "unpriced",
+            "--sort",
+            "tokens",
+            "--limit",
+            "1",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["display_filters"]["sort"] == "tokens"
+    assert payload["display_filters"]["limit"] == 1
+    assert [row["model_id"] for row in payload["by_model"]] == ["gpt-5.2-codex"]
+    assert payload["totals"]["total"] == 2300
+
+
+def test_cli_status_rejects_invalid_display_filter_values(tmp_path) -> None:
+    runner, state_db, config_path = setup_pricing_status_fixture(tmp_path)
+
+    bad_price_state = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "--config",
+            str(config_path),
+            "status",
+            "1",
+            "--price-state",
+            "bogus",
+        ],
+    )
+    bad_sort = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "--config",
+            str(config_path),
+            "status",
+            "1",
+            "--sort",
+            "bogus",
+        ],
+    )
+
+    assert bad_price_state.exit_code == 1
+    assert "Unsupported --price-state" in bad_price_state.output
+    assert bad_sort.exit_code == 1
+    assert "Unsupported --sort" in bad_sort.output
 
 
 def test_cli_pi_sessions_lists_source_sessions(tmp_path) -> None:

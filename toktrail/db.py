@@ -6,7 +6,7 @@ from pathlib import Path
 from time import time
 
 from toktrail.config import CostingConfig, default_costing_config
-from toktrail.costing import CostBreakdown, UsageCostAtom
+from toktrail.costing import CostBreakdown, UsageCostAtom, resolve_price_resolution
 from toktrail.models import TokenBreakdown, TrackingSession, UsageEvent
 from toktrail.reporting import (
     AgentSummaryRow,
@@ -15,6 +15,7 @@ from toktrail.reporting import (
     ModelSummaryRow,
     SessionTotals,
     TrackingSessionReport,
+    UnconfiguredModelRow,
     UsageReportFilter,
 )
 
@@ -547,6 +548,9 @@ def summarize_usage(
     by_harness: dict[str, _ReportBucket] = {}
     by_model: dict[tuple[str, str, str | None], _ReportBucket] = {}
     by_agent: dict[str, _ReportBucket] = {}
+    unconfigured: dict[
+        tuple[str, str, str, str | None, tuple[str, ...]], _UnconfiguredBucket
+    ] = {}
 
     for row in atom_rows:
         atom = UsageCostAtom(
@@ -563,6 +567,12 @@ def summarize_usage(
             tokens=_row_tokens(row),
             source_cost_usd=_required_float(row["source_cost_usd"]),
         )
+        resolution = resolve_price_resolution(
+            harness=atom.harness,
+            provider_id=atom.provider_id,
+            model_id=atom.model_id,
+            config=config,
+        )
         breakdown = atom.compute_costs(config)
         totals_tokens = _add_tokens(totals_tokens, atom.tokens)
         totals_costs = _add_cost_breakdown(totals_costs, breakdown)
@@ -573,6 +583,17 @@ def summarize_usage(
             _ReportBucket(),
         ).add(atom, config)
         by_agent.setdefault(atom.agent, _ReportBucket()).add(atom, config)
+        if resolution.missing_kinds:
+            unconfigured.setdefault(
+                (
+                    atom.harness,
+                    atom.provider_id,
+                    atom.model_id,
+                    atom.thinking_level,
+                    resolution.missing_kinds,
+                ),
+                _UnconfiguredBucket(),
+            ).add(atom)
 
     return TrackingSessionReport(
         session=session,
@@ -626,6 +647,35 @@ def summarize_usage(
                     -item[1].costs.actual_cost_usd,
                     -item[1].tokens.total,
                     item[0],
+                ),
+             )
+         ],
+        unconfigured_models=[
+            UnconfiguredModelRow(
+                required=required,
+                harness=harness,
+                provider_id=provider_id,
+                model_id=model_id,
+                thinking_level=thinking_level,
+                message_count=bucket.message_count,
+                tokens=bucket.tokens,
+            )
+            for (
+                harness,
+                provider_id,
+                model_id,
+                thinking_level,
+                required,
+            ), bucket in sorted(
+                unconfigured.items(),
+                key=lambda item: (
+                    -item[1].tokens.total,
+                    -item[1].message_count,
+                    item[0][0],
+                    item[0][1],
+                    item[0][2],
+                    item[0][3] or "",
+                    item[0][4],
                 ),
             )
         ],
@@ -755,6 +805,16 @@ class _ReportBucket:
         self.message_count += atom.message_count
         self.tokens = _add_tokens(self.tokens, atom.tokens)
         self.costs = _add_cost_breakdown(self.costs, atom.compute_costs(config))
+
+
+@dataclass
+class _UnconfiguredBucket:
+    message_count: int = 0
+    tokens: TokenBreakdown = field(default_factory=TokenBreakdown)
+
+    def add(self, atom: UsageCostAtom) -> None:
+        self.message_count += atom.message_count
+        self.tokens = _add_tokens(self.tokens, atom.tokens)
 
 
 def _add_tokens(left: TokenBreakdown, right: TokenBreakdown) -> TokenBreakdown:

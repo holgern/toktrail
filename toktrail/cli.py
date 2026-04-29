@@ -26,7 +26,9 @@ from toktrail.config import (
     DEFAULT_TEMPLATE_NAME,
     CostingConfig,
     LoadedCostingConfig,
+    Price,
     load_resolved_costing_config,
+    normalize_identity,
     render_config_template,
     summarize_costing_config,
 )
@@ -52,6 +54,7 @@ from toktrail.paths import (
 from toktrail.periods import resolve_time_range
 from toktrail.reporting import (
     ModelSummaryRow,
+    UnconfiguredModelRow,
     UsageReportFilter,
 )
 from toktrail.reporting import (
@@ -74,6 +77,30 @@ app.add_typer(sessions_app, name="sessions")
 app.add_typer(copilot_app, name="copilot")
 app.add_typer(config_app, name="config")
 
+_VALID_REPORT_PRICE_STATES = {"all", "priced", "unpriced"}
+_VALID_REPORT_SORTS = {
+    "actual",
+    "virtual",
+    "savings",
+    "tokens",
+    "messages",
+    "provider",
+    "model",
+    "unpriced",
+}
+_VALID_PRICE_TABLES = {"virtual", "actual", "all"}
+_VALID_PRICE_SORTS = {
+    "provider",
+    "model",
+    "input",
+    "cached",
+    "cache-write",
+    "output",
+    "reasoning",
+    "category",
+    "release",
+}
+
 
 @dataclass(frozen=True)
 class ImportExecutionResult:
@@ -83,6 +110,36 @@ class ImportExecutionResult:
     rows_seen: int
     rows_imported: int
     rows_skipped: int
+
+
+@dataclass(frozen=True)
+class ReportDisplayFilter:
+    price_state: str = "all"
+    min_messages: int | None = None
+    min_tokens: int | None = None
+    sort: str = "actual"
+    limit: int | None = None
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "price_state": self.price_state,
+            "min_messages": self.min_messages,
+            "min_tokens": self.min_tokens,
+            "sort": self.sort,
+            "limit": self.limit,
+        }
+
+
+@dataclass(frozen=True)
+class PriceDisplayFilter:
+    table: str = "virtual"
+    provider: str | None = None
+    model: str | None = None
+    query: str | None = None
+    category: str | None = None
+    release_status: str | None = None
+    sort: str = "provider"
+    limit: int | None = None
 
 
 CopilotEnvVar = tuple[str, str]
@@ -121,6 +178,17 @@ CollapseThinkingOption = Annotated[bool, typer.Option("--collapse-thinking")]
 TimeBoundaryOption = Annotated[str | None, typer.Option("--since")]
 UntilBoundaryOption = Annotated[str | None, typer.Option("--until")]
 TimezoneOption = Annotated[str | None, typer.Option("--timezone")]
+PriceStateOption = Annotated[str, typer.Option("--price-state")]
+MinMessagesOption = Annotated[int | None, typer.Option("--min-messages")]
+MinTokensOption = Annotated[int | None, typer.Option("--min-tokens")]
+ReportSortOption = Annotated[str, typer.Option("--sort")]
+ReportLimitOption = Annotated[int | None, typer.Option("--limit")]
+PriceTableOption = Annotated[str, typer.Option("--table")]
+PriceQueryOption = Annotated[str | None, typer.Option("--query")]
+CategoryOption = Annotated[str | None, typer.Option("--category")]
+ReleaseStatusOption = Annotated[str | None, typer.Option("--release-status")]
+PriceSortOption = Annotated[str, typer.Option("--sort")]
+AliasesOption = Annotated[bool, typer.Option("--aliases")]
 OpenCodeDbOption = Annotated[
     Path | None,
     typer.Option("--opencode-db", "--db", help="Override OpenCode DB path."),
@@ -220,8 +288,20 @@ def status(
     until_ms: UntilMsOption = None,
     rich_output: RichOption = False,
     collapse_thinking: CollapseThinkingOption = False,
+    price_state: PriceStateOption = "all",
+    min_messages: MinMessagesOption = None,
+    min_tokens: MinTokensOption = None,
+    sort: ReportSortOption = "actual",
+    limit: ReportLimitOption = None,
 ) -> None:
     costing_config = _load_costing_config_or_exit(ctx)
+    display_filters = _normalize_report_display_filter(
+        price_state=price_state,
+        min_messages=min_messages,
+        min_tokens=min_tokens,
+        sort=sort,
+        limit=limit,
+    )
     conn = _open_toktrail_connection(ctx)
     try:
         selected_session_id = session_id
@@ -249,8 +329,29 @@ def status(
     finally:
         conn.close()
 
+    filtered_by_model = _filter_model_rows(
+        report.by_model,
+        price_state=display_filters.price_state,
+        min_messages=display_filters.min_messages,
+        min_tokens=display_filters.min_tokens,
+        sort=display_filters.sort,
+        limit=display_filters.limit,
+    )
+    filtered_unconfigured = _filter_unconfigured_models(
+        report.unconfigured_models,
+        price_state=display_filters.price_state,
+        min_messages=display_filters.min_messages,
+        min_tokens=display_filters.min_tokens,
+    )
+
     if json_output:
-        typer.echo(json.dumps(report.as_dict(), indent=2))
+        payload = report.as_dict()
+        payload["by_model"] = [row.as_dict() for row in filtered_by_model]
+        payload["unconfigured_models"] = [
+            row.as_dict() for row in filtered_unconfigured
+        ]
+        payload["display_filters"] = display_filters.as_dict()
+        typer.echo(json.dumps(payload, indent=2))
         return
 
     session = report.session
@@ -258,7 +359,13 @@ def status(
         msg = "Tracking session report unexpectedly has no session."
         raise TypeError(msg)
     typer.echo(f"toktrail session {session.id}: {session.name or '(unnamed)'}")
-    _print_usage_summary(report, rich_output=rich_output)
+    _print_usage_summary(
+        report,
+        rich_output=rich_output,
+        by_model=filtered_by_model,
+        unconfigured_models=filtered_unconfigured,
+        missing_price_mode=costing_config.missing_price,
+    )
 
 
 @app.command()
@@ -278,6 +385,11 @@ def usage(
     utc: UtcOption = False,
     rich_output: RichOption = False,
     collapse_thinking: CollapseThinkingOption = False,
+    price_state: PriceStateOption = "all",
+    min_messages: MinMessagesOption = None,
+    min_tokens: MinTokensOption = None,
+    sort: ReportSortOption = "actual",
+    limit: ReportLimitOption = None,
 ) -> None:
     try:
         resolved_range = resolve_time_range(
@@ -291,6 +403,13 @@ def usage(
         _exit_with_error(str(exc))
 
     costing_config = _load_costing_config_or_exit(ctx)
+    display_filters = _normalize_report_display_filter(
+        price_state=price_state,
+        min_messages=min_messages,
+        min_tokens=min_tokens,
+        sort=sort,
+        limit=limit,
+    )
     conn = _open_toktrail_connection(ctx)
     try:
         report = summarize_usage(
@@ -312,8 +431,28 @@ def usage(
     finally:
         conn.close()
 
+    filtered_by_model = _filter_model_rows(
+        report.by_model,
+        price_state=display_filters.price_state,
+        min_messages=display_filters.min_messages,
+        min_tokens=display_filters.min_tokens,
+        sort=display_filters.sort,
+        limit=display_filters.limit,
+    )
+    filtered_unconfigured = _filter_unconfigured_models(
+        report.unconfigured_models,
+        price_state=display_filters.price_state,
+        min_messages=display_filters.min_messages,
+        min_tokens=display_filters.min_tokens,
+    )
+
     if json_output:
         payload = report.as_dict()
+        payload["by_model"] = [row.as_dict() for row in filtered_by_model]
+        payload["unconfigured_models"] = [
+            row.as_dict() for row in filtered_unconfigured
+        ]
+        payload["display_filters"] = display_filters.as_dict()
         filters = payload.get("filters")
         if not isinstance(filters, dict):
             msg = "Usage report payload unexpectedly missing filters."
@@ -335,13 +474,22 @@ def usage(
     if resolved_range.period is not None:
         title = f"{title} ({resolved_range.period})"
     typer.echo(title)
-    _print_usage_summary(report, rich_output=rich_output)
+    _print_usage_summary(
+        report,
+        rich_output=rich_output,
+        by_model=filtered_by_model,
+        unconfigured_models=filtered_unconfigured,
+        missing_price_mode=costing_config.missing_price,
+    )
 
 
 def _print_usage_summary(
     report: InternalTrackingSessionReport,
     *,
     rich_output: bool,
+    by_model: list[ModelSummaryRow] | None = None,
+    unconfigured_models: list[UnconfiguredModelRow] | None = None,
+    missing_price_mode: str = "warn",
 ) -> None:
     typer.echo("")
     typer.echo("Totals")
@@ -361,6 +509,20 @@ def _print_usage_summary(
     typer.echo(f"  savings:  {_format_cost(totals.savings_usd)}")
     typer.echo(f"  unpriced: {totals.unpriced_count} model groups")
 
+    unconfigured = (
+        report.unconfigured_models
+        if unconfigured_models is None
+        else unconfigured_models
+    )
+    if unconfigured:
+        typer.echo("")
+        typer.echo(
+            "Unconfigured models (warning)"
+            if missing_price_mode == "warn"
+            else "Unconfigured models"
+        )
+        _print_unconfigured_model_table(unconfigured, rich_output=rich_output)
+
     typer.echo("")
     typer.echo("By harness")
     by_harness = report.by_harness
@@ -378,9 +540,9 @@ def _print_usage_summary(
 
     typer.echo("")
     typer.echo("By model")
-    by_model = report.by_model
-    if by_model:
-        _print_model_table(by_model, rich_output=rich_output)
+    model_rows = report.by_model if by_model is None else by_model
+    if model_rows:
+        _print_model_table(model_rows, rich_output=rich_output)
     else:
         typer.echo("  (none)")
 
@@ -431,6 +593,17 @@ def config_validate(ctx: typer.Context) -> None:
     typer.echo(f"  actual rules:   {summary.actual_rule_count}")
     typer.echo(f"  actual prices:  {summary.actual_price_count}")
     typer.echo(f"  virtual prices: {summary.virtual_price_count}")
+    warnings = [
+        price
+        for price in (*loaded.config.actual_prices, *loaded.config.virtual_prices)
+        if price.cached_input_usd_per_1m is not None
+        and price.cached_input_usd_per_1m > price.input_usd_per_1m
+    ]
+    for price in warnings:
+        typer.echo(
+            "  warning: cached_input exceeds input for "
+            f"{price.provider}/{price.model}"
+        )
 
 
 @config_app.command("show")
@@ -447,6 +620,39 @@ def config_show(ctx: typer.Context) -> None:
     typer.echo(f"actual rules:    {summary.actual_rule_count}")
     typer.echo(f"actual prices:   {summary.actual_price_count}")
     typer.echo(f"virtual prices:  {summary.virtual_price_count}")
+    typer.echo("Run `toktrail config prices` to inspect configured price rows.")
+
+
+@config_app.command("prices")
+def config_prices(
+    ctx: typer.Context,
+    table: PriceTableOption = "virtual",
+    provider: ProviderOption = None,
+    model: ModelOption = None,
+    query: PriceQueryOption = None,
+    category: CategoryOption = None,
+    release_status: ReleaseStatusOption = None,
+    sort: PriceSortOption = "provider",
+    limit: ReportLimitOption = None,
+    aliases: AliasesOption = False,
+    json_output: JsonOption = False,
+) -> None:
+    loaded = _load_resolved_costing_config_or_exit(ctx)
+    filters = _normalize_price_display_filter(
+        table=table,
+        provider=provider,
+        model=model,
+        query=query,
+        category=category,
+        release_status=release_status,
+        sort=sort,
+        limit=limit,
+    )
+    rows = _filter_price_rows(_price_rows(loaded.config, filters.table), filters)
+    if json_output:
+        typer.echo(json.dumps(rows, indent=2))
+        return
+    _print_price_table(rows, aliases=aliases, rich_output=False)
 
 
 @sessions_app.callback(invoke_without_command=True)
@@ -1366,6 +1572,559 @@ def _print_model_table(
     )
 
 
+def _print_unconfigured_model_table(
+    rows: list[UnconfiguredModelRow],
+    *,
+    rich_output: bool,
+) -> None:
+    headers = {
+        "required": "required",
+        "provider_model": "provider/model",
+        "harness": "harness",
+        "thinking": "thinking",
+        "msgs": "msgs",
+        "input": "input",
+        "output": "output",
+        "reasoning": "reasoning",
+        "cache_r": "cache_r",
+        "cache_w": "cache_w",
+        "total": "total",
+    }
+    include_thinking = any(row.thinking_level is not None for row in rows)
+    payload_rows = [
+        {
+            "required": "+".join(row.required),
+            "provider_model": f"{row.provider_id}/{row.model_id}",
+            "harness": row.harness,
+            "thinking": row.thinking_level or "-",
+            "msgs": _format_int(row.message_count),
+            "input": _format_int(row.tokens.input),
+            "output": _format_int(row.tokens.output),
+            "reasoning": _format_int(row.tokens.reasoning),
+            "cache_r": _format_int(row.tokens.cache_read),
+            "cache_w": _format_int(row.tokens.cache_write),
+            "total": _format_int(row.total_tokens),
+        }
+        for row in rows
+    ]
+    columns = ["required", "provider_model", "harness"]
+    if include_thinking:
+        columns.append("thinking")
+    columns.extend(
+        [
+            "msgs",
+            "input",
+            "output",
+            "reasoning",
+            "cache_r",
+            "cache_w",
+            "total",
+        ]
+    )
+    _print_table(payload_rows, columns, headers, rich_output=rich_output)
+
+
+def _normalize_report_display_filter(
+    *,
+    price_state: str,
+    min_messages: int | None,
+    min_tokens: int | None,
+    sort: str,
+    limit: int | None,
+) -> ReportDisplayFilter:
+    normalized_price_state = price_state.strip().lower()
+    if normalized_price_state not in _VALID_REPORT_PRICE_STATES:
+        _exit_with_error("Unsupported --price-state. Use all, priced, or unpriced.")
+    normalized_sort = sort.strip().lower()
+    if normalized_sort not in _VALID_REPORT_SORTS:
+        _exit_with_error(
+            "Unsupported --sort. Use actual, virtual, savings, tokens, messages, "
+            "provider, model, or unpriced."
+        )
+    if min_messages is not None and min_messages < 0:
+        _exit_with_error("--min-messages must be non-negative.")
+    if min_tokens is not None and min_tokens < 0:
+        _exit_with_error("--min-tokens must be non-negative.")
+    if limit is not None and limit < 0:
+        _exit_with_error("--limit must be non-negative.")
+    return ReportDisplayFilter(
+        price_state=normalized_price_state,
+        min_messages=min_messages,
+        min_tokens=min_tokens,
+        sort=normalized_sort,
+        limit=limit,
+    )
+
+
+def _normalize_price_display_filter(
+    *,
+    table: str,
+    provider: str | None,
+    model: str | None,
+    query: str | None,
+    category: str | None,
+    release_status: str | None,
+    sort: str,
+    limit: int | None,
+) -> PriceDisplayFilter:
+    normalized_table = table.strip().lower()
+    if normalized_table not in _VALID_PRICE_TABLES:
+        _exit_with_error("Unsupported --table. Use virtual, actual, or all.")
+    normalized_sort = sort.strip().lower()
+    if normalized_sort not in _VALID_PRICE_SORTS:
+        _exit_with_error(
+            "Unsupported --sort. Use provider, model, input, cached, cache-write, "
+            "output, reasoning, category, or release."
+        )
+    if limit is not None and limit < 0:
+        _exit_with_error("--limit must be non-negative.")
+    return PriceDisplayFilter(
+        table=normalized_table,
+        provider=provider,
+        model=model,
+        query=query,
+        category=category,
+        release_status=release_status,
+        sort=normalized_sort,
+        limit=limit,
+    )
+
+
+def _filter_model_rows(
+    rows: list[ModelSummaryRow],
+    *,
+    price_state: str,
+    min_messages: int | None,
+    min_tokens: int | None,
+    sort: str,
+    limit: int | None,
+) -> list[ModelSummaryRow]:
+    filtered = [
+        row
+        for row in rows
+        if _model_row_matches_price_state(row, price_state)
+        and (min_messages is None or row.message_count >= min_messages)
+        and (min_tokens is None or row.total_tokens >= min_tokens)
+    ]
+    sorted_rows = _sort_model_rows(filtered, sort=sort)
+    if limit is not None:
+        return sorted_rows[:limit]
+    return sorted_rows
+
+
+def _model_row_matches_price_state(row: ModelSummaryRow, price_state: str) -> bool:
+    if price_state == "all":
+        return True
+    if price_state == "priced":
+        return row.unpriced_count == 0
+    return row.unpriced_count > 0
+
+
+def _sort_model_rows(
+    rows: list[ModelSummaryRow],
+    *,
+    sort: str,
+) -> list[ModelSummaryRow]:
+    if sort == "actual":
+        return sorted(
+            rows,
+            key=lambda row: (
+                row.actual_cost_usd,
+                row.total_tokens,
+                row.message_count,
+                row.provider_id,
+                row.model_id,
+                row.thinking_level or "",
+            ),
+            reverse=True,
+        )
+    if sort == "virtual":
+        return sorted(
+            rows,
+            key=lambda row: (
+                row.virtual_cost_usd,
+                row.total_tokens,
+                row.message_count,
+                row.provider_id,
+                row.model_id,
+                row.thinking_level or "",
+            ),
+            reverse=True,
+        )
+    if sort == "savings":
+        return sorted(
+            rows,
+            key=lambda row: (
+                row.savings_usd,
+                row.total_tokens,
+                row.message_count,
+                row.provider_id,
+                row.model_id,
+                row.thinking_level or "",
+            ),
+            reverse=True,
+        )
+    if sort == "tokens":
+        return sorted(
+            rows,
+            key=lambda row: (
+                row.total_tokens,
+                row.message_count,
+                row.provider_id,
+                row.model_id,
+                row.thinking_level or "",
+            ),
+            reverse=True,
+        )
+    if sort == "messages":
+        return sorted(
+            rows,
+            key=lambda row: (
+                row.message_count,
+                row.total_tokens,
+                row.provider_id,
+                row.model_id,
+                row.thinking_level or "",
+            ),
+            reverse=True,
+        )
+    if sort == "provider":
+        return sorted(
+            rows,
+            key=lambda row: (
+                row.provider_id,
+                row.model_id,
+                row.thinking_level or "",
+                -row.total_tokens,
+                -row.message_count,
+            ),
+        )
+    if sort == "model":
+        return sorted(
+            rows,
+            key=lambda row: (
+                row.model_id,
+                row.provider_id,
+                row.thinking_level or "",
+                -row.total_tokens,
+                -row.message_count,
+            ),
+        )
+    return sorted(
+        rows,
+        key=lambda row: (
+            row.unpriced_count == 0,
+            -row.total_tokens,
+            -row.message_count,
+            row.provider_id,
+            row.model_id,
+            row.thinking_level or "",
+        ),
+    )
+
+
+def _filter_unconfigured_models(
+    rows: list[UnconfiguredModelRow],
+    *,
+    price_state: str,
+    min_messages: int | None,
+    min_tokens: int | None,
+) -> list[UnconfiguredModelRow]:
+    if price_state == "priced":
+        return []
+    return [
+        row
+        for row in rows
+        if (min_messages is None or row.message_count >= min_messages)
+        and (min_tokens is None or row.total_tokens >= min_tokens)
+    ]
+
+
+def _price_rows(config: CostingConfig, table: str) -> list[dict[str, object]]:
+    tables: list[tuple[str, tuple[Price, ...]]] = []
+    if table in {"virtual", "all"}:
+        tables.append(("virtual", config.virtual_prices))
+    if table in {"actual", "all"}:
+        tables.append(("actual", config.actual_prices))
+
+    rows: list[dict[str, object]] = []
+    for table_name, prices in tables:
+        for price in prices:
+            rows.append(
+                {
+                    "table": table_name,
+                    "provider": price.provider,
+                    "model": price.model,
+                    "aliases": list(price.aliases),
+                    "input_usd_per_1m": price.input_usd_per_1m,
+                    "cached_input_usd_per_1m": price.cached_input_usd_per_1m,
+                    "effective_cached_input_usd_per_1m": (
+                        price.cached_input_usd_per_1m
+                        if price.cached_input_usd_per_1m is not None
+                        else price.input_usd_per_1m
+                    ),
+                    "cache_write_usd_per_1m": price.cache_write_usd_per_1m,
+                    "effective_cache_write_usd_per_1m": (
+                        price.cache_write_usd_per_1m
+                        if price.cache_write_usd_per_1m is not None
+                        else price.input_usd_per_1m
+                    ),
+                    "output_usd_per_1m": price.output_usd_per_1m,
+                    "reasoning_usd_per_1m": price.reasoning_usd_per_1m,
+                    "effective_reasoning_usd_per_1m": (
+                        price.reasoning_usd_per_1m
+                        if price.reasoning_usd_per_1m is not None
+                        else price.output_usd_per_1m
+                    ),
+                    "category": price.category,
+                    "release_status": price.release_status,
+                }
+            )
+    return rows
+
+
+def _filter_price_rows(
+    rows: list[dict[str, object]],
+    filters: PriceDisplayFilter,
+) -> list[dict[str, object]]:
+    filtered = rows
+    if filters.provider is not None:
+        normalized_provider = normalize_identity(filters.provider)
+        filtered = [
+            row
+            for row in filtered
+            if normalize_identity(str(row["provider"])) == normalized_provider
+        ]
+    if filters.model is not None:
+        normalized_model = normalize_identity(filters.model)
+        filtered = [
+            row
+            for row in filtered
+            if normalize_identity(str(row["model"])) == normalized_model
+            or normalized_model
+            in {normalize_identity(alias) for alias in _aliases_from_row(row)}
+        ]
+    if filters.category is not None:
+        normalized_category = normalize_identity(filters.category)
+        filtered = [
+            row
+            for row in filtered
+            if normalize_identity(str(row.get("category") or "")) == normalized_category
+        ]
+    if filters.release_status is not None:
+        normalized_release = filters.release_status.strip().lower()
+        filtered = [
+            row
+            for row in filtered
+            if str(row.get("release_status") or "").strip().lower()
+            == normalized_release
+        ]
+    if filters.query is not None:
+        needle = filters.query.strip().lower()
+        filtered = [
+            row
+            for row in filtered
+            if needle
+            in " ".join(
+                [
+                    str(row["provider"]),
+                    str(row["model"]),
+                    *_aliases_from_row(row),
+                    str(row.get("category") or ""),
+                    str(row.get("release_status") or ""),
+                ]
+            ).lower()
+        ]
+
+    sorted_rows = _sort_price_rows(filtered, sort=filters.sort)
+    if filters.limit is not None:
+        return sorted_rows[: filters.limit]
+    return sorted_rows
+
+
+def _sort_price_rows(
+    rows: list[dict[str, object]],
+    *,
+    sort: str,
+) -> list[dict[str, object]]:
+    if sort == "provider":
+        return sorted(
+            rows,
+            key=lambda row: (
+                str(row["provider"]),
+                str(row["model"]),
+                str(row["table"]),
+            ),
+        )
+    if sort == "model":
+        return sorted(
+            rows,
+            key=lambda row: (
+                str(row["model"]),
+                str(row["provider"]),
+                str(row["table"]),
+            ),
+        )
+    if sort == "input":
+        return sorted(
+            rows,
+            key=lambda row: (
+                _required_row_float(row, "input_usd_per_1m"),
+                str(row["provider"]),
+                str(row["model"]),
+                str(row["table"]),
+            ),
+            reverse=True,
+        )
+    if sort == "cached":
+        return sorted(
+            rows,
+            key=lambda row: (
+                _required_row_float(row, "effective_cached_input_usd_per_1m"),
+                str(row["provider"]),
+                str(row["model"]),
+                str(row["table"]),
+            ),
+            reverse=True,
+        )
+    if sort == "cache-write":
+        return sorted(
+            rows,
+            key=lambda row: (
+                _required_row_float(row, "effective_cache_write_usd_per_1m"),
+                str(row["provider"]),
+                str(row["model"]),
+                str(row["table"]),
+            ),
+            reverse=True,
+        )
+    if sort == "output":
+        return sorted(
+            rows,
+            key=lambda row: (
+                _required_row_float(row, "output_usd_per_1m"),
+                str(row["provider"]),
+                str(row["model"]),
+                str(row["table"]),
+            ),
+            reverse=True,
+        )
+    if sort == "reasoning":
+        return sorted(
+            rows,
+            key=lambda row: (
+                _required_row_float(row, "effective_reasoning_usd_per_1m"),
+                str(row["provider"]),
+                str(row["model"]),
+                str(row["table"]),
+            ),
+            reverse=True,
+        )
+    if sort == "category":
+        return sorted(
+            rows,
+            key=lambda row: (
+                str(row.get("category") or ""),
+                str(row["provider"]),
+                str(row["model"]),
+                str(row["table"]),
+            ),
+        )
+    return sorted(
+        rows,
+        key=lambda row: (
+            str(row.get("release_status") or ""),
+            str(row["provider"]),
+            str(row["model"]),
+            str(row["table"]),
+        ),
+    )
+
+
+def _aliases_from_row(row: dict[str, object]) -> list[str]:
+    aliases = row.get("aliases")
+    if not isinstance(aliases, list):
+        return []
+    return [str(alias) for alias in aliases]
+
+
+def _print_price_table(
+    rows: list[dict[str, object]],
+    *,
+    aliases: bool,
+    rich_output: bool,
+) -> None:
+    headers = {
+        "table": "table",
+        "provider": "provider",
+        "model": "model",
+        "aliases": "aliases",
+        "input": "input",
+        "cached_input": "cached_input",
+        "cache_write": "cache_write",
+        "output": "output",
+        "reasoning": "reasoning",
+        "category": "category",
+        "release": "release",
+    }
+    payload_rows = [
+        {
+            "table": str(row["table"]),
+            "provider": str(row["provider"]),
+            "model": str(row["model"]),
+            "aliases": ", ".join(_aliases_from_row(row)),
+            "input": _format_price(_as_float_or_none(row["input_usd_per_1m"])),
+            "cached_input": _format_price(
+                _as_float_or_none(row["cached_input_usd_per_1m"])
+            ),
+            "cache_write": _format_price(
+                _as_float_or_none(row["cache_write_usd_per_1m"]),
+                fallback="input",
+            ),
+            "output": _format_price(_as_float_or_none(row["output_usd_per_1m"])),
+            "reasoning": _format_price(
+                _as_float_or_none(row["reasoning_usd_per_1m"]),
+                fallback="output",
+            ),
+            "category": str(row.get("category") or "-"),
+            "release": str(row.get("release_status") or "-"),
+        }
+        for row in rows
+    ]
+    columns = ["table", "provider", "model"]
+    if aliases:
+        columns.append("aliases")
+    columns.extend(
+        [
+            "input",
+            "cached_input",
+            "cache_write",
+            "output",
+            "reasoning",
+            "category",
+            "release",
+        ]
+    )
+    _print_table(payload_rows, columns, headers, rich_output=rich_output)
+
+
+def _as_float_or_none(value: object) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        msg = f"Expected float-compatible value, got {value!r}"
+        raise TypeError(msg)
+    return float(value)
+
+
+def _required_row_float(row: dict[str, object], key: str) -> float:
+    value = _as_float_or_none(row.get(key))
+    if value is None:
+        msg = f"Missing numeric price field: {key}"
+        raise TypeError(msg)
+    return value
+
+
 def _missing_source_path_message(
     harness_name: str,
     resolved_source: Path | None,
@@ -1475,4 +2234,10 @@ def _format_int(value: int) -> str:
 
 
 def _format_cost(value: float) -> str:
+    return f"${value:.2f}"
+
+
+def _format_price(value: float | None, *, fallback: str | None = None) -> str:
+    if value is None:
+        return f"={fallback}" if fallback is not None else "-"
     return f"${value:.2f}"

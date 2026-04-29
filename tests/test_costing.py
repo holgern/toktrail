@@ -207,7 +207,8 @@ def test_resolve_price_resolution_reports_missing_virtual_price() -> None:
     assert resolution.missing_kinds == ("virtual",)
 
 
-def test_resolve_price_resolution_reports_missing_actual_price_only_when_actual_mode_pricing() -> None:
+def test_price_resolution_missing_actual_only_when_actual_mode_pricing(
+) -> None:
     pricing_resolution = resolve_price_resolution(
         harness="copilot",
         provider_id="openai",

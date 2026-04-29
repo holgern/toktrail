@@ -32,6 +32,7 @@ from toktrail.api.models import (
     TokenBreakdown,
     TrackingSession,
     TrackingSessionReport,
+    UnconfiguredModelRow,
     UsageEvent,
 )
 
@@ -90,12 +91,16 @@ Key public models:
 - `SourceSessionSummary`, `SourceSessionSnapshot`, `SourceSessionDiff`
 - `ImportUsageResult`
 - `TrackingSessionReport`
+- `UnconfiguredModelRow`
 - `HarnessEnvironment`
 - `PreparedManualRun`, `FinalizedManualRun`
 
 `UsageEvent` and `ModelSummaryRow` expose `thinking_level` when the source
 harness provides it. This is reporting metadata only; pricing still keys on
 provider and model identity.
+
+`TrackingSessionReport` now includes `unconfigured_models` so callers can audit
+which harness/provider/model combinations still need configured pricing rows.
 
 All public dataclasses are frozen.
 

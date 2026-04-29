@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from toktrail.config import ActualCostRule, CostingConfig, Price
 from toktrail.db import (
     connect,
     create_tracking_session,
@@ -12,6 +13,25 @@ from toktrail.db import (
 )
 from toktrail.models import TokenBreakdown, UsageEvent
 from toktrail.reporting import UsageReportFilter
+
+
+def make_price(
+    *,
+    provider: str = "openai",
+    model: str = "gpt-5-mini",
+    input_usd_per_1m: float = 1.0,
+    output_usd_per_1m: float = 2.0,
+) -> Price:
+    return Price(
+        provider=provider,
+        model=model,
+        aliases=(),
+        input_usd_per_1m=input_usd_per_1m,
+        cached_input_usd_per_1m=None,
+        cache_write_usd_per_1m=None,
+        output_usd_per_1m=output_usd_per_1m,
+        reasoning_usd_per_1m=None,
+    )
 
 
 def make_usage_event(
@@ -330,3 +350,161 @@ def test_session_report_uses_tracking_session_events_for_membership(
     assert second_insert.rows_linked == 1
     assert second_report.session.id == second_session_id
     assert second_report.totals.tokens.total == event.tokens.total
+
+
+def test_summarize_usage_exposes_unconfigured_models(tmp_path) -> None:
+    conn = connect(tmp_path / "toktrail.db")
+    migrate(conn)
+    session_id = create_tracking_session(conn, "pricing")
+    insert_usage_events(
+        conn,
+        session_id,
+        [
+            make_usage_event(
+                dedup_suffix="1",
+                harness="copilot",
+                provider_id="github-copilot",
+                model_id="gpt-5.4",
+                thinking_level="high",
+                tokens=TokenBreakdown(input=100, output=20, cache_read=50),
+                cost_usd=0.0,
+            )
+        ],
+    )
+
+    report = summarize_usage(
+        conn,
+        UsageReportFilter(tracking_session_id=session_id),
+        costing_config=CostingConfig(
+            default_actual_mode="zero",
+            default_virtual_mode="pricing",
+        ),
+    )
+
+    assert [row.as_dict() for row in report.unconfigured_models] == [
+        {
+            "required": ["virtual"],
+            "harness": "copilot",
+            "provider_id": "github-copilot",
+            "model_id": "gpt-5.4",
+            "thinking_level": "high",
+            "message_count": 1,
+            "input": 100,
+            "output": 20,
+            "reasoning": 0,
+            "cache_read": 50,
+            "cache_write": 0,
+            "total": 170,
+        }
+    ]
+
+
+def test_summarize_usage_unconfigured_models_distinguish_harness_actual_rules(
+    tmp_path,
+) -> None:
+    conn = connect(tmp_path / "toktrail.db")
+    migrate(conn)
+    session_id = create_tracking_session(conn, "pricing")
+    insert_usage_events(
+        conn,
+        session_id,
+        [
+            make_usage_event(
+                dedup_suffix="1",
+                harness="opencode",
+                provider_id="openai-codex",
+                model_id="gpt-5.4",
+                tokens=TokenBreakdown(input=40, output=10),
+                cost_usd=0.0,
+            ),
+            make_usage_event(
+                dedup_suffix="2",
+                harness="copilot",
+                provider_id="openai-codex",
+                model_id="gpt-5.4",
+                tokens=TokenBreakdown(input=20, output=5),
+                cost_usd=0.0,
+            ),
+        ],
+    )
+
+    report = summarize_usage(
+        conn,
+        UsageReportFilter(tracking_session_id=session_id),
+        costing_config=CostingConfig(
+            default_actual_mode="zero",
+            default_virtual_mode="zero",
+            actual_rules=(
+                ActualCostRule(
+                    harness="opencode",
+                    provider="openai-codex",
+                    model="gpt-5.4",
+                    mode="pricing",
+                ),
+            ),
+            actual_prices=(make_price(provider="openai", model="gpt-5.4"),),
+        ),
+    )
+
+    assert [
+        (row.harness, row.required, row.total_tokens)
+        for row in report.unconfigured_models
+    ] == [("opencode", ("actual",), 50)]
+
+
+def test_summarize_usage_unconfigured_models_collapse_thinking_when_requested(
+    tmp_path,
+) -> None:
+    conn = connect(tmp_path / "toktrail.db")
+    migrate(conn)
+    session_id = create_tracking_session(conn, "thinking")
+    insert_usage_events(
+        conn,
+        session_id,
+        [
+            make_usage_event(
+                dedup_suffix="1",
+                harness="copilot",
+                provider_id="github-copilot",
+                model_id="gpt-5.4",
+                thinking_level="high",
+                tokens=TokenBreakdown(input=10, output=5),
+                cost_usd=0.0,
+            ),
+            make_usage_event(
+                dedup_suffix="2",
+                harness="copilot",
+                provider_id="github-copilot",
+                model_id="gpt-5.4",
+                thinking_level="low",
+                tokens=TokenBreakdown(input=20, output=7),
+                cost_usd=0.0,
+            ),
+        ],
+    )
+
+    split_report = summarize_usage(
+        conn,
+        UsageReportFilter(tracking_session_id=session_id),
+        costing_config=CostingConfig(
+            default_actual_mode="zero",
+            default_virtual_mode="pricing",
+        ),
+    )
+    collapsed_report = summarize_usage(
+        conn,
+        UsageReportFilter(tracking_session_id=session_id, split_thinking=False),
+        costing_config=CostingConfig(
+            default_actual_mode="zero",
+            default_virtual_mode="pricing",
+        ),
+    )
+
+    assert [
+        (row.thinking_level, row.message_count, row.total_tokens)
+        for row in split_report.unconfigured_models
+    ] == [("low", 1, 27), ("high", 1, 15)]
+    assert [
+        (row.thinking_level, row.message_count, row.total_tokens)
+        for row in collapsed_report.unconfigured_models
+    ] == [(None, 2, 42)]

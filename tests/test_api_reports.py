@@ -30,13 +30,29 @@ def test_session_report_uses_active_session_by_default(tmp_path) -> None:
     start_session(state_db, name="report")
     import_usage(state_db, "opencode", source_path=source_db)
 
-    report = session_report(state_db)
+    report = session_report(state_db, config_path=tmp_path / "missing-config.toml")
     payload = report.as_dict()
 
     assert report.session is not None
     assert payload["totals"]["input"] == 1000
     assert payload["totals"]["source_cost_usd"] == 0.05
     assert payload["totals"]["message_count"] == 1
+    assert payload["unconfigured_models"] == [
+        {
+            "required": ["virtual"],
+            "harness": "opencode",
+            "provider_id": "anthropic",
+            "model_id": "claude-sonnet-4",
+            "thinking_level": None,
+            "message_count": 1,
+            "input": 1000,
+            "output": 500,
+            "reasoning": 100,
+            "cache_read": 200,
+            "cache_write": 50,
+            "total": 1850,
+        }
+    ]
 
 
 def test_session_report_without_active_session_raises(tmp_path) -> None:

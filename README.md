@@ -104,6 +104,7 @@ toktrail status
 toktrail status --json
 toktrail status --thinking high --json
 toktrail status --collapse-thinking
+toktrail status --price-state unpriced --sort tokens --limit 20
 toktrail --config ~/.config/toktrail/config.toml status --json
 toktrail status --harness pi --source-session pi_ses_001 --json
 ```
@@ -115,6 +116,7 @@ tracking session:
 toktrail usage today
 toktrail usage last-week --utc --json
 toktrail usage --since 2026-05-01 --until 2026-06-01 --timezone Europe/Berlin
+toktrail usage --price-state priced --sort provider --limit 10 --json
 ```
 
 Stop the active tracking session:
@@ -150,6 +152,10 @@ toktrail config path
 toktrail config init
 toktrail config init --template copilot
 toktrail config show
+toktrail config prices
+toktrail config prices --provider openai --sort model
+toktrail config prices --query gpt-5 --aliases
+toktrail config prices --model gpt-5-mini --json
 toktrail config validate
 toktrail --config /path/to/config.toml status --json
 ```
@@ -304,10 +310,12 @@ toktrail never prints raw OpenCode, Pi, or Copilot JSON in CLI output.
 - actual cost based on configured accounting rules
 - virtual cost based on configured pricing tables
 - savings (`virtual - actual`) plus unpriced model-group counts
+- exact unconfigured harness/provider/model diagnostics when pricing is missing
 - grouped summaries by harness, model, and agent/mode
 - thinking-level metadata on model rows when the source exposes it
 - optional filtered views by harness, source session, provider, model, agent,
-  and created-at time range
+  created-at time range, price state, minimum message/token thresholds, sort,
+  and grouped-row limits
 
 `toktrail usage` applies the same token and cost reporting to the canonical
 ledger without requiring a tracking session. Named periods use half-open
@@ -315,7 +323,7 @@ ledger without requiring a tracking session. Named periods use half-open
 `this-month`, and `last-month`.
 
 `toktrail status --json` returns the same information in a machine-readable JSON
-shape for automation.
+shape for automation, including `unconfigured_models` and `display_filters`.
 
 By default:
 
@@ -332,7 +340,8 @@ Example workflow:
 ```bash
 toktrail config init --template copilot
 toktrail import copilot --copilot-file ~/.copilot/otel/copilot-otel-20260429-090000.jsonl
-toktrail status
+toktrail status --price-state unpriced --sort tokens --limit 20
+toktrail config prices --query gpt-5 --json
 toktrail sessions copilot --sort savings --columns source_session_id,actual,virtual,savings
 ```
 
