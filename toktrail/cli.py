@@ -658,13 +658,22 @@ def _render_copilot_env_lines(
     _exit_with_error("Unsupported shell. Use bash, zsh, fish, nu, or powershell.")
 
 
+def _render_copilot_env_json(values: tuple[CopilotEnvVar, ...]) -> str:
+    return json.dumps(dict(values), indent=2) + "\n"
+
+
 @copilot_app.command("env")
 def copilot_env(
     shell: Annotated[str, typer.Argument()],
     otel_file: Annotated[Path | None, typer.Option("--otel-file")] = None,
+    json_output: JsonOption = False,
 ) -> None:
     path = (otel_file or new_copilot_otel_file_path()).expanduser()
-    for line in _render_copilot_env_lines(shell, _copilot_env_vars(path)):
+    env_vars = _copilot_env_vars(path)
+    if json_output:
+        typer.echo(_render_copilot_env_json(env_vars), nl=False)
+        return
+    for line in _render_copilot_env_lines(shell, env_vars):
         typer.echo(line)
 
 

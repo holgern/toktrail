@@ -156,13 +156,20 @@ toktrail copilot env fish | source
 ```
 
 Supported `toktrail copilot env` shells are `bash`, `zsh`, `fish`,
-`nu`/`nushell`, and `powershell`/`pwsh`.
+`nu`/`nushell`, and `powershell`/`pwsh`. Pass `--json` to output a JSON object
+instead of shell code.
 
 For Nushell:
 
 ```nu
 toktrail copilot env nu | save -f /tmp/toktrail-copilot-env.nu
 source-env /tmp/toktrail-copilot-env.nu
+```
+
+Or use `--json` for direct consumption:
+
+```nu
+toktrail copilot env nu --json | from json | load-env
 ```
 
 For PowerShell:

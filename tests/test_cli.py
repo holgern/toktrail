@@ -857,3 +857,44 @@ def test_cli_copilot_env_rejects_unknown_shell() -> None:
 
     assert result.exit_code == 1
     assert "Unsupported shell. Use bash, zsh, fish, nu, or powershell." in result.output
+
+
+def test_cli_copilot_env_json_outputs_valid_json(tmp_path) -> None:
+    runner = CliRunner()
+    otel_file = tmp_path / "copilot.jsonl"
+    otel_file_str = str(otel_file)
+
+    for shell in ("nu", "bash", "fish", "powershell"):
+        result = runner.invoke(
+            app,
+            ["copilot", "env", shell, "--otel-file", otel_file_str, "--json"],
+        )
+        assert result.exit_code == 0, result.output
+        parsed = json.loads(result.output)
+        assert set(parsed.keys()) == {
+            "COPILOT_OTEL_ENABLED",
+            "COPILOT_OTEL_EXPORTER_TYPE",
+            "COPILOT_OTEL_FILE_EXPORTER_PATH",
+            "TOKTRAIL_COPILOT_FILE",
+        }
+        assert parsed["COPILOT_OTEL_ENABLED"] == "true"
+        assert parsed["COPILOT_OTEL_EXPORTER_TYPE"] == "file"
+        assert parsed["COPILOT_OTEL_FILE_EXPORTER_PATH"] == otel_file_str
+        assert parsed["TOKTRAIL_COPILOT_FILE"] == otel_file_str
+
+
+def test_cli_copilot_env_json_does_not_affect_default_output(tmp_path) -> None:
+    runner = CliRunner()
+    otel_file = tmp_path / "copilot.jsonl"
+    otel_file_str = str(otel_file)
+
+    result = runner.invoke(
+        app,
+        ["copilot", "env", "nu", "--otel-file", otel_file_str],
+    )
+    assert result.exit_code == 0, result.output
+    lines = result.output.splitlines()
+    assert len(lines) == 4
+    assert lines[0].startswith("$env.COPILOT_OTEL_ENABLED")
+    # Must not be valid JSON object output
+    assert not result.output.strip().startswith("{")
