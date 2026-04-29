@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 import subprocess
 from copy import deepcopy
 from pathlib import Path
@@ -163,20 +164,6 @@ def test_cli_opencode_sessions_lists_source_sessions(tmp_path) -> None:
     assert "ses-1" in result.output
     assert "1,850" in result.output
     assert "2023-" in result.output
-
-
-def test_cli_legacy_opencode_sessions_still_works(tmp_path) -> None:
-    runner = CliRunner()
-    source_db = tmp_path / "opencode.db"
-    create_source_db(source_db)
-
-    result = runner.invoke(
-        app,
-        ["opencode", "sessions", "--opencode-db", str(source_db)],
-    )
-
-    assert result.exit_code == 0, result.output
-    assert "ses-1" in result.output
 
 
 def test_cli_watch_opencode_exits_cleanly_on_ctrl_c(tmp_path, monkeypatch) -> None:
@@ -418,20 +405,6 @@ def test_cli_pi_sessions_lists_source_sessions(tmp_path) -> None:
     assert "2026-" in result.output
 
 
-def test_cli_legacy_pi_sessions_still_works(tmp_path) -> None:
-    runner = CliRunner()
-    session_dir = tmp_path / "sessions"
-    create_pi_session_file(session_dir / "encoded-cwd" / "session.jsonl")
-
-    result = runner.invoke(
-        app,
-        ["pi", "sessions", "--pi-path", str(session_dir)],
-    )
-
-    assert result.exit_code == 0, result.output
-    assert "pi_ses_001" in result.output
-
-
 def test_cli_sessions_copilot_lists_source_sessions(tmp_path) -> None:
     runner = CliRunner()
     copilot_file = tmp_path / "copilot.jsonl"
@@ -446,6 +419,26 @@ def test_cli_sessions_copilot_lists_source_sessions(tmp_path) -> None:
     assert "source_session_id" in result.output
     assert "conv-1" in result.output
     assert "105" in result.output
+
+
+def test_cli_harness_first_sessions_are_removed(tmp_path) -> None:
+    runner = CliRunner()
+    source_db = tmp_path / "opencode.db"
+    create_source_db(source_db)
+    session_dir = tmp_path / "sessions"
+    create_pi_session_file(session_dir / "encoded-cwd" / "session.jsonl")
+    copilot_file = tmp_path / "copilot.jsonl"
+    create_copilot_file(copilot_file)
+
+    commands = (
+        ["opencode", "sessions", "--opencode-db", str(source_db)],
+        ["pi", "sessions", "--pi-path", str(session_dir)],
+        ["copilot", "sessions", "--copilot-file", str(copilot_file)],
+    )
+
+    for args in commands:
+        result = runner.invoke(app, args)
+        assert result.exit_code != 0
 
 
 def test_cli_sessions_pi_breakdown_shows_token_columns(tmp_path) -> None:
@@ -598,14 +591,86 @@ def test_cli_copilot_run_sets_otel_environment(tmp_path, monkeypatch) -> None:
     assert "Copilot OTEL file:" in result.output
 
 
-def test_cli_copilot_env_bash_outputs_shell_exports(tmp_path, monkeypatch) -> None:
+def test_cli_copilot_env_outputs_shell_exports(tmp_path) -> None:
     runner = CliRunner()
-    monkeypatch.setenv("HOME", str(tmp_path))
+    otel_file = tmp_path / "otel dir" / "copilot file.jsonl"
+    otel_file_str = str(otel_file)
 
-    result = runner.invoke(app, ["copilot", "env", "bash"])
+    expected_lines = {
+        "bash": [
+            "export COPILOT_OTEL_ENABLED=true",
+            "export COPILOT_OTEL_EXPORTER_TYPE=file",
+            f"export COPILOT_OTEL_FILE_EXPORTER_PATH={shlex.quote(otel_file_str)}",
+            f"export TOKTRAIL_COPILOT_FILE={shlex.quote(otel_file_str)}",
+        ],
+        "zsh": [
+            "export COPILOT_OTEL_ENABLED=true",
+            "export COPILOT_OTEL_EXPORTER_TYPE=file",
+            f"export COPILOT_OTEL_FILE_EXPORTER_PATH={shlex.quote(otel_file_str)}",
+            f"export TOKTRAIL_COPILOT_FILE={shlex.quote(otel_file_str)}",
+        ],
+        "fish": [
+            "set -gx COPILOT_OTEL_ENABLED 'true'",
+            "set -gx COPILOT_OTEL_EXPORTER_TYPE 'file'",
+            f"set -gx COPILOT_OTEL_FILE_EXPORTER_PATH '{otel_file_str}'",
+            f"set -gx TOKTRAIL_COPILOT_FILE '{otel_file_str}'",
+        ],
+        "nu": [
+            '$env.COPILOT_OTEL_ENABLED = "true"',
+            '$env.COPILOT_OTEL_EXPORTER_TYPE = "file"',
+            f"$env.COPILOT_OTEL_FILE_EXPORTER_PATH = {json.dumps(otel_file_str)}",
+            f"$env.TOKTRAIL_COPILOT_FILE = {json.dumps(otel_file_str)}",
+        ],
+        "powershell": [
+            "$env:COPILOT_OTEL_ENABLED = 'true'",
+            "$env:COPILOT_OTEL_EXPORTER_TYPE = 'file'",
+            f"$env:COPILOT_OTEL_FILE_EXPORTER_PATH = '{otel_file_str}'",
+            f"$env:TOKTRAIL_COPILOT_FILE = '{otel_file_str}'",
+        ],
+    }
 
-    assert result.exit_code == 0, result.output
-    assert result.output.startswith("export COPILOT_OTEL_ENABLED=true\n")
-    assert "export COPILOT_OTEL_EXPORTER_TYPE=file" in result.output
-    assert "export COPILOT_OTEL_FILE_EXPORTER_PATH=" in result.output
-    assert "export TOKTRAIL_COPILOT_FILE=" in result.output
+    for shell, lines in expected_lines.items():
+        result = runner.invoke(
+            app,
+            ["copilot", "env", shell, "--otel-file", otel_file_str],
+        )
+        assert result.exit_code == 0, result.output
+        assert result.output.splitlines() == lines
+
+
+def test_cli_copilot_env_accepts_shell_aliases(tmp_path) -> None:
+    runner = CliRunner()
+    otel_file = tmp_path / "copilot.jsonl"
+    otel_file_str = str(otel_file)
+
+    result_nushell = runner.invoke(
+        app,
+        ["copilot", "env", "nushell", "--otel-file", otel_file_str],
+    )
+    result_nu = runner.invoke(
+        app,
+        ["copilot", "env", "nu", "--otel-file", otel_file_str],
+    )
+    assert result_nushell.exit_code == 0, result_nushell.output
+    assert result_nu.exit_code == 0, result_nu.output
+    assert result_nushell.output == result_nu.output
+
+    result_pwsh = runner.invoke(
+        app,
+        ["copilot", "env", "pwsh", "--otel-file", otel_file_str],
+    )
+    result_powershell = runner.invoke(
+        app,
+        ["copilot", "env", "powershell", "--otel-file", otel_file_str],
+    )
+    assert result_pwsh.exit_code == 0, result_pwsh.output
+    assert result_powershell.exit_code == 0, result_powershell.output
+    assert result_pwsh.output == result_powershell.output
+
+
+def test_cli_copilot_env_rejects_unknown_shell() -> None:
+    runner = CliRunner()
+    result = runner.invoke(app, ["copilot", "env", "csh"])
+
+    assert result.exit_code == 1
+    assert "Unsupported shell. Use bash, zsh, fish, nu, or powershell." in result.output

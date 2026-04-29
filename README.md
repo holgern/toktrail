@@ -139,6 +139,24 @@ toktrail import copilot --since-start --no-raw --copilot-file /path/to/copilot-o
 toktrail watch copilot --copilot-file /path/to/copilot-otel.jsonl --interval 2
 toktrail copilot run -- gh copilot suggest "explain git reflog"
 eval "$(toktrail copilot env bash)"
+eval "$(toktrail copilot env zsh)"
+toktrail copilot env fish | source
+```
+
+Supported `toktrail copilot env` shells are `bash`, `zsh`, `fish`,
+`nu`/`nushell`, and `powershell`/`pwsh`.
+
+For Nushell:
+
+```nu
+toktrail copilot env nu | save -f /tmp/toktrail-copilot-env.nu
+source-env /tmp/toktrail-copilot-env.nu
+```
+
+For PowerShell:
+
+```powershell
+toktrail copilot env powershell | Invoke-Expression
 ```
 
 If `TOKTRAIL_COPILOT_FILE` or `COPILOT_OTEL_FILE_EXPORTER_PATH` is set,
@@ -158,14 +176,6 @@ toktrail sessions pi --sort tokens --limit 5 --columns source_session_id,total -
 toktrail sessions pi pi_ses_001 --json
 toktrail sessions copilot
 toktrail sessions copilot --copilot-path ~/.copilot/otel
-```
-
-Legacy aliases remain available:
-
-```bash
-toktrail opencode sessions
-toktrail pi sessions
-toktrail copilot sessions
 ```
 
 ## Storage and privacy

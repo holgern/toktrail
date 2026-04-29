@@ -45,15 +45,11 @@ sessions_app = typer.Typer(
     invoke_without_command=True,
     help="List toktrail tracking sessions and raw source sessions.",
 )
-opencode_app = typer.Typer(help="Inspect OpenCode source data.")
-pi_app = typer.Typer(help="Inspect Pi source data.")
 copilot_app = typer.Typer(help="Inspect and run GitHub Copilot CLI tracking.")
 
 app.add_typer(import_app, name="import")
 app.add_typer(watch_app, name="watch")
 app.add_typer(sessions_app, name="sessions")
-app.add_typer(opencode_app, name="opencode")
-app.add_typer(pi_app, name="pi")
 app.add_typer(copilot_app, name="copilot")
 
 
@@ -65,6 +61,9 @@ class ImportExecutionResult:
     rows_seen: int
     rows_imported: int
     rows_skipped: int
+
+
+CopilotEnvVar = tuple[str, str]
 
 
 DbPathOption = Annotated[
@@ -494,87 +493,6 @@ def sessions_copilot(
     )
 
 
-@opencode_app.command("sessions")
-def opencode_sessions(
-    source_session_id: SourceSessionArgument = None,
-    opencode_db: OpenCodeDbOption = None,
-    last: LastOption = False,
-    breakdown: BreakdownOption = False,
-    json_output: JsonOption = False,
-    utc: UtcOption = False,
-    limit: LimitOption = None,
-    sort: SortOption = "last",
-    columns: ColumnsOption = None,
-    rich_output: RichOption = False,
-) -> None:
-    sessions_opencode(
-        source_session_id=source_session_id,
-        opencode_db=opencode_db,
-        last=last,
-        breakdown=breakdown,
-        json_output=json_output,
-        utc=utc,
-        limit=limit,
-        sort=sort,
-        columns=columns,
-        rich_output=rich_output,
-    )
-
-
-@pi_app.command("sessions")
-def pi_sessions(
-    source_session_id: SourceSessionArgument = None,
-    pi_path: PiPathOption = None,
-    last: LastOption = False,
-    breakdown: BreakdownOption = False,
-    json_output: JsonOption = False,
-    utc: UtcOption = False,
-    limit: LimitOption = None,
-    sort: SortOption = "last",
-    columns: ColumnsOption = None,
-    rich_output: RichOption = False,
-) -> None:
-    sessions_pi(
-        source_session_id=source_session_id,
-        pi_path=pi_path,
-        last=last,
-        breakdown=breakdown,
-        json_output=json_output,
-        utc=utc,
-        limit=limit,
-        sort=sort,
-        columns=columns,
-        rich_output=rich_output,
-    )
-
-
-@copilot_app.command("sessions")
-def copilot_sessions(
-    source_session_id: SourceSessionArgument = None,
-    copilot_path: CopilotPathOption = None,
-    last: LastOption = False,
-    breakdown: BreakdownOption = False,
-    json_output: JsonOption = False,
-    utc: UtcOption = False,
-    limit: LimitOption = None,
-    sort: SortOption = "last",
-    columns: ColumnsOption = None,
-    rich_output: RichOption = False,
-) -> None:
-    sessions_copilot(
-        source_session_id=source_session_id,
-        copilot_path=copilot_path,
-        last=last,
-        breakdown=breakdown,
-        json_output=json_output,
-        utc=utc,
-        limit=limit,
-        sort=sort,
-        columns=columns,
-        rich_output=rich_output,
-    )
-
-
 @copilot_app.command(
     "run",
     context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
@@ -596,10 +514,8 @@ def copilot_run(
     path.parent.mkdir(parents=True, exist_ok=True)
 
     env = os.environ.copy()
-    env["COPILOT_OTEL_ENABLED"] = "true"
-    env["COPILOT_OTEL_EXPORTER_TYPE"] = "file"
-    env["COPILOT_OTEL_FILE_EXPORTER_PATH"] = str(path)
-    env["TOKTRAIL_COPILOT_FILE"] = str(path)
+    for key, value in _copilot_env_vars(path):
+        env[key] = value
 
     completed = subprocess.run(command, env=env, check=False)
     typer.echo(f"Copilot OTEL file: {path}")
@@ -619,28 +535,53 @@ def copilot_run(
     raise typer.Exit(completed.returncode)
 
 
+def _copilot_env_vars(path: Path) -> tuple[CopilotEnvVar, ...]:
+    path_str = str(path)
+    return (
+        ("COPILOT_OTEL_ENABLED", "true"),
+        ("COPILOT_OTEL_EXPORTER_TYPE", "file"),
+        ("COPILOT_OTEL_FILE_EXPORTER_PATH", path_str),
+        ("TOKTRAIL_COPILOT_FILE", path_str),
+    )
+
+
+def _quote_fish(value: str) -> str:
+    return "'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'"
+
+
+def _quote_powershell(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
+
+
+def _render_copilot_env_lines(
+    shell: str,
+    values: tuple[CopilotEnvVar, ...],
+) -> list[str]:
+    normalized = shell.lower()
+
+    if normalized in {"bash", "zsh"}:
+        return [f"export {key}={shlex.quote(value)}" for key, value in values]
+
+    if normalized == "fish":
+        return [f"set -gx {key} {_quote_fish(value)}" for key, value in values]
+
+    if normalized in {"nu", "nushell"}:
+        return [f"$env.{key} = {json.dumps(value)}" for key, value in values]
+
+    if normalized in {"powershell", "pwsh"}:
+        return [f"$env:{key} = {_quote_powershell(value)}" for key, value in values]
+
+    _exit_with_error("Unsupported shell. Use bash, zsh, fish, nu, or powershell.")
+
+
 @copilot_app.command("env")
 def copilot_env(
     shell: Annotated[str, typer.Argument()],
     otel_file: Annotated[Path | None, typer.Option("--otel-file")] = None,
 ) -> None:
     path = (otel_file or new_copilot_otel_file_path()).expanduser()
-    quoted_path = shlex.quote(str(path))
-
-    if shell == "bash":
-        typer.echo("export COPILOT_OTEL_ENABLED=true")
-        typer.echo("export COPILOT_OTEL_EXPORTER_TYPE=file")
-        typer.echo(f"export COPILOT_OTEL_FILE_EXPORTER_PATH={quoted_path}")
-        typer.echo(f"export TOKTRAIL_COPILOT_FILE={quoted_path}")
-        return
-    if shell == "powershell":
-        typer.echo('$env:COPILOT_OTEL_ENABLED = "true"')
-        typer.echo('$env:COPILOT_OTEL_EXPORTER_TYPE = "file"')
-        typer.echo(f'$env:COPILOT_OTEL_FILE_EXPORTER_PATH = "{path}"')
-        typer.echo(f'$env:TOKTRAIL_COPILOT_FILE = "{path}"')
-        return
-
-    _exit_with_error("Unsupported shell. Use 'bash' or 'powershell'.")
+    for line in _render_copilot_env_lines(shell, _copilot_env_vars(path)):
+        typer.echo(line)
 
 
 def cli_main() -> None:
