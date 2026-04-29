@@ -1,13 +1,13 @@
 # toktrail
 
-`toktrail` is a Python CLI for tracking OpenCode, Pi, Codex, Goose, Droid, and
-GitHub Copilot CLI token usage inside a local toktrail SQLite database.
+`toktrail` is a Python CLI for tracking OpenCode, Pi, Codex, Goose, Droid, Amp,
+and GitHub Copilot CLI token usage inside a local toktrail SQLite database.
 
 The first implementation focuses on:
 
 - OpenCode SQLite, Pi JSONL sessions, Codex JSONL sessions, Goose SQLite
-  sessions, Droid settings JSON sessions, and GitHub Copilot CLI OTEL JSONL as
-  supported source harnesses
+  sessions, Droid settings JSON sessions, Amp thread JSON sessions, and GitHub
+  Copilot CLI OTEL JSONL as supported source harnesses
 - local SQLite for both the OpenCode source database and toktrail state
 - reporting totals by tracking session, harness, model, and agent/mode
 
@@ -21,6 +21,7 @@ The first implementation focuses on:
 - Goose SQLite sessions, typically at
   `~/.local/share/goose/sessions/sessions.db`, and/or
 - Droid settings JSON sessions, typically under `~/.factory/sessions`, and/or
+- Amp thread JSON sessions, typically under `~/.local/share/amp/threads`, and/or
 - GitHub Copilot CLI OTEL JSONL export files, typically under `~/.copilot/otel`
 
 toktrail reads supported source data in read-only mode and does not modify the
@@ -63,7 +64,7 @@ today_usage = usage_report(db_path, period="today", timezone="UTC")
 
 See [`API.md`](API.md) for the stable import boundary, public models, workflow
 API, canonical errors, and privacy defaults. Runnable manual-run examples for
-OpenCode, Pi, Copilot, Codex, Goose, and Droid are documented in
+OpenCode, Pi, Copilot, Codex, Goose, Droid, and Amp are documented in
 [`docs/stable_api_examples.md`](docs/stable_api_examples.md).
 
 ## Quickstart
@@ -86,6 +87,7 @@ Import usage from config or a single harness:
 toktrail config init
 toktrail import
 toktrail import --harness codex --source ~/.codex/sessions
+toktrail import --harness amp --source ~/.local/share/amp/threads
 toktrail import --no-session
 ```
 
@@ -145,7 +147,7 @@ source paths from `config.toml`:
 
 ```toml
 [imports]
-harnesses = ["opencode", "pi", "copilot", "codex", "goose", "droid"]
+harnesses = ["opencode", "pi", "copilot", "codex", "goose", "droid", "amp"]
 missing_source = "warn"
 include_raw_json = false
 
@@ -156,6 +158,7 @@ copilot = "~/.copilot/otel"
 codex = "~/.codex/sessions"
 goose = "~/.local/share/goose/sessions/sessions.db"
 droid = "~/.factory/sessions"
+amp = "~/.local/share/amp/threads"
 ```
 
 Use `toktrail import --harness <name> --source <path>` for one-off imports.
@@ -183,6 +186,7 @@ toktrail sessions codex
 toktrail sessions copilot
 toktrail sessions goose
 toktrail sessions droid
+toktrail sessions amp
 ```
 
 Inspect and manage pricing config:
@@ -209,6 +213,7 @@ toktrail import --harness pi --source ~/.pi/agent/sessions
 toktrail import --harness codex --source ~/.codex/sessions
 toktrail import --harness goose --source ~/.local/share/goose/sessions/sessions.db
 toktrail import --harness droid --source ~/.factory/sessions
+toktrail import --harness amp --source ~/.local/share/amp/threads
 toktrail import --session 3
 toktrail import --no-session
 toktrail import --raw
@@ -217,8 +222,8 @@ toktrail import --no-raw
 
 The plain `toktrail import` command reads enabled harnesses and source paths from
 `[imports]` and `[imports.sources]` in `config.toml`. Legacy
-`toktrail import opencode|pi|copilot|codex|goose|droid` subcommands still work for
-compatibility.
+`toktrail import opencode|pi|copilot|codex|goose|droid|amp` subcommands still
+work for compatibility.
 
 ## Advanced: harness-specific import and watch
 
@@ -336,6 +341,22 @@ If `TOKTRAIL_DROID_SESSIONS` is set, `toktrail import droid` can omit
 `--droid-path`. Droid settings files are cumulative snapshots, so toktrail does
 not expose `watch droid`.
 
+Import or watch Amp thread JSON usage:
+
+```bash
+toktrail import amp
+toktrail import amp --amp-path ~/.local/share/amp/threads
+toktrail import amp --amp-path ~/.local/share/amp/threads/<thread-id>.json
+toktrail import amp --source-session thread-id
+toktrail import amp --since-start
+toktrail import amp --no-raw
+
+toktrail watch amp --interval 2
+toktrail watch amp --amp-path ~/.local/share/amp/threads
+```
+
+If `TOKTRAIL_AMP_THREADS` is set, `toktrail import amp` can omit `--amp-path`.
+
 Inspect raw source sessions without mutating toktrail state:
 
 ```bash
@@ -356,6 +377,9 @@ toktrail sessions goose --last --breakdown
 toktrail sessions droid
 toktrail sessions droid --droid-path ~/.factory/sessions
 toktrail sessions droid --last --breakdown
+toktrail sessions amp
+toktrail sessions amp --amp-path ~/.local/share/amp/threads
+toktrail sessions amp --last --breakdown
 toktrail sessions copilot
 toktrail sessions copilot --copilot-path ~/.copilot/otel
 toktrail --config ~/.config/toktrail/config.toml sessions copilot --sort virtual --limit 5
@@ -399,7 +423,7 @@ by default for local debugging and reprocessing. Pi and Codex imports store raw
 JSONL entry lines by default. Use `--no-raw` with import or watch commands to
 suppress raw JSON storage.
 
-toktrail never prints raw OpenCode, Pi, Codex, Goose, Droid, or Copilot JSON in
+toktrail never prints raw OpenCode, Pi, Codex, Goose, Droid, Amp, or Copilot JSON in
 CLI output.
 
 ## Reporting

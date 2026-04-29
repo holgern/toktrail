@@ -4,11 +4,13 @@ import os
 from datetime import datetime
 
 from toktrail.paths import (
+    default_amp_threads_path,
     default_codex_sessions_path,
     default_droid_sessions_path,
     default_goose_sessions_db_path,
     default_toktrail_config_path,
     new_copilot_otel_file_path,
+    resolve_amp_threads_path,
     resolve_codex_sessions_path,
     resolve_copilot_file_path,
     resolve_copilot_source_path,
@@ -81,6 +83,29 @@ def test_default_codex_sessions_path_uses_home(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
 
     assert default_codex_sessions_path() == tmp_path / ".codex" / "sessions"
+
+
+def test_default_amp_threads_path_uses_home(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    assert default_amp_threads_path() == (
+        tmp_path / ".local" / "share" / "amp" / "threads"
+    )
+
+
+def test_resolve_amp_threads_path_prefers_env(monkeypatch, tmp_path) -> None:
+    path = tmp_path / "amp-threads"
+    monkeypatch.setenv("TOKTRAIL_AMP_THREADS", str(path))
+
+    assert resolve_amp_threads_path(None) == path
+
+
+def test_resolve_amp_threads_path_prefers_cli(monkeypatch, tmp_path) -> None:
+    env_path = tmp_path / "env"
+    cli_path = tmp_path / "cli"
+    monkeypatch.setenv("TOKTRAIL_AMP_THREADS", str(env_path))
+
+    assert resolve_amp_threads_path(cli_path) == cli_path
 
 
 def test_resolve_codex_sessions_path_prefers_env(monkeypatch, tmp_path) -> None:

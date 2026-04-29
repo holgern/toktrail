@@ -4,6 +4,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from toktrail.adapters.amp import list_amp_sessions, scan_amp_path
 from toktrail.adapters.base import ScanResult, SourceSessionSummary
 from toktrail.adapters.codex import list_codex_sessions, scan_codex_path
 from toktrail.adapters.copilot import list_copilot_sessions, scan_copilot_path
@@ -12,6 +13,7 @@ from toktrail.adapters.goose import list_goose_sessions, scan_goose_sqlite
 from toktrail.adapters.opencode import list_opencode_sessions, scan_opencode_sqlite
 from toktrail.adapters.pi import list_pi_sessions, scan_pi_path
 from toktrail.paths import (
+    resolve_amp_threads_path,
     resolve_codex_sessions_path,
     resolve_copilot_source_path,
     resolve_droid_sessions_path,
@@ -31,6 +33,13 @@ class HarnessDefinition:
 
 
 HARNESS_REGISTRY: dict[str, HarnessDefinition] = {
+    "amp": HarnessDefinition(
+        name="amp",
+        display_name="Amp",
+        resolve_source_path=resolve_amp_threads_path,
+        scan=scan_amp_path,
+        list_sessions=list_amp_sessions,
+    ),
     "opencode": HarnessDefinition(
         name="opencode",
         display_name="OpenCode",

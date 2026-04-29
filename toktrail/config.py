@@ -46,7 +46,15 @@ _COSTING_FIELDS = {
     "price_profile",
 }
 _PRICING_FIELDS = {"virtual", "actual"}
-_SUPPORTED_HARNESSES = {"opencode", "pi", "copilot", "codex", "goose", "droid"}
+_SUPPORTED_HARNESSES = {
+    "opencode",
+    "pi",
+    "copilot",
+    "codex",
+    "goose",
+    "droid",
+    "amp",
+}
 _SEPARATOR_RE = re.compile(r"[/_\s]+")
 _INVALID_IDENTITY_CHARS_RE = re.compile(r"[^a-z0-9.-]+")
 _DASH_RE = re.compile(r"-+")
@@ -55,7 +63,7 @@ DEFAULT_CONFIG_TEXT = """\
 config_version = 1
 
 [imports]
-harnesses = ["opencode", "pi", "copilot", "codex", "goose", "droid"]
+harnesses = ["opencode", "pi", "copilot", "codex", "goose", "droid", "amp"]
 missing_source = "warn"
 include_raw_json = false
 
@@ -66,6 +74,7 @@ copilot = "~/.copilot/otel"
 codex = "~/.codex/sessions"
 goose = "~/.local/share/goose/sessions/sessions.db"
 droid = "~/.factory/sessions"
+amp = "~/.local/share/amp/threads"
 
 [costing]
 default_actual_mode = "source"
@@ -95,13 +104,17 @@ mode = "zero"
 [[actual_cost]]
 harness = "droid"
 mode = "zero"
+
+[[actual_cost]]
+harness = "amp"
+mode = "source"
 """
 
 COPILOT_TEMPLATE_TEXT = """\
 config_version = 1
 
 [imports]
-harnesses = ["opencode", "pi", "copilot", "codex", "goose", "droid"]
+harnesses = ["opencode", "pi", "copilot", "codex", "goose", "droid", "amp"]
 missing_source = "warn"
 include_raw_json = false
 
@@ -112,6 +125,7 @@ copilot = "~/.copilot/otel"
 codex = "~/.codex/sessions"
 goose = "~/.local/share/goose/sessions/sessions.db"
 droid = "~/.factory/sessions"
+amp = "~/.local/share/amp/threads"
 
 [costing]
 default_actual_mode = "source"
@@ -142,6 +156,10 @@ mode = "zero"
 [[actual_cost]]
 harness = "droid"
 mode = "zero"
+
+[[actual_cost]]
+harness = "amp"
+mode = "source"
 
 # OpenAI
 
@@ -463,6 +481,7 @@ class ImportConfig:
         "codex",
         "goose",
         "droid",
+        "amp",
     )
     sources: dict[str, Path] | None = None
     missing_source: ImportMissingSourceMode = "warn"
@@ -537,6 +556,12 @@ def default_costing_config() -> CostingConfig:
                 provider=None,
                 model=None,
                 mode="zero",
+            ),
+            ActualCostRule(
+                harness="amp",
+                provider=None,
+                model=None,
+                mode="source",
             ),
         )
     )

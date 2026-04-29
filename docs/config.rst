@@ -17,7 +17,7 @@ Example
 .. code-block:: toml
 
    [imports]
-   harnesses = ["opencode", "pi", "copilot", "codex", "goose"]
+   harnesses = ["opencode", "pi", "copilot", "codex", "goose", "droid", "amp"]
    missing_source = "warn"
    include_raw_json = false
 
@@ -27,6 +27,8 @@ Example
    copilot = "~/.copilot/otel"
    codex = "~/.codex/sessions"
    goose = "~/.local/share/goose/sessions/sessions.db"
+   droid = "~/.factory/sessions"
+   amp = "~/.local/share/amp/threads"
 
    [costing]
    timezone = "UTC"

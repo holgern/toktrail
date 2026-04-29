@@ -29,6 +29,7 @@ EXAMPLE_PATHS = (
     Path("examples/manual_run_codex.py"),
     Path("examples/manual_run_goose.py"),
     Path("examples/manual_run_droid.py"),
+    Path("examples/manual_run_amp.py"),
 )
 
 WRAPPER_MODULES = (
@@ -38,6 +39,7 @@ WRAPPER_MODULES = (
     "examples.manual_run_codex",
     "examples.manual_run_goose",
     "examples.manual_run_droid",
+    "examples.manual_run_amp",
 )
 
 FORBIDDEN_TOKTRAIL_IMPORTS = (

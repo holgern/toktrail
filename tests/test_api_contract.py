@@ -6,6 +6,7 @@ from pathlib import Path
 from toktrail.api.harnesses import supported_harnesses
 from toktrail.api.models import CostTotals, TokenBreakdown, UsageEvent
 from toktrail.api.paths import (
+    default_amp_threads_path,
     default_droid_sessions_path,
     default_goose_sessions_db_path,
     default_source_path,
@@ -107,16 +108,20 @@ def test_public_harness_metadata_and_paths_include_codex_goose_and_droid(
     copilot_env_path = tmp_path / "copilot.jsonl"
     goose_env_path = tmp_path / "goose-sessions.db"
     droid_env_path = tmp_path / "factory-sessions"
+    amp_env_path = tmp_path / "amp-threads"
     monkeypatch.setenv("TOKTRAIL_CODEX_SESSIONS", str(codex_env_path))
     monkeypatch.setenv("TOKTRAIL_COPILOT_FILE", str(copilot_env_path))
     monkeypatch.setenv("TOKTRAIL_GOOSE_SESSIONS", str(goose_env_path))
     monkeypatch.setenv("TOKTRAIL_DROID_SESSIONS", str(droid_env_path))
+    monkeypatch.setenv("TOKTRAIL_AMP_THREADS", str(amp_env_path))
 
     harness_names = {definition.name for definition in supported_harnesses()}
 
     assert "codex" in harness_names
     assert "goose" in harness_names
     assert "droid" in harness_names
+    assert "amp" in harness_names
+    assert default_source_path("amp") == default_amp_threads_path()
     assert default_source_path("codex") == Path.home() / ".codex" / "sessions"
     assert default_source_path("goose") == default_goose_sessions_db_path()
     assert default_source_path("droid") == default_droid_sessions_path()
@@ -133,3 +138,7 @@ def test_public_harness_metadata_and_paths_include_codex_goose_and_droid(
         tmp_path / "explicit-droid"
     )
     assert resolve_source_path("droid") == droid_env_path
+    assert resolve_source_path("amp", tmp_path / "explicit-amp") == (
+        tmp_path / "explicit-amp"
+    )
+    assert resolve_source_path("amp") == amp_env_path

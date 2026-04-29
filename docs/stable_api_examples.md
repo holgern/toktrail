@@ -22,6 +22,7 @@ run coding agent without importing toktrail internals.
 - Codex CLI: `codex`
 - Goose: `goose`
 - Droid: `droid`
+- Amp: `amp`
 
 ## Run examples
 
@@ -32,6 +33,7 @@ python examples/manual_run_copilot.py --shell bash
 python examples/manual_run_codex.py
 python examples/manual_run_goose.py
 python examples/manual_run_droid.py
+python examples/manual_run_amp.py
 ```
 
 ## Goose API example
@@ -60,6 +62,20 @@ from toktrail.api.sources import list_source_sessions
 source_path = default_droid_sessions_path()
 result = import_usage(Path(".toktrail/toktrail.db"), "droid", source_path=source_path)
 sessions = list_source_sessions("droid", source_path=source_path, limit=5)
+```
+
+## Amp API example
+
+```python
+from pathlib import Path
+
+from toktrail.api.imports import import_usage
+from toktrail.api.paths import default_amp_threads_path
+from toktrail.api.sources import list_source_sessions
+
+source_path = default_amp_threads_path()
+result = import_usage(Path(".toktrail/toktrail.db"), "amp", source_path=source_path)
+sessions = list_source_sessions("amp", source_path=source_path, limit=5)
 ```
 
 ## Per-harness notes

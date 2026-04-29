@@ -5,6 +5,9 @@ from pathlib import Path
 from toktrail.api.harnesses import get_harness_definition
 from toktrail.errors import StateDatabaseError
 from toktrail.paths import (
+    default_amp_threads_path as _default_amp_threads_path,
+)
+from toktrail.paths import (
     default_codex_sessions_path as _default_codex_sessions_path,
 )
 from toktrail.paths import (
@@ -20,6 +23,7 @@ from toktrail.paths import (
     default_toktrail_db_path as _default_toktrail_db_path,
 )
 from toktrail.paths import (
+    resolve_amp_threads_path,
     resolve_codex_sessions_path,
     resolve_copilot_source_path,
     resolve_droid_sessions_path,
@@ -60,6 +64,10 @@ def default_source_path(harness: str) -> Path | None:
     return get_harness_definition(harness).default_source_path
 
 
+def default_amp_threads_path() -> Path:
+    return _default_amp_threads_path()
+
+
 def default_codex_sessions_path() -> Path:
     return _default_codex_sessions_path()
 
@@ -77,6 +85,8 @@ def resolve_source_path(
     source_path: Path | None = None,
 ) -> Path | None:
     normalized = get_harness_definition(harness).name
+    if normalized == "amp":
+        return resolve_amp_threads_path(source_path)
     if normalized == "opencode":
         return resolve_opencode_db_path(source_path)
     if normalized == "pi":
@@ -94,6 +104,7 @@ def resolve_source_path(
 
 
 __all__ = [
+    "default_amp_threads_path",
     "default_codex_sessions_path",
     "default_droid_sessions_path",
     "default_goose_sessions_db_path",

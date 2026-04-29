@@ -11,6 +11,7 @@ from tests.helpers import (
     create_opencode_db,
     insert_message,
 )
+from tests.test_amp_parser import create_amp_source
 from tests.test_droid_parser import write_droid_settings
 from tests.test_goose_parser import create_goose_db, insert_session
 from toktrail.api.imports import import_configured_usage, import_usage
@@ -201,24 +202,58 @@ def test_import_usage_supports_droid_source(tmp_path) -> None:
     assert report.totals.tokens.total == 1936
 
 
+def test_import_usage_supports_amp_source(tmp_path) -> None:
+    state_db = tmp_path / "toktrail.db"
+    amp_source = tmp_path / "amp" / "threads"
+    create_amp_source(amp_source / "thread-1.json")
+    init_state(state_db)
+    session = start_session(state_db, name="amp")
+
+    first = import_usage(
+        state_db,
+        "amp",
+        source_path=amp_source,
+        session_id=session.id,
+    )
+    second = import_usage(
+        state_db,
+        "amp",
+        source_path=amp_source,
+        session_id=session.id,
+    )
+    report = session_report(state_db, session.id)
+
+    assert first.rows_imported == 1
+    assert second.rows_imported == 0
+    assert report.by_harness[0].harness == "amp"
+    assert report.totals.tokens.input == 100
+    assert report.totals.tokens.output == 20
+    assert report.totals.tokens.cache_read == 30
+    assert report.totals.tokens.cache_write == 40
+    assert report.totals.tokens.total == 190
+    assert report.totals.costs.source_cost_usd == 0.75
+
+
 def test_import_configured_usage_imports_all_configured_harnesses(tmp_path) -> None:
     state_db = tmp_path / "toktrail.db"
     source_db = tmp_path / "opencode.db"
     codex_file = tmp_path / "codex" / "session-001.jsonl"
     goose_db = tmp_path / "goose" / "sessions.db"
     droid_source = tmp_path / "factory" / "sessions"
+    amp_source = tmp_path / "amp" / "threads"
     _create_opencode_messages(source_db)
     create_codex_session_file(codex_file)
     create_goose_db(goose_db)
     insert_session(goose_db)
     write_droid_settings(droid_source / "droid-1.settings.json")
+    create_amp_source(amp_source / "thread-1.json")
     config_path = tmp_path / "toktrail.toml"
     config_path.write_text(
         f"""
 config_version = 1
 
 [imports]
-harnesses = ["opencode", "pi", "codex", "goose", "droid"]
+harnesses = ["opencode", "pi", "codex", "goose", "droid", "amp"]
 missing_source = "warn"
 include_raw_json = false
 
@@ -228,6 +263,7 @@ pi = "{tmp_path / "missing-pi"}"
 codex = "{codex_file}"
 goose = "{goose_db}"
 droid = "{droid_source}"
+amp = "{amp_source}"
 """.strip(),
         encoding="utf-8",
     )
@@ -243,6 +279,7 @@ droid = "{droid_source}"
         ("codex", "ok", 1),
         ("goose", "ok", 1),
         ("droid", "ok", 1),
+        ("amp", "ok", 1),
     ]
 
 

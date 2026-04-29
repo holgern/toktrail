@@ -118,6 +118,33 @@ def create_droid_source(path: Path) -> None:
     )
 
 
+def create_amp_source(path: Path) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    (path / "thread-1.json").write_text(
+        json.dumps(
+            {
+                "id": "thread-1",
+                "created": 1775649600000,
+                "messages": [
+                    {
+                        "role": "assistant",
+                        "messageId": 1,
+                        "usage": {
+                            "model": "claude-sonnet-4-0",
+                            "inputTokens": 100,
+                            "outputTokens": 20,
+                            "cacheReadInputTokens": 30,
+                            "cacheCreationInputTokens": 40,
+                            "credits": 0.75,
+                        },
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
 def create_thinking_source_db(path: Path) -> None:
     conn = create_opencode_db(path)
     high = deepcopy(VALID_ASSISTANT)
@@ -513,6 +540,34 @@ def test_cli_import_droid_status(tmp_path) -> None:
     assert payload["totals"]["total"] == 1936
 
 
+def test_cli_import_amp_status(tmp_path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    source_path = tmp_path / "amp" / "threads"
+    create_amp_source(source_path)
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    runner.invoke(app, ["--db", str(state_db), "start", "--name", "amp"])
+    result = runner.invoke(
+        app,
+        ["--db", str(state_db), "import", "amp", "--amp-path", str(source_path)],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Imported Amp usage:" in result.output
+    assert "rows imported: 1" in result.output
+
+    status = runner.invoke(app, ["--db", str(state_db), "status", "1", "--json"])
+    payload = json.loads(status.output)
+    assert payload["by_harness"][0]["harness"] == "amp"
+    assert payload["totals"]["input"] == 100
+    assert payload["totals"]["output"] == 20
+    assert payload["totals"]["cache_read"] == 30
+    assert payload["totals"]["cache_write"] == 40
+    assert payload["totals"]["total"] == 190
+    assert payload["totals"]["source_cost_usd"] == 0.75
+
+
 def test_cli_sessions_droid_breakdown_shows_token_columns(tmp_path) -> None:
     runner = CliRunner()
     source_path = tmp_path / "factory" / "sessions"
@@ -789,6 +844,48 @@ include_raw_json = false
 
     assert result.exit_code == 0, result.output
     assert [row["harness"] for row in payload] == ["codex"]
+    assert payload[0]["rows_imported"] == 1
+
+
+def test_cli_plain_import_supports_amp_harness_override_and_source(tmp_path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    source_path = tmp_path / "amp" / "threads"
+    config_path = tmp_path / "toktrail.toml"
+    create_amp_source(source_path)
+    config_path.write_text(
+        """
+config_version = 1
+
+[imports]
+harnesses = ["pi"]
+missing_source = "warn"
+include_raw_json = false
+""".strip(),
+        encoding="utf-8",
+    )
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+
+    result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "--config",
+            str(config_path),
+            "import",
+            "--harness",
+            "amp",
+            "--source",
+            str(source_path),
+            "--json",
+        ],
+    )
+    payload = json.loads(result.output)
+
+    assert result.exit_code == 0, result.output
+    assert [row["harness"] for row in payload] == ["amp"]
     assert payload[0]["rows_imported"] == 1
 
 
@@ -1392,6 +1489,23 @@ def test_cli_sessions_codex_lists_source_sessions(tmp_path) -> None:
     assert "2026-" in result.output
 
 
+def test_cli_sessions_amp_lists_source_sessions(tmp_path) -> None:
+    runner = CliRunner()
+    source_path = tmp_path / "amp" / "threads"
+    create_amp_source(source_path)
+
+    result = runner.invoke(
+        app,
+        ["sessions", "amp", "--amp-path", str(source_path)],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "source_session_id" in result.output
+    assert "thread-1" in result.output
+    assert "190" in result.output
+    assert "2026-" in result.output
+
+
 def test_cli_sessions_copilot_lists_source_sessions(tmp_path) -> None:
     runner = CliRunner()
     copilot_file = tmp_path / "copilot.jsonl"
@@ -1484,6 +1598,24 @@ def test_cli_sessions_goose_breakdown_shows_token_columns(tmp_path) -> None:
     assert "provider/model" in result.output
     assert "input" in result.output
     assert "claude-sonnet-4-20250514" in result.output
+
+
+def test_cli_sessions_amp_breakdown_shows_token_columns(tmp_path) -> None:
+    runner = CliRunner()
+    source_path = tmp_path / "amp" / "threads"
+    create_amp_source(source_path)
+
+    result = runner.invoke(
+        app,
+        ["sessions", "amp", "--amp-path", str(source_path), "--last", "--breakdown"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Amp source session thread-1" in result.output
+    assert "By model" in result.output
+    assert "provider/model" in result.output
+    assert "input" in result.output
+    assert "claude-sonnet-4-0" in result.output
 
 
 def test_cli_watch_goose_is_not_registered() -> None:
@@ -1734,6 +1866,38 @@ def test_cli_watch_codex_exits_cleanly_on_ctrl_c(tmp_path, monkeypatch) -> None:
 
     assert result.exit_code == 0, result.output
     assert "Stopped watching Codex." in result.output
+    assert "rows imported: 1" in result.output
+
+
+def test_cli_watch_amp_exits_cleanly_on_ctrl_c(tmp_path, monkeypatch) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    source_path = tmp_path / "amp" / "threads"
+    create_amp_source(source_path)
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    runner.invoke(app, ["--db", str(state_db), "start", "--name", "test-session"])
+
+    def interrupt_after_first_sleep(_interval: float) -> None:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("toktrail.cli.time.sleep", interrupt_after_first_sleep)
+    result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "watch",
+            "amp",
+            "--amp-path",
+            str(source_path),
+            "--interval",
+            "0.1",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Stopped watching Amp." in result.output
     assert "rows imported: 1" in result.output
 
 

@@ -8,10 +8,12 @@ from toktrail.paths import (
     COPILOT_OTEL_DIR_ENV,
     COPILOT_OTEL_FILE_EXPORTER_PATH_ENV,
     GOOSE_PATH_ROOT_ENV,
+    TOKTRAIL_AMP_THREADS_ENV,
     TOKTRAIL_CODEX_SESSIONS_ENV,
     TOKTRAIL_DROID_SESSIONS_ENV,
     TOKTRAIL_GOOSE_SESSIONS_ENV,
     TOKTRAIL_PI_SESSIONS_ENV,
+    default_amp_threads_path,
     default_codex_sessions_path,
     default_copilot_otel_dir,
     default_droid_sessions_path,
@@ -21,6 +23,15 @@ from toktrail.paths import (
 )
 
 _HARNESSES: tuple[HarnessDefinition, ...] = (
+    HarnessDefinition(
+        name="amp",
+        display_name="Amp",
+        supports_watch=True,
+        supports_environment=False,
+        default_source_path=default_amp_threads_path(),
+        source_path_env_vars=(TOKTRAIL_AMP_THREADS_ENV,),
+        source_path_kind="path",
+    ),
     HarnessDefinition(
         name="opencode",
         display_name="OpenCode",

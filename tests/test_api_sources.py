@@ -13,6 +13,7 @@ from tests.helpers import (
     insert_message,
     write_jsonl_rows,
 )
+from tests.test_amp_parser import create_amp_source
 from tests.test_droid_parser import write_droid_settings
 from tests.test_goose_parser import create_goose_db, insert_session
 from toktrail.api.config import init_config
@@ -74,6 +75,12 @@ def _build_droid_source(tmp_path):
     return source
 
 
+def _build_amp_source(tmp_path):
+    source = tmp_path / "amp" / "threads"
+    create_amp_source(source / "thread-1.json")
+    return source
+
+
 @pytest.mark.parametrize(
     ("harness", "builder", "source_session_id"),
     (
@@ -83,6 +90,7 @@ def _build_droid_source(tmp_path):
         ("codex", _build_codex_source, "session-001"),
         ("goose", _build_goose_source, "goose-1"),
         ("droid", _build_droid_source, "droid-1"),
+        ("amp", _build_amp_source, "thread-1"),
     ),
 )
 def test_capture_source_snapshot_supports_all_harnesses(

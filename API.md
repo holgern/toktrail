@@ -49,6 +49,7 @@ from toktrail.api.harnesses import (
     supported_harnesses,
 )
 from toktrail.api.paths import (
+    default_amp_threads_path,
     default_codex_sessions_path,
     default_droid_sessions_path,
     default_source_path,
@@ -101,10 +102,10 @@ Public functions never print, never parse CLI arguments, never call `sys.exit`
 or `typer.Exit`, and return dataclasses or plain values.
 
 Supported harness names across the public API are `opencode`, `pi`, `copilot`,
-`codex`, `goose`, and `droid`.
+`codex`, `goose`, `droid`, and `amp`.
 
 Runnable examples for manually measuring OpenCode, Pi, Copilot, Codex, Goose,
-and Droid runs are documented in
+Droid, and Amp runs are documented in
 [`docs/stable_api_examples.md`](docs/stable_api_examples.md).
 
 ## Models
@@ -205,8 +206,8 @@ later import into a specific tracking session links existing canonical rows to
 that session idempotently instead of duplicating them.
 
 `capture_source_snapshot()` and `list_source_sessions()` use the same supported
-harness set, so Codex, Goose, and Droid source sessions can be inspected before
-import with the same public API used for OpenCode, Pi, and Copilot.
+harness set, so Codex, Goose, Droid, and Amp source sessions can be inspected
+before import with the same public API used for OpenCode, Pi, and Copilot.
 
 `usage_report()` no longer requires `session_id`. When used for canonical
 period/time-range reporting, it returns `TrackingSessionReport(session=None, ...)`.

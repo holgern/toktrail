@@ -232,6 +232,14 @@ DroidPathOption = Annotated[
         help="Override Droid sessions file or directory.",
     ),
 ]
+AmpPathOption = Annotated[
+    Path | None,
+    typer.Option(
+        "--amp-path",
+        "--path",
+        help="Override Amp threads file or directory.",
+    ),
+]
 SinceStartOption = Annotated[bool, typer.Option("--since-start")]
 NoRawOption = Annotated[bool, typer.Option("--no-raw")]
 IntervalOption = Annotated[float, typer.Option("--interval", min=0.1)]
@@ -861,6 +869,27 @@ def import_droid(
     _print_import_result(result)
 
 
+@import_app.command("amp")
+def import_amp(
+    ctx: typer.Context,
+    session_id: SessionOption = None,
+    source_session_id: SourceSessionOption = None,
+    amp_path: AmpPathOption = None,
+    since_start: SinceStartOption = False,
+    no_raw: NoRawOption = False,
+) -> None:
+    result = _run_harness_import(
+        ctx,
+        harness_name="amp",
+        source_path=amp_path,
+        tracking_session_id=session_id,
+        source_session_id=source_session_id,
+        since_start=since_start,
+        no_raw=no_raw,
+    )
+    _print_import_result(result)
+
+
 @watch_app.command("opencode")
 def watch_opencode(
     ctx: typer.Context,
@@ -941,6 +970,28 @@ def watch_codex(
         ctx,
         harness_name="codex",
         source_path=codex_path,
+        tracking_session_id=session_id,
+        source_session_id=source_session_id,
+        interval=interval,
+        since_start=since_start,
+        no_raw=no_raw,
+    )
+
+
+@watch_app.command("amp")
+def watch_amp(
+    ctx: typer.Context,
+    session_id: SessionOption = None,
+    source_session_id: SourceSessionOption = None,
+    amp_path: AmpPathOption = None,
+    interval: IntervalOption = 2.0,
+    since_start: SinceStartOption = False,
+    no_raw: NoRawOption = False,
+) -> None:
+    _watch_harness(
+        ctx,
+        harness_name="amp",
+        source_path=amp_path,
         tracking_session_id=session_id,
         source_session_id=source_session_id,
         interval=interval,
@@ -1117,6 +1168,36 @@ def sessions_copilot(
         ctx,
         "copilot",
         source_path=copilot_path,
+        source_session_id=source_session_id,
+        last=last,
+        breakdown=breakdown,
+        json_output=json_output,
+        utc=utc,
+        limit=limit,
+        sort=sort,
+        columns=columns,
+        rich_output=rich_output,
+    )
+
+
+@sessions_app.command("amp")
+def sessions_amp(
+    ctx: typer.Context,
+    source_session_id: SourceSessionArgument = None,
+    amp_path: AmpPathOption = None,
+    last: LastOption = False,
+    breakdown: BreakdownOption = False,
+    json_output: JsonOption = False,
+    utc: UtcOption = False,
+    limit: LimitOption = None,
+    sort: SortOption = "last",
+    columns: ColumnsOption = None,
+    rich_output: RichOption = False,
+) -> None:
+    _run_source_sessions_command(
+        ctx,
+        "amp",
+        source_path=amp_path,
         source_session_id=source_session_id,
         last=last,
         breakdown=breakdown,
