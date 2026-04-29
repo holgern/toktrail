@@ -5,6 +5,7 @@ from pathlib import Path
 
 TOKTRAIL_DB_ENV = "TOKTRAIL_DB"
 COPILOT_FILE_ENV = "TOKTRAIL_COPILOT_FILE"
+TOKTRAIL_PI_SESSIONS_ENV = "TOKTRAIL_PI_SESSIONS"
 
 
 def default_toktrail_db_path() -> Path:
@@ -47,3 +48,16 @@ def resolve_copilot_file_path(cli_value: Path | None = None) -> Path | None:
     if env_value:
         return Path(env_value).expanduser()
     return None
+
+
+def default_pi_sessions_path() -> Path:
+    return Path.home() / ".pi" / "agent" / "sessions"
+
+
+def resolve_pi_sessions_path(cli_value: Path | None = None) -> Path:
+    if cli_value is not None:
+        return cli_value.expanduser()
+    env_value = os.environ.get(TOKTRAIL_PI_SESSIONS_ENV)
+    if env_value:
+        return Path(env_value).expanduser()
+    return default_pi_sessions_path()

@@ -1,12 +1,12 @@
 # toktrail
 
-`toktrail` is a Python CLI for tracking OpenCode and GitHub Copilot CLI token
-usage inside a local toktrail SQLite database.
+`toktrail` is a Python CLI for tracking OpenCode, Pi, and GitHub Copilot CLI
+token usage inside a local toktrail SQLite database.
 
 The first implementation focuses on:
 
-- OpenCode SQLite and GitHub Copilot CLI OTEL JSONL as supported source
-  harnesses
+- OpenCode SQLite, Pi JSONL sessions, and GitHub Copilot CLI OTEL JSONL as
+  supported source harnesses
 - local SQLite for both the OpenCode source database and toktrail state
 - reporting totals by tracking session, harness, model, and agent/mode
 
@@ -15,10 +15,11 @@ The first implementation focuses on:
 - Python 3.10 or newer
 - an OpenCode SQLite database, typically at
   `~/.local/share/opencode/opencode.db`, and/or
+- Pi session JSONL files, typically under `~/.pi/agent/sessions`, and/or
 - a GitHub Copilot CLI OTEL JSONL export file
 
 toktrail reads supported source data in read-only mode and does not modify the
-source database or Copilot export file.
+source database or source JSONL files.
 
 ## Install
 
@@ -50,6 +51,12 @@ Import usage into the active tracking session:
 
 ```bash
 toktrail import opencode
+toktrail import pi
+toktrail import pi --pi-path ~/.pi/agent/sessions
+toktrail import pi --pi-path ~/.pi/agent/sessions/<encoded-cwd>/session.jsonl
+toktrail import pi --source-session pi_ses_001
+toktrail import pi --since-start
+toktrail import pi --no-raw
 toktrail import copilot --copilot-file /path/to/copilot-otel.jsonl
 ```
 
@@ -104,6 +111,20 @@ toktrail watch opencode --interval 2
 toktrail watch opencode --session 3 --source-session ses_456
 ```
 
+Import or watch Pi usage:
+
+```bash
+toktrail import pi
+toktrail import pi --pi-path ~/.pi/agent/sessions
+toktrail import pi --pi-path ~/.pi/agent/sessions/<encoded-cwd>/session.jsonl
+toktrail import pi --source-session pi_ses_001
+toktrail import pi --since-start
+toktrail import pi --no-raw
+
+toktrail watch pi --interval 2
+toktrail watch pi --pi-path ~/.pi/agent/sessions
+```
+
 Import or watch GitHub Copilot CLI OTEL JSONL usage:
 
 ```bash
@@ -124,6 +145,13 @@ toktrail opencode sessions
 toktrail opencode sessions --opencode-db /path/to/opencode.db
 ```
 
+Inspect Pi source sessions without mutating toktrail state:
+
+```bash
+toktrail pi sessions
+toktrail pi sessions --pi-path ~/.pi/agent/sessions
+```
+
 ## Storage and privacy
 
 By default toktrail stores its own SQLite database at:
@@ -142,10 +170,11 @@ The `TOKTRAIL_DB` environment variable or global `--db` option can override the
 toktrail state path.
 
 Usage imports store normalized usage metadata locally and store raw source JSON
-by default for local debugging and reprocessing. Use `--no-raw` with import or
-watch commands to suppress raw JSON storage.
+by default for local debugging and reprocessing. Pi imports store raw JSONL
+entry lines by default. Use `--no-raw` with import or watch commands to
+suppress raw JSON storage.
 
-toktrail never prints raw OpenCode or Copilot JSON in CLI output.
+toktrail never prints raw OpenCode, Pi, or Copilot JSON in CLI output.
 
 ## Reporting
 
@@ -165,8 +194,9 @@ The first pass intentionally does not include:
 - legacy OpenCode JSON file parsing
 - JSON migration caches
 - background daemons or services
-- pricing or cost estimation for Copilot imports; Copilot OTEL usage is stored
-  with `$0.00` cost for now
+- pricing or cost estimation for Pi or Copilot imports; both are stored with
+  `$0.00` cost for now
+- workspace metadata extraction from Pi session headers
 - Copilot tool-span or metric accounting; phase 1 imports chat spans only and
   ignores tools, agent invocations, and metrics
 - network sync or cloud storage

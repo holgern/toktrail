@@ -14,6 +14,7 @@ from toktrail.adapters.opencode import (
     list_opencode_sessions,
     scan_opencode_sqlite,
 )
+from toktrail.adapters.pi import list_pi_sessions, scan_pi_path
 from toktrail.db import (
     connect,
     create_tracking_session,
@@ -28,21 +29,25 @@ from toktrail.db import (
 from toktrail.paths import (
     resolve_copilot_file_path,
     resolve_opencode_db_path,
+    resolve_pi_sessions_path,
     resolve_toktrail_db_path,
 )
 
-app = typer.Typer(help="Track OpenCode token usage in local SQLite sessions.")
+app = typer.Typer(help="Track harness token usage in local SQLite sessions.")
 import_app = typer.Typer(help="Import usage from external harnesses.")
 watch_app = typer.Typer(help="Watch external harnesses and import new usage.")
 opencode_app = typer.Typer(help="Inspect OpenCode source data.")
+pi_app = typer.Typer(help="Inspect Pi source data.")
 
 app.add_typer(import_app, name="import")
 app.add_typer(watch_app, name="watch")
 app.add_typer(opencode_app, name="opencode")
+app.add_typer(pi_app, name="pi")
 
 
 @dataclass(frozen=True)
 class ImportExecutionResult:
+    harness: str
     source_path: Path
     tracking_session_id: int
     rows_seen: int
@@ -66,6 +71,10 @@ OpenCodeDbOption = Annotated[
 CopilotFileOption = Annotated[
     Path | None,
     typer.Option("--copilot-file", "--file", help="Copilot CLI OTEL JSONL file."),
+]
+PiPathOption = Annotated[
+    Path | None,
+    typer.Option("--pi-path", "--path", help="Override Pi sessions file or directory."),
 ]
 SinceStartOption = Annotated[bool, typer.Option("--since-start")]
 NoRawOption = Annotated[bool, typer.Option("--no-raw")]
@@ -238,7 +247,7 @@ def import_opencode(
         since_start=since_start,
         no_raw=no_raw,
     )
-    _print_import_result(result, source_label="source db", harness_label="OpenCode")
+    _print_import_result(result)
 
 
 @import_app.command("copilot")
@@ -258,7 +267,27 @@ def import_copilot(
         since_start=since_start,
         no_raw=no_raw,
     )
-    _print_import_result(result, source_label="source file", harness_label="Copilot")
+    _print_import_result(result)
+
+
+@import_app.command("pi")
+def import_pi(
+    ctx: typer.Context,
+    session_id: SessionOption = None,
+    source_session_id: SourceSessionOption = None,
+    pi_path: PiPathOption = None,
+    since_start: SinceStartOption = False,
+    no_raw: NoRawOption = False,
+) -> None:
+    result = _run_pi_import(
+        ctx,
+        tracking_session_id=session_id,
+        source_session_id=source_session_id,
+        pi_path=pi_path,
+        since_start=since_start,
+        no_raw=no_raw,
+    )
+    _print_import_result(result)
 
 
 @watch_app.command("opencode")
@@ -287,11 +316,7 @@ def watch_opencode(
             total_seen += result.rows_seen
             total_imported += result.rows_imported
             total_skipped += result.rows_skipped
-            _print_import_result(
-                result,
-                source_label="source db",
-                harness_label="OpenCode",
-            )
+            _print_import_result(result)
             time.sleep(interval)
     except KeyboardInterrupt:
         typer.echo("")
@@ -327,15 +352,47 @@ def watch_copilot(
             total_seen += result.rows_seen
             total_imported += result.rows_imported
             total_skipped += result.rows_skipped
-            _print_import_result(
-                result,
-                source_label="source file",
-                harness_label="Copilot",
-            )
+            _print_import_result(result)
             time.sleep(interval)
     except KeyboardInterrupt:
         typer.echo("")
         typer.echo("Stopped watching Copilot.")
+        typer.echo(f"  rows seen:     {total_seen}")
+        typer.echo(f"  rows imported: {total_imported}")
+        typer.echo(f"  rows skipped:  {total_skipped}")
+
+
+@watch_app.command("pi")
+def watch_pi(
+    ctx: typer.Context,
+    session_id: SessionOption = None,
+    source_session_id: SourceSessionOption = None,
+    pi_path: PiPathOption = None,
+    interval: IntervalOption = 2.0,
+    since_start: SinceStartOption = False,
+    no_raw: NoRawOption = False,
+) -> None:
+    total_seen = 0
+    total_imported = 0
+    total_skipped = 0
+    try:
+        while True:
+            result = _run_pi_import(
+                ctx,
+                tracking_session_id=session_id,
+                source_session_id=source_session_id,
+                pi_path=pi_path,
+                since_start=since_start,
+                no_raw=no_raw,
+            )
+            total_seen += result.rows_seen
+            total_imported += result.rows_imported
+            total_skipped += result.rows_skipped
+            _print_import_result(result)
+            time.sleep(interval)
+    except KeyboardInterrupt:
+        typer.echo("")
+        typer.echo("Stopped watching Pi.")
         typer.echo(f"  rows seen:     {total_seen}")
         typer.echo(f"  rows imported: {total_imported}")
         typer.echo(f"  rows skipped:  {total_skipped}")
@@ -352,6 +409,27 @@ def opencode_sessions(
     sessions_summary = list_opencode_sessions(source_path)
     if not sessions_summary:
         typer.echo("No importable OpenCode assistant messages found.")
+        return
+
+    for session in sessions_summary:
+        typer.echo(
+            f"{session.source_session_id}\tfirst={session.first_created_ms}\t"
+            f"last={session.last_created_ms}\tmessages={session.assistant_message_count}\t"
+            f"tokens={session.tokens.total}\tcost={_format_cost(session.cost_usd)}"
+        )
+
+
+@pi_app.command("sessions")
+def pi_sessions(
+    pi_path: PiPathOption = None,
+) -> None:
+    source_path = resolve_pi_sessions_path(pi_path)
+    if not source_path.exists():
+        _exit_with_error(f"Pi sessions path not found: {source_path}")
+
+    sessions_summary = list_pi_sessions(source_path)
+    if not sessions_summary:
+        typer.echo("No importable Pi assistant messages found.")
         return
 
     for session in sessions_summary:
@@ -418,6 +496,7 @@ def _run_opencode_import(
         - insert_result.rows_inserted
     )
     return ImportExecutionResult(
+        harness="OpenCode",
         source_path=source_path,
         tracking_session_id=selected_session_id,
         rows_seen=scan.rows_seen,
@@ -483,6 +562,68 @@ def _run_copilot_import(
         - insert_result.rows_inserted
     )
     return ImportExecutionResult(
+        harness="Copilot",
+        source_path=source_path,
+        tracking_session_id=selected_session_id,
+        rows_seen=scan.rows_seen,
+        rows_imported=insert_result.rows_inserted,
+        rows_skipped=rows_skipped,
+    )
+
+
+def _run_pi_import(
+    ctx: typer.Context,
+    *,
+    tracking_session_id: int | None,
+    source_session_id: str | None,
+    pi_path: Path | None,
+    since_start: bool,
+    no_raw: bool,
+) -> ImportExecutionResult:
+    conn = _open_toktrail_connection(ctx)
+    try:
+        source_path = resolve_pi_sessions_path(pi_path)
+        if not source_path.exists():
+            _exit_with_error(f"Pi sessions path not found: {source_path}")
+
+        selected_session_id = tracking_session_id
+        if selected_session_id is None:
+            selected_session_id = get_active_tracking_session(conn)
+        if selected_session_id is None:
+            _exit_with_error("No active tracking session found.")
+
+        session = get_tracking_session(conn, selected_session_id)
+        if session is None:
+            _exit_with_error(f"Tracking session not found: {selected_session_id}")
+
+        scan = scan_pi_path(
+            source_path,
+            source_session_id=source_session_id,
+            include_raw_json=not no_raw,
+        )
+        since_ms = session.started_at_ms if since_start else None
+        filtered_events = [
+            event
+            for event in scan.events
+            if since_ms is None or event.created_ms >= since_ms
+        ]
+        insert_result = insert_usage_events(
+            conn,
+            selected_session_id,
+            filtered_events,
+        )
+        rows_filtered = len(scan.events) - len(filtered_events)
+    finally:
+        conn.close()
+
+    rows_skipped = (
+        scan.rows_skipped
+        + rows_filtered
+        + len(filtered_events)
+        - insert_result.rows_inserted
+    )
+    return ImportExecutionResult(
+        harness="Pi",
         source_path=source_path,
         tracking_session_id=selected_session_id,
         rows_seen=scan.rows_seen,
@@ -493,12 +634,9 @@ def _run_copilot_import(
 
 def _print_import_result(
     result: ImportExecutionResult,
-    *,
-    source_label: str = "source db",
-    harness_label: str = "OpenCode",
 ) -> None:
-    typer.echo(f"Imported {harness_label} usage:")
-    typer.echo(f"  {source_label}: {result.source_path}")
+    typer.echo(f"Imported {result.harness} usage:")
+    typer.echo(f"  source path: {result.source_path}")
     typer.echo(f"  tracking session: {result.tracking_session_id}")
     typer.echo(f"  rows seen: {result.rows_seen}")
     typer.echo(f"  rows imported: {result.rows_imported}")
