@@ -6,6 +6,9 @@ The stable API is under ``toktrail.api.*`` and canonical errors are in
 ``toktrail.models``, ``toktrail.reporting``, ``toktrail.paths``,
 ``toktrail.config``, ``toktrail.cli``, or ``toktrail.adapters.*``.
 
+Runnable manual-run examples for the stable API are documented in
+`stable_api_examples.md <stable_api_examples.md>`_.
+
 .. automodule:: toktrail.errors
    :members:
 

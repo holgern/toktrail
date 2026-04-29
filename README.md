@@ -58,7 +58,9 @@ today_usage = usage_report(db_path, period="today", timezone="UTC")
 ```
 
 See [`API.md`](API.md) for the stable import boundary, public models, workflow
-API, canonical errors, and privacy defaults.
+API, canonical errors, and privacy defaults. Runnable manual-run examples for
+OpenCode, Pi, Copilot, and Codex are documented in
+[`docs/stable_api_examples.md`](docs/stable_api_examples.md).
 
 ## Quickstart
 

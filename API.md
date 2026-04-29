@@ -102,6 +102,9 @@ or `typer.Exit`, and return dataclasses or plain values.
 Supported harness names across the public API are `opencode`, `pi`, `codex`,
 and `copilot`.
 
+Runnable examples for manually measuring OpenCode, Pi, Copilot, and Codex runs
+are documented in [`docs/stable_api_examples.md`](docs/stable_api_examples.md).
+
 ## Models
 
 Key public models:
