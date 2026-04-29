@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from examples._manual_run_common import build_parser, run_manual_example
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from _manual_run_common import build_parser, run_manual_example
 
 
 def main() -> int:

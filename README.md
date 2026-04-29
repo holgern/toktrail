@@ -1,12 +1,12 @@
 # toktrail
 
-`toktrail` is a Python CLI for tracking OpenCode, Pi, Codex, and GitHub
+`toktrail` is a Python CLI for tracking OpenCode, Pi, Codex, Goose, and GitHub
 Copilot CLI token usage inside a local toktrail SQLite database.
 
 The first implementation focuses on:
 
-- OpenCode SQLite, Pi JSONL sessions, Codex JSONL sessions, and GitHub Copilot
-  CLI OTEL JSONL as supported source harnesses
+- OpenCode SQLite, Pi JSONL sessions, Codex JSONL sessions, Goose SQLite
+  sessions, and GitHub Copilot CLI OTEL JSONL as supported source harnesses
 - local SQLite for both the OpenCode source database and toktrail state
 - reporting totals by tracking session, harness, model, and agent/mode
 
@@ -17,6 +17,8 @@ The first implementation focuses on:
   `~/.local/share/opencode/opencode.db`, and/or
 - Pi session JSONL files, typically under `~/.pi/agent/sessions`, and/or
 - Codex session JSONL files, typically under `~/.codex/sessions`, and/or
+- Goose SQLite sessions, typically at
+  `~/.local/share/goose/sessions/sessions.db`, and/or
 - GitHub Copilot CLI OTEL JSONL export files, typically under `~/.copilot/otel`
 
 toktrail reads supported source data in read-only mode and does not modify the
@@ -59,7 +61,7 @@ today_usage = usage_report(db_path, period="today", timezone="UTC")
 
 See [`API.md`](API.md) for the stable import boundary, public models, workflow
 API, canonical errors, and privacy defaults. Runnable manual-run examples for
-OpenCode, Pi, Copilot, and Codex are documented in
+OpenCode, Pi, Copilot, Codex, and Goose are documented in
 [`docs/stable_api_examples.md`](docs/stable_api_examples.md).
 
 ## Quickstart
@@ -141,7 +143,7 @@ source paths from `config.toml`:
 
 ```toml
 [imports]
-harnesses = ["opencode", "pi", "copilot", "codex"]
+harnesses = ["opencode", "pi", "copilot", "codex", "goose"]
 missing_source = "warn"
 include_raw_json = false
 
@@ -150,6 +152,7 @@ opencode = "~/.local/share/opencode/opencode.db"
 pi = "~/.pi/agent/sessions"
 copilot = "~/.copilot/otel"
 codex = "~/.codex/sessions"
+goose = "~/.local/share/goose/sessions/sessions.db"
 ```
 
 Use `toktrail import --harness <name> --source <path>` for one-off imports.
@@ -175,6 +178,7 @@ toktrail sessions pi
 toktrail sessions opencode
 toktrail sessions codex
 toktrail sessions copilot
+toktrail sessions goose
 ```
 
 Inspect and manage pricing config:
@@ -199,6 +203,7 @@ toktrail import
 toktrail import --harness opencode --source /path/to/opencode.db
 toktrail import --harness pi --source ~/.pi/agent/sessions
 toktrail import --harness codex --source ~/.codex/sessions
+toktrail import --harness goose --source ~/.local/share/goose/sessions/sessions.db
 toktrail import --session 3
 toktrail import --no-session
 toktrail import --raw
@@ -207,7 +212,7 @@ toktrail import --no-raw
 
 The plain `toktrail import` command reads enabled harnesses and source paths from
 `[imports]` and `[imports.sources]` in `config.toml`. Legacy
-`toktrail import opencode|pi|copilot|codex` subcommands still work for
+`toktrail import opencode|pi|copilot|codex|goose` subcommands still work for
 compatibility.
 
 ## Advanced: harness-specific import and watch
@@ -296,6 +301,21 @@ If `TOKTRAIL_COPILOT_FILE` or `COPILOT_OTEL_FILE_EXPORTER_PATH` is set,
 `--copilot-file`. If neither is set, toktrail also discovers the latest
 `~/.copilot/otel/*.jsonl` export when available.
 
+Import Goose SQLite session usage:
+
+```bash
+toktrail import goose
+toktrail import goose --goose-db ~/.local/share/goose/sessions/sessions.db
+toktrail import goose --goose-path /path/to/sessions.db
+toktrail import goose --source-session goose-session-id
+toktrail import goose --since-start
+toktrail import goose --no-raw
+```
+
+If `TOKTRAIL_GOOSE_SESSIONS` is set, `toktrail import goose` can omit
+`--goose-db`. If `GOOSE_PATH_ROOT` is set, toktrail checks
+`$GOOSE_PATH_ROOT/data/sessions/sessions.db`.
+
 Inspect raw source sessions without mutating toktrail state:
 
 ```bash
@@ -310,6 +330,9 @@ toktrail sessions codex
 toktrail sessions codex --codex-path ~/.codex/sessions
 toktrail sessions codex --last --breakdown
 toktrail sessions codex --sort tokens --limit 5 --columns source_session_id,total,actual,virtual,savings
+toktrail sessions goose
+toktrail sessions goose --goose-db ~/.local/share/goose/sessions/sessions.db
+toktrail sessions goose --last --breakdown
 toktrail sessions copilot
 toktrail sessions copilot --copilot-path ~/.copilot/otel
 toktrail --config ~/.config/toktrail/config.toml sessions copilot --sort virtual --limit 5
@@ -353,7 +376,8 @@ by default for local debugging and reprocessing. Pi and Codex imports store raw
 JSONL entry lines by default. Use `--no-raw` with import or watch commands to
 suppress raw JSON storage.
 
-toktrail never prints raw OpenCode, Pi, Codex, or Copilot JSON in CLI output.
+toktrail never prints raw OpenCode, Pi, Codex, Goose, or Copilot JSON in CLI
+output.
 
 ## Reporting
 

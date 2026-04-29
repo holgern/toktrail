@@ -46,7 +46,7 @@ _COSTING_FIELDS = {
     "price_profile",
 }
 _PRICING_FIELDS = {"virtual", "actual"}
-_SUPPORTED_HARNESSES = {"opencode", "pi", "copilot", "codex"}
+_SUPPORTED_HARNESSES = {"opencode", "pi", "copilot", "codex", "goose"}
 _SEPARATOR_RE = re.compile(r"[/_\s]+")
 _INVALID_IDENTITY_CHARS_RE = re.compile(r"[^a-z0-9.-]+")
 _DASH_RE = re.compile(r"-+")
@@ -55,7 +55,7 @@ DEFAULT_CONFIG_TEXT = """\
 config_version = 1
 
 [imports]
-harnesses = ["opencode", "pi", "copilot", "codex"]
+harnesses = ["opencode", "pi", "copilot", "codex", "goose"]
 missing_source = "warn"
 include_raw_json = false
 
@@ -64,6 +64,7 @@ opencode = "~/.local/share/opencode/opencode.db"
 pi = "~/.pi/agent/sessions"
 copilot = "~/.copilot/otel"
 codex = "~/.codex/sessions"
+goose = "~/.local/share/goose/sessions/sessions.db"
 
 [costing]
 default_actual_mode = "source"
@@ -85,13 +86,17 @@ mode = "zero"
 [[actual_cost]]
 harness = "codex"
 mode = "zero"
+
+[[actual_cost]]
+harness = "goose"
+mode = "zero"
 """
 
 COPILOT_TEMPLATE_TEXT = """\
 config_version = 1
 
 [imports]
-harnesses = ["opencode", "pi", "copilot", "codex"]
+harnesses = ["opencode", "pi", "copilot", "codex", "goose"]
 missing_source = "warn"
 include_raw_json = false
 
@@ -100,6 +105,7 @@ opencode = "~/.local/share/opencode/opencode.db"
 pi = "~/.pi/agent/sessions"
 copilot = "~/.copilot/otel"
 codex = "~/.codex/sessions"
+goose = "~/.local/share/goose/sessions/sessions.db"
 
 [costing]
 default_actual_mode = "source"
@@ -121,6 +127,10 @@ mode = "source"
 
 [[actual_cost]]
 harness = "codex"
+mode = "zero"
+
+[[actual_cost]]
+harness = "goose"
 mode = "zero"
 
 # OpenAI
@@ -495,6 +505,12 @@ def default_costing_config() -> CostingConfig:
             ),
             ActualCostRule(
                 harness="codex",
+                provider=None,
+                model=None,
+                mode="zero",
+            ),
+            ActualCostRule(
+                harness="goose",
                 provider=None,
                 model=None,
                 mode="zero",

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import shlex
+import sqlite3
 import subprocess
 from copy import deepcopy
 from datetime import datetime
@@ -39,6 +40,58 @@ def create_source_db(path: Path) -> None:
         row_id="row-1",
         session_id="ses-1",
         data=deepcopy(VALID_ASSISTANT),
+    )
+    conn.commit()
+    conn.close()
+
+
+def create_goose_source_db(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(path)
+    conn.execute(
+        """
+        CREATE TABLE sessions (
+            id TEXT PRIMARY KEY,
+            model_config_json TEXT,
+            provider_name TEXT,
+            created_at TEXT,
+            total_tokens INTEGER,
+            input_tokens INTEGER,
+            output_tokens INTEGER,
+            accumulated_total_tokens INTEGER,
+            accumulated_input_tokens INTEGER,
+            accumulated_output_tokens INTEGER
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO sessions (
+            id,
+            model_config_json,
+            provider_name,
+            created_at,
+            total_tokens,
+            input_tokens,
+            output_tokens,
+            accumulated_total_tokens,
+            accumulated_input_tokens,
+            accumulated_output_tokens
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "goose-1",
+            '{"model_name":"claude-sonnet-4-20250514"}',
+            "anthropic",
+            "2026-04-14T16:18:53Z",
+            100,
+            60,
+            30,
+            150,
+            90,
+            40,
+        ),
     )
     conn.commit()
     conn.close()
@@ -375,6 +428,40 @@ def test_cli_import_codex_status(tmp_path) -> None:
     assert payload["totals"]["cache_read"] == 20
     assert payload["totals"]["output"] == 30
     assert payload["totals"]["reasoning"] == 5
+
+
+def test_cli_import_goose_status(tmp_path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    goose_db = tmp_path / "goose" / "sessions.db"
+    create_goose_source_db(goose_db)
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    runner.invoke(app, ["--db", str(state_db), "start", "--name", "test-session"])
+    result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "import",
+            "goose",
+            "--goose-db",
+            str(goose_db),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Imported Goose usage:" in result.output
+    assert "rows imported: 1" in result.output
+
+    status = runner.invoke(app, ["--db", str(state_db), "status", "1", "--json"])
+    payload = json.loads(status.output)
+    assert payload["by_harness"][0]["harness"] == "goose"
+    assert payload["totals"]["input"] == 90
+    assert payload["totals"]["output"] == 40
+    assert payload["totals"]["reasoning"] == 20
+    assert payload["totals"]["total"] == 150
+    assert payload["totals"]["source_cost_usd"] == 0.0
 
 
 def test_cli_status_supports_thinking_filter_and_collapse(tmp_path) -> None:
@@ -1290,6 +1377,39 @@ def test_cli_sessions_codex_breakdown_shows_token_columns(tmp_path) -> None:
     assert "provider/model" in result.output
     assert "input" in result.output
     assert "gpt-5.2-codex" in result.output
+
+
+def test_cli_sessions_goose_breakdown_shows_token_columns(tmp_path) -> None:
+    runner = CliRunner()
+    goose_db = tmp_path / "goose" / "sessions.db"
+    create_goose_source_db(goose_db)
+
+    result = runner.invoke(
+        app,
+        [
+            "sessions",
+            "goose",
+            "--goose-path",
+            str(goose_db),
+            "--last",
+            "--breakdown",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "By model" in result.output
+    assert "provider/model" in result.output
+    assert "input" in result.output
+    assert "claude-sonnet-4-20250514" in result.output
+
+
+def test_cli_watch_goose_is_not_registered() -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(app, ["watch", "goose"])
+
+    assert result.exit_code != 0
+    assert "No such command" in result.output
 
 
 def test_cli_sessions_codex_supports_limit_sort_and_columns(tmp_path) -> None:

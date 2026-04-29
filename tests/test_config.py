@@ -24,6 +24,7 @@ def test_load_costing_config_missing_file_returns_default_config(tmp_path) -> No
         "pi",
         "copilot",
         "codex",
+        "goose",
     ]
     assert config.virtual_prices == ()
     assert config.actual_prices == ()
@@ -43,6 +44,7 @@ def test_load_costing_config_parses_minimal_config(tmp_path) -> None:
         "zero",
         "zero",
         "zero",
+        "zero",
     ]
 
 
@@ -52,11 +54,12 @@ def test_load_toktrail_config_parses_import_settings(tmp_path) -> None:
 
     config = load_toktrail_config(config_path)
 
-    assert config.imports.harnesses == ("opencode", "pi", "copilot", "codex")
+    assert config.imports.harnesses == ("opencode", "pi", "copilot", "codex", "goose")
     assert config.imports.missing_source == "warn"
     assert config.imports.include_raw_json is False
     assert config.imports.sources["opencode"].name == "opencode.db"
     assert config.imports.sources["codex"].name == "sessions"
+    assert config.imports.sources["goose"].name == "sessions.db"
 
 
 def test_load_costing_config_parses_copilot_template(tmp_path) -> None:

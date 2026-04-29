@@ -13,6 +13,7 @@ from tests.helpers import (
     insert_message,
     write_jsonl_rows,
 )
+from tests.test_goose_parser import create_goose_db, insert_session
 from toktrail.api.config import init_config
 from toktrail.api.sources import (
     capture_source_snapshot,
@@ -59,6 +60,13 @@ def _build_codex_source(tmp_path):
     return codex_file
 
 
+def _build_goose_source(tmp_path):
+    goose_db = tmp_path / "goose" / "sessions.db"
+    create_goose_db(goose_db)
+    insert_session(goose_db, session_id="goose-1")
+    return goose_db
+
+
 @pytest.mark.parametrize(
     ("harness", "builder", "source_session_id"),
     (
@@ -66,6 +74,7 @@ def _build_codex_source(tmp_path):
         ("pi", _build_pi_source, "pi_ses_001"),
         ("copilot", _build_copilot_source, "conv-1"),
         ("codex", _build_codex_source, "session-001"),
+        ("goose", _build_goose_source, "goose-1"),
     ),
 )
 def test_capture_source_snapshot_supports_all_harnesses(

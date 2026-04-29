@@ -20,6 +20,7 @@ run coding agent without importing toktrail internals.
 - Pi: `pi`
 - GitHub Copilot CLI: `copilot`
 - Codex CLI: `codex`
+- Goose: `goose`
 
 ## Run examples
 
@@ -28,6 +29,21 @@ python examples/manual_run_opencode.py
 python examples/manual_run_pi.py
 python examples/manual_run_copilot.py --shell bash
 python examples/manual_run_codex.py
+python examples/manual_run_goose.py
+```
+
+## Goose API example
+
+```python
+from pathlib import Path
+
+from toktrail.api.imports import import_usage
+from toktrail.api.paths import default_goose_sessions_db_path
+from toktrail.api.sources import list_source_sessions
+
+source_path = default_goose_sessions_db_path()
+result = import_usage(Path(".toktrail/toktrail.db"), "goose", source_path=source_path)
+sessions = list_source_sessions("goose", source_path=source_path, limit=5)
 ```
 
 ## Per-harness notes
@@ -50,6 +66,12 @@ Codex usually writes session logs under `~/.codex/sessions`. Start Codex in
 this repository, paste the printed prompt, wait for the answer, exit Codex, then
 press Enter in the Python script. Use `--source /path/to/codex/sessions` to
 override the source path.
+
+Goose usually writes cumulative SQLite session rows to
+`~/.local/share/goose/sessions/sessions.db`. Start Goose in this repository,
+paste the printed prompt, wait for the answer, exit Goose, then press Enter in
+the Python script. Use `--source /path/to/sessions.db` to override the source
+path.
 
 ## Detailed output
 

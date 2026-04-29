@@ -215,6 +215,15 @@ CodexPathOption = Annotated[
         help="Override Codex sessions file or directory.",
     ),
 ]
+GoosePathOption = Annotated[
+    Path | None,
+    typer.Option(
+        "--goose-db",
+        "--goose-path",
+        "--path",
+        help="Override Goose sessions.db path.",
+    ),
+]
 SinceStartOption = Annotated[bool, typer.Option("--since-start")]
 NoRawOption = Annotated[bool, typer.Option("--no-raw")]
 IntervalOption = Annotated[float, typer.Option("--interval", min=0.1)]
@@ -803,6 +812,27 @@ def import_codex(
     _print_import_result(result)
 
 
+@import_app.command("goose")
+def import_goose(
+    ctx: typer.Context,
+    session_id: SessionOption = None,
+    source_session_id: SourceSessionOption = None,
+    goose_path: GoosePathOption = None,
+    since_start: SinceStartOption = False,
+    no_raw: NoRawOption = False,
+) -> None:
+    result = _run_harness_import(
+        ctx,
+        harness_name="goose",
+        source_path=goose_path,
+        tracking_session_id=session_id,
+        source_session_id=source_session_id,
+        since_start=since_start,
+        no_raw=no_raw,
+    )
+    _print_import_result(result)
+
+
 @watch_app.command("opencode")
 def watch_opencode(
     ctx: typer.Context,
@@ -969,6 +999,36 @@ def sessions_codex(
         ctx,
         "codex",
         source_path=codex_path,
+        source_session_id=source_session_id,
+        last=last,
+        breakdown=breakdown,
+        json_output=json_output,
+        utc=utc,
+        limit=limit,
+        sort=sort,
+        columns=columns,
+        rich_output=rich_output,
+    )
+
+
+@sessions_app.command("goose")
+def sessions_goose(
+    ctx: typer.Context,
+    source_session_id: SourceSessionArgument = None,
+    goose_path: GoosePathOption = None,
+    last: LastOption = False,
+    breakdown: BreakdownOption = False,
+    json_output: JsonOption = False,
+    utc: UtcOption = False,
+    limit: LimitOption = None,
+    sort: SortOption = "last",
+    columns: ColumnsOption = None,
+    rich_output: RichOption = False,
+) -> None:
+    _run_source_sessions_command(
+        ctx,
+        "goose",
+        source_path=goose_path,
         source_session_id=source_session_id,
         last=last,
         breakdown=breakdown,

@@ -1,20 +1,17 @@
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-from _manual_run_common import build_parser, run_manual_example
+from examples._manual_run_common import build_parser, run_manual_example
 
 
 def main() -> int:
-    parser = build_parser(harness="codex", default_db=".toktrail/codex-example.db")
+    parser = build_parser(harness="goose", default_db=".toktrail/goose-example.db")
     args = parser.parse_args()
     return run_manual_example(
-        harness="codex",
-        display_name="Codex CLI",
-        db_path=args.db,
+        harness="goose",
+        display_name="Goose",
+        db_path=Path(args.db),
         source_path=args.source,
         shell=args.shell,
         source_session_id=args.source_session_id,

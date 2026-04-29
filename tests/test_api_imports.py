@@ -11,6 +11,7 @@ from tests.helpers import (
     create_opencode_db,
     insert_message,
 )
+from tests.test_goose_parser import create_goose_db, insert_session
 from toktrail.api.imports import import_configured_usage, import_usage
 from toktrail.api.reports import session_report
 from toktrail.api.sessions import init_state, start_session
@@ -171,15 +172,18 @@ def test_import_configured_usage_imports_all_configured_harnesses(tmp_path) -> N
     state_db = tmp_path / "toktrail.db"
     source_db = tmp_path / "opencode.db"
     codex_file = tmp_path / "codex" / "session-001.jsonl"
+    goose_db = tmp_path / "goose" / "sessions.db"
     _create_opencode_messages(source_db)
     create_codex_session_file(codex_file)
+    create_goose_db(goose_db)
+    insert_session(goose_db)
     config_path = tmp_path / "toktrail.toml"
     config_path.write_text(
         f"""
 config_version = 1
 
 [imports]
-harnesses = ["opencode", "pi", "codex"]
+harnesses = ["opencode", "pi", "codex", "goose"]
 missing_source = "warn"
 include_raw_json = false
 
@@ -187,6 +191,7 @@ include_raw_json = false
 opencode = "{source_db}"
 pi = "{tmp_path / 'missing-pi'}"
 codex = "{codex_file}"
+goose = "{goose_db}"
 """.strip(),
         encoding="utf-8",
     )
@@ -200,6 +205,7 @@ codex = "{codex_file}"
         ("opencode", "ok", 2),
         ("pi", "skipped", 0),
         ("codex", "ok", 1),
+        ("goose", "ok", 1),
     ]
 
 

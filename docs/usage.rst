@@ -24,7 +24,7 @@ source paths from ``config.toml``:
 .. code-block:: toml
 
    [imports]
-   harnesses = ["opencode", "pi", "copilot", "codex"]
+   harnesses = ["opencode", "pi", "copilot", "codex", "goose"]
    missing_source = "warn"
    include_raw_json = false
 
@@ -33,6 +33,7 @@ source paths from ``config.toml``:
    pi = "~/.pi/agent/sessions"
    copilot = "~/.copilot/otel"
    codex = "~/.codex/sessions"
+   goose = "~/.local/share/goose/sessions/sessions.db"
 
 Use ``toktrail import --harness <name> --source <path>`` for one-off imports.
 Harness-specific commands such as ``toktrail import codex`` and
@@ -50,6 +51,8 @@ Core commands
    toktrail usage last-week --utc --json
    toktrail sessions
    toktrail sessions codex
+   toktrail sessions goose
+   toktrail import goose --goose-db ~/.local/share/goose/sessions/sessions.db
 
 For source-session inspection, use ``toktrail sessions <harness>`` to inspect
 raw harness sessions without mutating toktrail state.

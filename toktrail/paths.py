@@ -11,6 +11,8 @@ COPILOT_OTEL_FILE_EXPORTER_PATH_ENV = "COPILOT_OTEL_FILE_EXPORTER_PATH"
 COPILOT_OTEL_DIR_ENV = "TOKTRAIL_COPILOT_OTEL_DIR"
 TOKTRAIL_PI_SESSIONS_ENV = "TOKTRAIL_PI_SESSIONS"
 TOKTRAIL_CODEX_SESSIONS_ENV = "TOKTRAIL_CODEX_SESSIONS"
+TOKTRAIL_GOOSE_SESSIONS_ENV = "TOKTRAIL_GOOSE_SESSIONS"
+GOOSE_PATH_ROOT_ENV = "GOOSE_PATH_ROOT"
 
 
 def default_toktrail_db_path() -> Path:
@@ -131,3 +133,48 @@ def resolve_codex_sessions_path(cli_value: Path | None = None) -> Path:
     if env_value:
         return Path(env_value).expanduser()
     return default_codex_sessions_path()
+
+
+def default_goose_sessions_db_path() -> Path:
+    return Path.home() / ".local" / "share" / "goose" / "sessions" / "sessions.db"
+
+
+def goose_sessions_db_candidates() -> tuple[Path, ...]:
+    candidates: list[Path] = []
+    goose_root = os.environ.get(GOOSE_PATH_ROOT_ENV)
+    if goose_root:
+        candidates.append(
+            Path(goose_root).expanduser() / "data" / "sessions" / "sessions.db"
+        )
+
+    candidates.extend(
+        [
+            default_goose_sessions_db_path(),
+            Path.home()
+            / "Library"
+            / "Application Support"
+            / "goose"
+            / "sessions"
+            / "sessions.db",
+            Path.home()
+            / ".local"
+            / "share"
+            / "Block"
+            / "goose"
+            / "sessions"
+            / "sessions.db",
+        ]
+    )
+    return tuple(candidates)
+
+
+def resolve_goose_sessions_path(cli_value: Path | None = None) -> Path:
+    if cli_value is not None:
+        return cli_value.expanduser()
+    env_value = os.environ.get(TOKTRAIL_GOOSE_SESSIONS_ENV)
+    if env_value:
+        return Path(env_value).expanduser()
+    for candidate in goose_sessions_db_candidates():
+        if candidate.exists():
+            return candidate
+    return default_goose_sessions_db_path()

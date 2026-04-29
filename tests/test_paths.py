@@ -5,11 +5,13 @@ from datetime import datetime
 
 from toktrail.paths import (
     default_codex_sessions_path,
+    default_goose_sessions_db_path,
     default_toktrail_config_path,
     new_copilot_otel_file_path,
     resolve_codex_sessions_path,
     resolve_copilot_file_path,
     resolve_copilot_source_path,
+    resolve_goose_sessions_path,
     resolve_toktrail_config_path,
 )
 
@@ -92,3 +94,44 @@ def test_resolve_codex_sessions_path_prefers_cli(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("TOKTRAIL_CODEX_SESSIONS", str(env_path))
 
     assert resolve_codex_sessions_path(cli_path) == cli_path
+
+
+def test_resolve_goose_sessions_path_prefers_cli(monkeypatch, tmp_path) -> None:
+    env_path = tmp_path / "env-sessions.db"
+    cli_path = tmp_path / "cli-sessions.db"
+    monkeypatch.setenv("TOKTRAIL_GOOSE_SESSIONS", str(env_path))
+
+    assert resolve_goose_sessions_path(cli_path) == cli_path
+
+
+def test_resolve_goose_sessions_path_prefers_env(monkeypatch, tmp_path) -> None:
+    env_path = tmp_path / "env-sessions.db"
+    monkeypatch.setenv("TOKTRAIL_GOOSE_SESSIONS", str(env_path))
+
+    assert resolve_goose_sessions_path(None) == env_path
+
+
+def test_resolve_goose_sessions_path_uses_goose_root_candidate(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    goose_root = tmp_path / "goose-root"
+    sessions_db = goose_root / "data" / "sessions" / "sessions.db"
+    sessions_db.parent.mkdir(parents=True)
+    sessions_db.write_text("", encoding="utf-8")
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.delenv("TOKTRAIL_GOOSE_SESSIONS", raising=False)
+    monkeypatch.setenv("GOOSE_PATH_ROOT", str(goose_root))
+
+    assert resolve_goose_sessions_path(None) == sessions_db
+
+
+def test_resolve_goose_sessions_path_falls_back_to_linux_default(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("TOKTRAIL_GOOSE_SESSIONS", raising=False)
+    monkeypatch.delenv("GOOSE_PATH_ROOT", raising=False)
+
+    assert resolve_goose_sessions_path(None) == default_goose_sessions_db_path()
