@@ -9,6 +9,7 @@ from typing import Any
 
 from toktrail.adapters.base import ScanResult, SourceSessionSummary
 from toktrail.adapters.summary import summarize_events_by_source_session
+from toktrail.config import CostingConfig
 from toktrail.models import TokenBreakdown, UsageEvent
 from toktrail.provider_identity import inferred_provider_from_model
 
@@ -130,12 +131,17 @@ def parse_copilot_file(path: Path) -> list[UsageEvent]:
     return scan_copilot_file(path).events
 
 
-def list_copilot_sessions(source_path: Path) -> list[SourceSessionSummary]:
+def list_copilot_sessions(
+    source_path: Path,
+    *,
+    costing_config: CostingConfig | None = None,
+) -> list[SourceSessionSummary]:
     scan = scan_copilot_path(source_path, include_raw_json=False)
     return summarize_events_by_source_session(
         COPILOT_HARNESS,
         scan.events,
         source_paths_by_session=_copilot_source_paths_by_session(source_path),
+        costing_config=costing_config,
     )
 
 
@@ -174,24 +180,30 @@ def _parse_copilot_line(
     if tokens.total == 0:
         return None
 
-    model = _first_non_empty_attr(
-        attributes,
-        ["gen_ai.response.model", "gen_ai.request.model"],
-    ) or "unknown"
+    model = (
+        _first_non_empty_attr(
+            attributes,
+            ["gen_ai.response.model", "gen_ai.request.model"],
+        )
+        or "unknown"
+    )
     provider_id = inferred_provider_from_model(model) or "github-copilot"
 
     trace_id = _as_str(span.get("traceId")) or "unknown-trace"
     span_id = _as_str(span.get("spanId")) or "unknown-span"
     dedup_key = f"{trace_id}:{span_id}"
 
-    session_id = _first_non_empty_attr(
-        attributes,
-        [
-            "gen_ai.conversation.id",
-            "github.copilot.interaction_id",
-            "gen_ai.response.id",
-        ],
-    ) or trace_id
+    session_id = (
+        _first_non_empty_attr(
+            attributes,
+            [
+                "gen_ai.conversation.id",
+                "github.copilot.interaction_id",
+                "gen_ai.response.id",
+            ],
+        )
+        or trace_id
+    )
 
     end_time_ms = _timestamp_ms_from_value(span.get("endTime"))
     start_time_ms = _timestamp_ms_from_value(span.get("startTime"))

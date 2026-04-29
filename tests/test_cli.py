@@ -110,7 +110,11 @@ def test_cli_init_start_import_status_stop(tmp_path) -> None:
     payload = json.loads(status_result.output)
     assert payload["session"]["name"] == "test-session"
     assert payload["totals"]["total"] == 1850
-    assert payload["totals"]["cost_usd"] == 0.05
+    assert payload["totals"]["source_cost_usd"] == 0.05
+    assert payload["totals"]["actual_cost_usd"] == 0.05
+    assert payload["totals"]["virtual_cost_usd"] == 0.0
+    assert payload["totals"]["savings_usd"] == -0.05
+    assert payload["totals"]["unpriced_count"] == 1
 
 
 def test_cli_sessions_without_subcommand_lists_tracking_sessions(tmp_path) -> None:
@@ -334,7 +338,11 @@ def test_cli_import_pi_status(tmp_path) -> None:
     assert payload["totals"]["cache_read"] == 10
     assert payload["totals"]["cache_write"] == 5
     assert payload["totals"]["reasoning"] == 0
-    assert payload["totals"]["cost_usd"] == 0.0
+    assert payload["totals"]["source_cost_usd"] == 0.0
+    assert payload["totals"]["actual_cost_usd"] == 0.0
+    assert payload["totals"]["virtual_cost_usd"] == 0.0
+    assert payload["totals"]["savings_usd"] == 0.0
+    assert payload["totals"]["unpriced_count"] == 1
 
 
 def test_cli_status_filters_by_harness_and_source_session(tmp_path) -> None:
@@ -383,9 +391,110 @@ def test_cli_status_filters_by_harness_and_source_session(tmp_path) -> None:
             "harness": "pi",
             "message_count": 1,
             "total_tokens": 165,
-            "cost_usd": 0.0,
+            "source_cost_usd": 0.0,
+            "actual_cost_usd": 0.0,
+            "virtual_cost_usd": 0.0,
+            "savings_usd": 0.0,
+            "unpriced_count": 1,
         }
     ]
+
+
+def test_cli_config_path_init_and_validate(tmp_path) -> None:
+    runner = CliRunner()
+    config_path = tmp_path / "config" / "toktrail.toml"
+
+    path_result = runner.invoke(
+        app,
+        ["--config", str(config_path), "config", "path"],
+    )
+    assert path_result.exit_code == 0, path_result.output
+    assert path_result.output.strip() == str(config_path)
+
+    init_result = runner.invoke(
+        app,
+        ["--config", str(config_path), "config", "init", "--template", "copilot"],
+    )
+    assert init_result.exit_code == 0, init_result.output
+    assert config_path.exists()
+
+    validate_result = runner.invoke(
+        app,
+        ["--config", str(config_path), "config", "validate"],
+    )
+    assert validate_result.exit_code == 0, validate_result.output
+    assert "Config valid:" in validate_result.output
+    assert "virtual prices:" in validate_result.output
+
+
+def test_cli_status_with_template_config_computes_copilot_virtual_cost(
+    tmp_path,
+) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    config_path = tmp_path / "config" / "toktrail.toml"
+    copilot_file = tmp_path / "copilot.jsonl"
+    create_copilot_file(copilot_file)
+
+    runner.invoke(
+        app,
+        ["--config", str(config_path), "config", "init", "--template", "copilot"],
+    )
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    runner.invoke(app, ["--db", str(state_db), "start", "--name", "test-session"])
+    runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "import",
+            "copilot",
+            "--copilot-file",
+            str(copilot_file),
+        ],
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "--config",
+            str(config_path),
+            "status",
+            "1",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["totals"]["source_cost_usd"] == 0.0
+    assert payload["totals"]["actual_cost_usd"] == 0.0
+    assert payload["totals"]["virtual_cost_usd"] > 0.0
+    assert payload["totals"]["savings_usd"] == payload["totals"]["virtual_cost_usd"]
+
+
+def test_cli_status_human_output_contains_actual_virtual_and_savings(tmp_path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    source_db = tmp_path / "opencode.db"
+    create_source_db(source_db)
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    runner.invoke(app, ["--db", str(state_db), "start", "--name", "test-session"])
+    runner.invoke(
+        app,
+        ["--db", str(state_db), "import", "opencode", "--opencode-db", str(source_db)],
+    )
+
+    result = runner.invoke(app, ["--db", str(state_db), "status", "1"])
+
+    assert result.exit_code == 0, result.output
+    assert "Costs" in result.output
+    assert "actual:" in result.output
+    assert "virtual:" in result.output
+    assert "savings:" in result.output
 
 
 def test_cli_pi_sessions_lists_source_sessions(tmp_path) -> None:
@@ -513,6 +622,80 @@ def test_cli_sessions_pi_supports_limit_sort_and_columns(tmp_path) -> None:
     assert "total" in result.output
     assert "pi_ses_999" in result.output
     assert "pi_ses_001" not in result.output
+
+
+def test_cli_sessions_copilot_supports_virtual_and_savings_sort(tmp_path) -> None:
+    runner = CliRunner()
+    config_path = tmp_path / "config" / "toktrail.toml"
+    copilot_dir = tmp_path / "copilot"
+    write_jsonl_rows(
+        copilot_dir / "first.jsonl",
+        [
+            {
+                "type": "span",
+                "traceId": "trace-1",
+                "spanId": "span-1",
+                "name": "chat claude-sonnet-4",
+                "endTime": [1775934264, 967317833],
+                "attributes": {
+                    "gen_ai.operation.name": "chat",
+                    "gen_ai.response.model": "claude-sonnet-4",
+                    "gen_ai.conversation.id": "conv-1",
+                    "gen_ai.usage.input_tokens": 100,
+                    "gen_ai.usage.output_tokens": 5,
+                },
+            }
+        ],
+    )
+    write_jsonl_rows(
+        copilot_dir / "second.jsonl",
+        [
+            {
+                "type": "span",
+                "traceId": "trace-2",
+                "spanId": "span-2",
+                "name": "chat claude-sonnet-4",
+                "endTime": [1775934265, 967317833],
+                "attributes": {
+                    "gen_ai.operation.name": "chat",
+                    "gen_ai.response.model": "claude-sonnet-4",
+                    "gen_ai.conversation.id": "conv-2",
+                    "gen_ai.usage.input_tokens": 300,
+                    "gen_ai.usage.output_tokens": 10,
+                },
+            }
+        ],
+    )
+    runner.invoke(
+        app,
+        ["--config", str(config_path), "config", "init", "--template", "copilot"],
+    )
+
+    for sort_value in ("virtual", "savings"):
+        result = runner.invoke(
+            app,
+            [
+                "--config",
+                str(config_path),
+                "sessions",
+                "copilot",
+                "--copilot-file",
+                str(copilot_dir),
+                "--sort",
+                sort_value,
+                "--limit",
+                "1",
+                "--columns",
+                "source_session_id,actual,virtual,savings",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        assert "actual" in result.output
+        assert "virtual" in result.output
+        assert "savings" in result.output
+        assert "conv-2" in result.output
+        assert "conv-1" not in result.output
 
 
 def test_cli_watch_pi_exits_cleanly_on_ctrl_c(tmp_path, monkeypatch) -> None:

@@ -4,9 +4,11 @@ import os
 from datetime import datetime
 
 from toktrail.paths import (
+    default_toktrail_config_path,
     new_copilot_otel_file_path,
     resolve_copilot_file_path,
     resolve_copilot_source_path,
+    resolve_toktrail_config_path,
 )
 
 
@@ -46,3 +48,24 @@ def test_new_copilot_otel_file_path_uses_default_dir(monkeypatch, tmp_path) -> N
     path = new_copilot_otel_file_path(datetime(2026, 1, 1, 12, 0, 0))
 
     assert path == tmp_path / ".copilot" / "otel" / "copilot-otel-20260101-120000.jsonl"
+
+
+def test_default_toktrail_config_path_uses_xdg_config_home(
+    monkeypatch, tmp_path
+) -> None:
+    config_home = tmp_path / "xdg-config"
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+
+    assert default_toktrail_config_path() == config_home / "toktrail" / "config.toml"
+
+
+def test_resolve_toktrail_config_path_prefers_cli_over_env(
+    monkeypatch, tmp_path
+) -> None:
+    env_path = tmp_path / "env-config.toml"
+    cli_path = tmp_path / "cli-config.toml"
+    monkeypatch.setenv("TOKTRAIL_CONFIG", str(env_path))
+
+    assert resolve_toktrail_config_path(cli_path) == cli_path
+    assert resolve_toktrail_config_path(None) == env_path

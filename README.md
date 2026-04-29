@@ -72,6 +72,7 @@ Show the current session totals:
 ```bash
 toktrail status
 toktrail status --json
+toktrail --config ~/.config/toktrail/config.toml status --json
 toktrail status --harness pi --source-session pi_ses_001 --json
 ```
 
@@ -99,6 +100,17 @@ toktrail sessions
 toktrail sessions pi
 toktrail sessions opencode
 toktrail sessions copilot
+```
+
+Inspect and manage pricing config:
+
+```bash
+toktrail config path
+toktrail config init
+toktrail config init --template copilot
+toktrail config show
+toktrail config validate
+toktrail --config /path/to/config.toml status --json
 ```
 
 Import or watch OpenCode usage:
@@ -172,10 +184,11 @@ toktrail sessions opencode --opencode-db /path/to/opencode.db
 toktrail sessions pi
 toktrail sessions pi --pi-path ~/.pi/agent/sessions
 toktrail sessions pi --last --breakdown
-toktrail sessions pi --sort tokens --limit 5 --columns source_session_id,total --rich
+toktrail sessions pi --sort tokens --limit 5 --columns source_session_id,total,actual,virtual,savings --rich
 toktrail sessions pi pi_ses_001 --json
 toktrail sessions copilot
 toktrail sessions copilot --copilot-path ~/.copilot/otel
+toktrail --config ~/.config/toktrail/config.toml sessions copilot --sort virtual --limit 5
 ```
 
 ## Storage and privacy
@@ -195,6 +208,22 @@ $XDG_STATE_HOME/toktrail/toktrail.db
 The `TOKTRAIL_DB` environment variable or global `--db` option can override the
 toktrail state path.
 
+Pricing config defaults to:
+
+```text
+~/.config/toktrail/config.toml
+```
+
+If `XDG_CONFIG_HOME` is set, toktrail uses:
+
+```text
+$XDG_CONFIG_HOME/toktrail/config.toml
+```
+
+The `TOKTRAIL_CONFIG` environment variable or global `--config` option can
+override the pricing config path. Missing config files are safe: toktrail falls
+back to built-in defaults and still reports source and actual costs.
+
 Usage imports store normalized usage metadata locally and store raw source JSON
 by default for local debugging and reprocessing. Pi imports store raw JSONL
 entry lines by default. Use `--no-raw` with import or watch commands to
@@ -207,13 +236,39 @@ toktrail never prints raw OpenCode, Pi, or Copilot JSON in CLI output.
 `toktrail status` reports:
 
 - total input, output, reasoning, cache-read, and cache-write tokens
-- total cost in USD
+- source cost from imported data when the harness provides it
+- actual cost based on configured accounting rules
+- virtual cost based on configured pricing tables
+- savings (`virtual - actual`) plus unpriced model-group counts
 - grouped summaries by harness, model, and agent/mode
 - optional filtered views by harness, source session, provider, model, agent,
   and created-at time range
 
 `toktrail status --json` returns the same information in a machine-readable JSON
 shape for automation.
+
+By default:
+
+- OpenCode keeps imported source cost as actual cost
+- Pi and Copilot treat actual cost as `$0.00`
+- virtual cost uses configured pricing tables when available
+
+This makes Copilot subscription analysis straightforward: source and actual cost
+stay at `$0.00` while virtual cost shows what the same usage would have cost via
+public API pricing.
+
+Example workflow:
+
+```bash
+toktrail config init --template copilot
+toktrail import copilot --copilot-file ~/.copilot/otel/copilot-otel-20260429-090000.jsonl
+toktrail status
+toktrail sessions copilot --sort savings --columns source_session_id,actual,virtual,savings
+```
+
+Virtual and pricing-based actual costs are computed at report time, not during
+import. Updating `config.toml` immediately changes future `status` and
+`sessions` output for already imported data without re-importing source files.
 
 ## Limitations
 
@@ -222,8 +277,6 @@ The first pass intentionally does not include:
 - legacy OpenCode JSON file parsing
 - JSON migration caches
 - background daemons or services
-- pricing or cost estimation for Pi or Copilot imports; both are stored with
-  `$0.00` cost for now
 - workspace metadata extraction from Pi session headers
 - Copilot tool-span or metric accounting; phase 1 imports chat spans only and
   ignores tools, agent invocations, and metrics

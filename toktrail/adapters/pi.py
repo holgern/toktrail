@@ -9,6 +9,7 @@ from pathlib import Path
 
 from toktrail.adapters.base import ScanResult, SourceSessionSummary
 from toktrail.adapters.summary import summarize_events_by_source_session
+from toktrail.config import CostingConfig
 from toktrail.models import TokenBreakdown, UsageEvent
 
 PI_HARNESS = "pi"
@@ -157,12 +158,17 @@ def parse_pi_path(path: Path) -> list[UsageEvent]:
     return scan_pi_path(path).events
 
 
-def list_pi_sessions(source_path: Path) -> list[PiSessionSummary]:
+def list_pi_sessions(
+    source_path: Path,
+    *,
+    costing_config: CostingConfig | None = None,
+) -> list[PiSessionSummary]:
     scan = scan_pi_path(source_path, include_raw_json=False)
     return summarize_events_by_source_session(
         PI_HARNESS,
         scan.events,
         source_paths_by_session=_pi_source_paths_by_session(source_path),
+        costing_config=costing_config,
     )
 
 

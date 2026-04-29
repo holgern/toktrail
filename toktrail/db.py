@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from time import time
 
+from toktrail.config import CostingConfig, default_costing_config
+from toktrail.costing import CostBreakdown, UsageCostAtom
 from toktrail.models import TokenBreakdown, TrackingSession, UsageEvent
 from toktrail.reporting import (
     AgentSummaryRow,
+    CostTotals,
     HarnessSummaryRow,
     ModelSummaryRow,
     SessionTotals,
@@ -296,15 +299,13 @@ def insert_usage_events(
             first_seen_ms,
             last_seen_ms,
         ) in grouped_ranges.items():
-            harness_session_ids[(harness, source_session_id)] = (
-                attach_harness_session(
-                    conn,
-                    tracking_session_id,
-                    harness,
-                    source_session_id,
-                    first_seen_ms=first_seen_ms,
-                    last_seen_ms=last_seen_ms,
-                )
+            harness_session_ids[(harness, source_session_id)] = attach_harness_session(
+                conn,
+                tracking_session_id,
+                harness,
+                source_session_id,
+                first_seen_ms=first_seen_ms,
+                last_seen_ms=last_seen_ms,
             )
 
         for event in filtered_events:
@@ -374,14 +375,23 @@ def insert_usage_events(
 
 
 def summarize_tracking_session(
-    conn: sqlite3.Connection, session_id: int
+    conn: sqlite3.Connection,
+    session_id: int,
+    *,
+    costing_config: CostingConfig | None = None,
 ) -> TrackingSessionReport:
-    return summarize_usage(conn, UsageReportFilter(tracking_session_id=session_id))
+    return summarize_usage(
+        conn,
+        UsageReportFilter(tracking_session_id=session_id),
+        costing_config=costing_config,
+    )
 
 
 def summarize_usage(
     conn: sqlite3.Connection,
     filters: UsageReportFilter,
+    *,
+    costing_config: CostingConfig | None = None,
 ) -> TrackingSessionReport:
     if filters.tracking_session_id is None:
         msg = "UsageReportFilter.tracking_session_id is required."
@@ -393,115 +403,112 @@ def summarize_usage(
         raise ValueError(msg)
 
     where_clause, params = _usage_report_where(filters)
-
-    totals_row = conn.execute(
+    atom_rows = conn.execute(
         """
         SELECT
+            harness,
+            provider_id,
+            model_id,
+            COALESCE(agent, 'unknown') AS agent,
+            COUNT(*) AS message_count,
             COALESCE(SUM(input_tokens), 0) AS input_tokens,
             COALESCE(SUM(output_tokens), 0) AS output_tokens,
             COALESCE(SUM(reasoning_tokens), 0) AS reasoning_tokens,
             COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens,
             COALESCE(SUM(cache_write_tokens), 0) AS cache_write_tokens,
-            COALESCE(SUM(cost_usd), 0.0) AS cost_usd
+            COALESCE(SUM(cost_usd), 0.0) AS source_cost_usd
         FROM usage_events
         """
-        + where_clause,
+        + where_clause
+        + """
+        GROUP BY harness, provider_id, model_id, COALESCE(agent, 'unknown')
+        """,
         params,
-    ).fetchone()
+    ).fetchall()
 
-    by_harness_rows = conn.execute(
-        """
-        SELECT
-            harness,
-            COUNT(*) AS message_count,
-            SUM(
-                input_tokens + output_tokens + reasoning_tokens
-                + cache_read_tokens + cache_write_tokens
-            ) AS total_tokens,
-            SUM(cost_usd) AS cost_usd
-        FROM usage_events
-        """
-        + where_clause
-        + """
-        GROUP BY harness
-        ORDER BY cost_usd DESC, total_tokens DESC
-        """,
-        params,
-    ).fetchall()
-    by_model_rows = conn.execute(
-        """
-        SELECT
-            provider_id,
-            model_id,
-            COUNT(*) AS message_count,
-            SUM(input_tokens) AS input_tokens,
-            SUM(output_tokens) AS output_tokens,
-            SUM(reasoning_tokens) AS reasoning_tokens,
-            SUM(cache_read_tokens) AS cache_read_tokens,
-            SUM(cache_write_tokens) AS cache_write_tokens,
-            SUM(cost_usd) AS cost_usd
-        FROM usage_events
-        """
-        + where_clause
-        + """
-        GROUP BY provider_id, model_id
-        ORDER BY cost_usd DESC, message_count DESC
-        """,
-        params,
-    ).fetchall()
-    by_agent_rows = conn.execute(
-        """
-        SELECT
-            COALESCE(agent, 'unknown') AS agent,
-            COUNT(*) AS message_count,
-            SUM(
-                input_tokens + output_tokens + reasoning_tokens
-                + cache_read_tokens + cache_write_tokens
-            ) AS total_tokens,
-            SUM(cost_usd) AS cost_usd
-        FROM usage_events
-        """
-        + where_clause
-        + """
-        GROUP BY COALESCE(agent, 'unknown')
-        ORDER BY cost_usd DESC, total_tokens DESC
-        """,
-        params,
-    ).fetchall()
+    config = costing_config or default_costing_config()
+    totals_tokens = TokenBreakdown()
+    totals_costs = CostTotals()
+    by_harness: dict[str, _ReportBucket] = {}
+    by_model: dict[tuple[str, str], _ReportBucket] = {}
+    by_agent: dict[str, _ReportBucket] = {}
+
+    for row in atom_rows:
+        atom = UsageCostAtom(
+            harness=str(row["harness"]),
+            provider_id=str(row["provider_id"]),
+            model_id=str(row["model_id"]),
+            agent=str(row["agent"]),
+            message_count=_required_int(row["message_count"]),
+            tokens=_row_tokens(row),
+            source_cost_usd=_required_float(row["source_cost_usd"]),
+        )
+        breakdown = atom.compute_costs(config)
+        totals_tokens = _add_tokens(totals_tokens, atom.tokens)
+        totals_costs = _add_cost_breakdown(totals_costs, breakdown)
+
+        by_harness.setdefault(atom.harness, _ReportBucket()).add(atom, config)
+        by_model.setdefault(
+            (atom.provider_id, atom.model_id),
+            _ReportBucket(),
+        ).add(atom, config)
+        by_agent.setdefault(atom.agent, _ReportBucket()).add(atom, config)
 
     return TrackingSessionReport(
         session=session,
         totals=SessionTotals(
-            tokens=_row_tokens(totals_row),
-            cost_usd=float(totals_row["cost_usd"]),
+            tokens=totals_tokens,
+            costs=totals_costs,
         ),
         by_harness=[
             HarnessSummaryRow(
-                harness=str(row["harness"]),
-                message_count=_required_int(row["message_count"]),
-                total_tokens=_required_int(row["total_tokens"]),
-                cost_usd=_required_float(row["cost_usd"]),
+                harness=harness,
+                message_count=bucket.message_count,
+                total_tokens=bucket.tokens.total,
+                costs=bucket.costs,
             )
-            for row in by_harness_rows
+            for harness, bucket in sorted(
+                by_harness.items(),
+                key=lambda item: (
+                    -item[1].costs.actual_cost_usd,
+                    -item[1].tokens.total,
+                    item[0],
+                ),
+            )
         ],
         by_model=[
             ModelSummaryRow(
-                provider_id=str(row["provider_id"]),
-                model_id=str(row["model_id"]),
-                message_count=_required_int(row["message_count"]),
-                tokens=_row_tokens(row),
-                cost_usd=_required_float(row["cost_usd"]),
+                provider_id=provider_id,
+                model_id=model_id,
+                message_count=bucket.message_count,
+                tokens=bucket.tokens,
+                costs=bucket.costs,
             )
-            for row in by_model_rows
+            for (provider_id, model_id), bucket in sorted(
+                by_model.items(),
+                key=lambda item: (
+                    -item[1].costs.actual_cost_usd,
+                    -item[1].message_count,
+                    item[0][0],
+                    item[0][1],
+                ),
+            )
         ],
         by_agent=[
             AgentSummaryRow(
-                agent=str(row["agent"]),
-                message_count=_required_int(row["message_count"]),
-                total_tokens=_required_int(row["total_tokens"]),
-                cost_usd=_required_float(row["cost_usd"]),
+                agent=agent,
+                message_count=bucket.message_count,
+                total_tokens=bucket.tokens.total,
+                costs=bucket.costs,
             )
-            for row in by_agent_rows
+            for agent, bucket in sorted(
+                by_agent.items(),
+                key=lambda item: (
+                    -item[1].costs.actual_cost_usd,
+                    -item[1].tokens.total,
+                    item[0],
+                ),
+            )
         ],
         filters=filters,
     )
@@ -608,6 +615,37 @@ def _required_float(value: object) -> float:
         msg = f"Expected numeric value, got {value!r}"
         raise TypeError(msg)
     return float(value)
+
+
+@dataclass
+class _ReportBucket:
+    message_count: int = 0
+    tokens: TokenBreakdown = field(default_factory=TokenBreakdown)
+    costs: CostTotals = field(default_factory=CostTotals)
+
+    def add(self, atom: UsageCostAtom, config: CostingConfig) -> None:
+        self.message_count += atom.message_count
+        self.tokens = _add_tokens(self.tokens, atom.tokens)
+        self.costs = _add_cost_breakdown(self.costs, atom.compute_costs(config))
+
+
+def _add_tokens(left: TokenBreakdown, right: TokenBreakdown) -> TokenBreakdown:
+    return TokenBreakdown(
+        input=left.input + right.input,
+        output=left.output + right.output,
+        reasoning=left.reasoning + right.reasoning,
+        cache_read=left.cache_read + right.cache_read,
+        cache_write=left.cache_write + right.cache_write,
+    )
+
+
+def _add_cost_breakdown(costs: CostTotals, breakdown: CostBreakdown) -> CostTotals:
+    return costs.add(
+        source_cost_usd=breakdown.source_cost_usd,
+        actual_cost_usd=breakdown.actual_cost_usd,
+        virtual_cost_usd=breakdown.virtual_cost_usd,
+        unpriced_count=breakdown.unpriced_count,
+    )
 
 
 def _required_lastrowid(value: int | None) -> int:

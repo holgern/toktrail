@@ -21,7 +21,7 @@ class HarnessDefinition:
     display_name: str
     resolve_source_path: Callable[[Path | None], Path | None]
     scan: Callable[..., ScanResult]
-    list_sessions: Callable[[Path], list[SourceSessionSummary]]
+    list_sessions: Callable[..., list[SourceSessionSummary]]
 
 
 HARNESS_REGISTRY: dict[str, HarnessDefinition] = {

@@ -19,6 +19,14 @@ from toktrail.adapters.summary import (
     summarize_events_by_agent,
     summarize_events_by_model,
 )
+from toktrail.config import (
+    DEFAULT_TEMPLATE_NAME,
+    CostingConfig,
+    LoadedCostingConfig,
+    load_resolved_costing_config,
+    render_config_template,
+    summarize_costing_config,
+)
 from toktrail.db import (
     connect,
     create_tracking_session,
@@ -34,6 +42,7 @@ from toktrail.formatting import format_epoch_ms_compact
 from toktrail.models import UsageEvent
 from toktrail.paths import (
     new_copilot_otel_file_path,
+    resolve_toktrail_config_path,
     resolve_toktrail_db_path,
 )
 from toktrail.reporting import ModelSummaryRow, UsageReportFilter
@@ -46,11 +55,13 @@ sessions_app = typer.Typer(
     help="List toktrail tracking sessions and raw source sessions.",
 )
 copilot_app = typer.Typer(help="Inspect and run GitHub Copilot CLI tracking.")
+config_app = typer.Typer(help="Inspect toktrail pricing config.")
 
 app.add_typer(import_app, name="import")
 app.add_typer(watch_app, name="watch")
 app.add_typer(sessions_app, name="sessions")
 app.add_typer(copilot_app, name="copilot")
+app.add_typer(config_app, name="config")
 
 
 @dataclass(frozen=True)
@@ -69,6 +80,10 @@ CopilotEnvVar = tuple[str, str]
 DbPathOption = Annotated[
     Path | None,
     typer.Option("--db", help="Override toktrail DB path."),
+]
+ConfigPathOption = Annotated[
+    Path | None,
+    typer.Option("--config", help="Override toktrail config TOML path."),
 ]
 SessionArgument = Annotated[int | None, typer.Argument()]
 SessionOption = Annotated[int | None, typer.Option("--session")]
@@ -117,8 +132,9 @@ CopilotRunArgs = Annotated[list[str], typer.Argument(help="Command to run after 
 def main(
     ctx: typer.Context,
     db_path: DbPathOption = None,
+    config_path: ConfigPathOption = None,
 ) -> None:
-    ctx.obj = {"db_path": db_path}
+    ctx.obj = {"db_path": db_path, "config_path": config_path}
 
 
 @app.command()
@@ -184,6 +200,7 @@ def status(
     until_ms: UntilMsOption = None,
     rich_output: RichOption = False,
 ) -> None:
+    costing_config = _load_costing_config_or_exit(ctx)
     conn = _open_toktrail_connection(ctx)
     try:
         selected_session_id = session_id
@@ -204,6 +221,7 @@ def status(
                 since_ms=since_ms,
                 until_ms=until_ms,
             ),
+            costing_config=costing_config,
         )
     finally:
         conn.close()
@@ -223,7 +241,14 @@ def status(
     typer.echo(f"  cache read:  {_format_int(report.totals.tokens.cache_read)}")
     typer.echo(f"  cache write: {_format_int(report.totals.tokens.cache_write)}")
     typer.echo(f"  total:       {_format_int(report.totals.tokens.total)}")
-    typer.echo(f"  cost:        {_format_cost(report.totals.cost_usd)}")
+
+    typer.echo("")
+    typer.echo("Costs")
+    typer.echo(f"  source:   {_format_cost(report.totals.source_cost_usd)}")
+    typer.echo(f"  actual:   {_format_cost(report.totals.actual_cost_usd)}")
+    typer.echo(f"  virtual:  {_format_cost(report.totals.virtual_cost_usd)}")
+    typer.echo(f"  savings:  {_format_cost(report.totals.savings_usd)}")
+    typer.echo(f"  unpriced: {report.totals.unpriced_count} model groups")
 
     typer.echo("")
     typer.echo("By harness")
@@ -232,7 +257,9 @@ def status(
             typer.echo(
                 f"  {harness_row.harness:<12}"
                 f"{_format_int(harness_row.total_tokens):>12} tokens   "
-                f"{_format_cost(harness_row.cost_usd)}"
+                f"actual {_format_cost(harness_row.actual_cost_usd)}   "
+                f"virtual {_format_cost(harness_row.virtual_cost_usd)}   "
+                f"savings {_format_cost(harness_row.savings_usd)}"
             )
     else:
         typer.echo("  (none)")
@@ -251,10 +278,61 @@ def status(
             typer.echo(
                 f"  {agent_row.agent:<12}"
                 f"{_format_int(agent_row.total_tokens):>12} tokens   "
-                f"{_format_cost(agent_row.cost_usd)}"
+                f"actual {_format_cost(agent_row.actual_cost_usd)}   "
+                f"virtual {_format_cost(agent_row.virtual_cost_usd)}   "
+                f"savings {_format_cost(agent_row.savings_usd)}"
             )
     else:
         typer.echo("  (none)")
+
+
+@config_app.command("path")
+def config_path(ctx: typer.Context) -> None:
+    typer.echo(_resolve_config_path(ctx))
+
+
+@config_app.command("init")
+def config_init(
+    ctx: typer.Context,
+    template: Annotated[str, typer.Option("--template")] = DEFAULT_TEMPLATE_NAME,
+    force: Annotated[bool, typer.Option("--force")] = False,
+) -> None:
+    path = _resolve_config_path(ctx)
+    if path.exists() and not force:
+        _exit_with_error(f"Toktrail config already exists: {path}")
+    try:
+        content = render_config_template(template)
+    except ValueError as exc:
+        _exit_with_error(str(exc))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+    typer.echo(f"Initialized toktrail config: {path}")
+
+
+@config_app.command("validate")
+def config_validate(ctx: typer.Context) -> None:
+    loaded = _load_resolved_costing_config_or_exit(ctx)
+    summary = summarize_costing_config(loaded.config)
+    typer.echo(f"Config valid: {loaded.path}")
+    typer.echo(f"  actual rules:   {summary.actual_rule_count}")
+    typer.echo(f"  actual prices:  {summary.actual_price_count}")
+    typer.echo(f"  virtual prices: {summary.virtual_price_count}")
+
+
+@config_app.command("show")
+def config_show(ctx: typer.Context) -> None:
+    loaded = _load_resolved_costing_config_or_exit(ctx)
+    summary = summarize_costing_config(loaded.config)
+    typer.echo(f"path:            {loaded.path}")
+    typer.echo(f"exists:          {'yes' if loaded.exists else 'no'}")
+    typer.echo(f"config_version:  {summary.config_version}")
+    typer.echo(f"default actual:  {summary.default_actual_mode}")
+    typer.echo(f"default virtual: {summary.default_virtual_mode}")
+    typer.echo(f"missing price:   {summary.missing_price}")
+    typer.echo(f"price profile:   {summary.price_profile or '(none)'}")
+    typer.echo(f"actual rules:    {summary.actual_rule_count}")
+    typer.echo(f"actual prices:   {summary.actual_price_count}")
+    typer.echo(f"virtual prices:  {summary.virtual_price_count}")
 
 
 @sessions_app.callback(invoke_without_command=True)
@@ -411,6 +489,7 @@ def watch_pi(
 
 @sessions_app.command("opencode")
 def sessions_opencode(
+    ctx: typer.Context,
     source_session_id: SourceSessionArgument = None,
     opencode_db: OpenCodeDbOption = None,
     last: LastOption = False,
@@ -423,6 +502,7 @@ def sessions_opencode(
     rich_output: RichOption = False,
 ) -> None:
     _run_source_sessions_command(
+        ctx,
         "opencode",
         source_path=opencode_db,
         source_session_id=source_session_id,
@@ -439,6 +519,7 @@ def sessions_opencode(
 
 @sessions_app.command("pi")
 def sessions_pi(
+    ctx: typer.Context,
     source_session_id: SourceSessionArgument = None,
     pi_path: PiPathOption = None,
     last: LastOption = False,
@@ -451,6 +532,7 @@ def sessions_pi(
     rich_output: RichOption = False,
 ) -> None:
     _run_source_sessions_command(
+        ctx,
         "pi",
         source_path=pi_path,
         source_session_id=source_session_id,
@@ -467,6 +549,7 @@ def sessions_pi(
 
 @sessions_app.command("copilot")
 def sessions_copilot(
+    ctx: typer.Context,
     source_session_id: SourceSessionArgument = None,
     copilot_path: CopilotPathOption = None,
     last: LastOption = False,
@@ -479,6 +562,7 @@ def sessions_copilot(
     rich_output: RichOption = False,
 ) -> None:
     _run_source_sessions_command(
+        ctx,
         "copilot",
         source_path=copilot_path,
         source_session_id=source_session_id,
@@ -693,6 +777,7 @@ def _watch_harness(
 
 
 def _run_source_sessions_command(
+    ctx: typer.Context,
     harness_name: str,
     *,
     source_path: Path | None,
@@ -710,6 +795,7 @@ def _run_source_sessions_command(
         _exit_with_error("Use either a source session id or --last, not both.")
 
     harness = get_harness(harness_name)
+    costing_config = _load_costing_config_or_exit(ctx)
     resolved_source = harness.resolve_source_path(source_path)
     if resolved_source is None or not resolved_source.exists():
         _exit_with_error(
@@ -721,7 +807,7 @@ def _run_source_sessions_command(
         )
 
     summaries = _sorted_source_sessions(
-        harness.list_sessions(resolved_source),
+        harness.list_sessions(resolved_source, costing_config=costing_config),
         sort=sort,
     )
     if not summaries:
@@ -758,6 +844,7 @@ def _run_source_sessions_command(
         harness.display_name,
         selected,
         events,
+        costing_config=costing_config,
         breakdown=breakdown,
         json_output=json_output,
         utc=utc,
@@ -790,7 +877,10 @@ def _print_source_session_list(
         "cache_r": "cache_r",
         "cache_w": "cache_w",
         "total": "total",
-        "cost": "cost",
+        "source_cost": "source_cost",
+        "actual": "actual",
+        "virtual": "virtual",
+        "savings": "savings",
         "providers": "providers",
         "models": "models",
         "source_paths": "source_paths",
@@ -807,7 +897,10 @@ def _print_source_session_list(
             "cache_r": _format_int(summary.tokens.cache_read),
             "cache_w": _format_int(summary.tokens.cache_write),
             "total": _format_int(summary.tokens.total),
-            "cost": _format_cost(summary.cost_usd),
+            "source_cost": _format_cost(summary.source_cost_usd),
+            "actual": _format_cost(summary.actual_cost_usd),
+            "virtual": _format_cost(summary.virtual_cost_usd),
+            "savings": _format_cost(summary.savings_usd),
             "providers": ",".join(summary.providers),
             "models": ",".join(summary.models),
             "source_paths": ";".join(summary.source_paths),
@@ -822,14 +915,15 @@ def _print_source_session_detail(
     summary: SourceSessionSummary,
     events: list[UsageEvent],
     *,
+    costing_config: CostingConfig,
     breakdown: bool,
     json_output: bool,
     utc: bool,
     rich_output: bool,
 ) -> None:
-    totals = summarize_event_totals(events)
-    by_model = summarize_events_by_model(events)
-    by_agent = summarize_events_by_agent(events)
+    totals = summarize_event_totals(events, costing_config=costing_config)
+    by_model = summarize_events_by_model(events, costing_config=costing_config)
+    by_agent = summarize_events_by_agent(events, costing_config=costing_config)
 
     if json_output:
         typer.echo(
@@ -854,13 +948,10 @@ def _print_source_session_detail(
     typer.echo(
         f"first:    {format_epoch_ms_compact(summary.first_created_ms, utc=utc)}"
     )
-    typer.echo(
-        f"last:     {format_epoch_ms_compact(summary.last_created_ms, utc=utc)}"
-    )
+    typer.echo(f"last:     {format_epoch_ms_compact(summary.last_created_ms, utc=utc)}")
     typer.echo(f"messages: {summary.assistant_message_count}")
     if summary.source_paths:
         typer.echo(f"source:   {', '.join(summary.source_paths)}")
-    typer.echo(f"cost:     {_format_cost(totals.cost_usd)}")
     typer.echo("")
     typer.echo("Totals")
     typer.echo(f"  input:       {_format_int(totals.tokens.input)}")
@@ -869,6 +960,13 @@ def _print_source_session_detail(
     typer.echo(f"  cache read:  {_format_int(totals.tokens.cache_read)}")
     typer.echo(f"  cache write: {_format_int(totals.tokens.cache_write)}")
     typer.echo(f"  total:       {_format_int(totals.tokens.total)}")
+    typer.echo("")
+    typer.echo("Costs")
+    typer.echo(f"  source:   {_format_cost(totals.source_cost_usd)}")
+    typer.echo(f"  actual:   {_format_cost(totals.actual_cost_usd)}")
+    typer.echo(f"  virtual:  {_format_cost(totals.virtual_cost_usd)}")
+    typer.echo(f"  savings:  {_format_cost(totals.savings_usd)}")
+    typer.echo(f"  unpriced: {totals.unpriced_count} model groups")
 
     if not breakdown:
         return
@@ -883,7 +981,9 @@ def _print_source_session_detail(
             typer.echo(
                 f"  {row.agent:<12}"
                 f"{_format_int(row.total_tokens):>12} tokens   "
-                f"{_format_cost(row.cost_usd)}"
+                f"actual {_format_cost(row.actual_cost_usd)}   "
+                f"virtual {_format_cost(row.virtual_cost_usd)}   "
+                f"savings {_format_cost(row.savings_usd)}"
             )
 
 
@@ -897,7 +997,7 @@ def _source_session_summary_payload(
         "last_created_ms": summary.last_created_ms,
         "assistant_message_count": summary.assistant_message_count,
         "tokens": summary.tokens.as_dict(),
-        "cost_usd": summary.cost_usd,
+        **summary.costs.as_dict(),
         "providers": list(summary.providers),
         "models": list(summary.models),
         "source_paths": list(summary.source_paths),
@@ -925,17 +1025,37 @@ def _sorted_source_sessions(
             ),
             reverse=True,
         )
-    if sort == "cost":
+    if sort == "actual":
         return sorted(
             summaries,
             key=lambda summary: (
-                summary.cost_usd,
+                summary.actual_cost_usd,
                 summary.last_created_ms,
                 summary.source_session_id,
             ),
             reverse=True,
         )
-    _exit_with_error("Unsupported sort. Use last, tokens, or cost.")
+    if sort == "virtual":
+        return sorted(
+            summaries,
+            key=lambda summary: (
+                summary.virtual_cost_usd,
+                summary.last_created_ms,
+                summary.source_session_id,
+            ),
+            reverse=True,
+        )
+    if sort == "savings":
+        return sorted(
+            summaries,
+            key=lambda summary: (
+                summary.savings_usd,
+                summary.last_created_ms,
+                summary.source_session_id,
+            ),
+            reverse=True,
+        )
+    _exit_with_error("Unsupported sort. Use last, tokens, actual, virtual, or savings.")
 
 
 def _find_source_session_summary(
@@ -960,13 +1080,17 @@ def _normalize_source_session_columns(columns: str | None) -> list[str]:
         "cache_r",
         "cache_w",
         "total",
-        "cost",
+        "actual",
+        "virtual",
+        "savings",
     ]
     if columns is None:
         return default_columns
 
     selected = [value.strip() for value in columns.split(",") if value.strip()]
-    allowed = set(default_columns + ["providers", "models", "source_paths"])
+    allowed = set(
+        default_columns + ["source_cost", "providers", "models", "source_paths"]
+    )
     invalid = [value for value in selected if value not in allowed]
     if invalid:
         _exit_with_error(f"Unsupported columns: {', '.join(invalid)}")
@@ -985,9 +1109,7 @@ def _render_table(
         )
         for column in columns
     }
-    lines = [
-        "  ".join(headers[column].ljust(widths[column]) for column in columns)
-    ]
+    lines = ["  ".join(headers[column].ljust(widths[column]) for column in columns)]
     for row in rows:
         lines.append(
             "  ".join(row.get(column, "").ljust(widths[column]) for column in columns)
@@ -1034,7 +1156,9 @@ def _print_model_table(
         "cache_r": "cache_r",
         "cache_w": "cache_w",
         "total": "total",
-        "cost": "cost",
+        "actual": "actual",
+        "virtual": "virtual",
+        "savings": "savings",
     }
     payload_rows = [
         {
@@ -1046,7 +1170,9 @@ def _print_model_table(
             "cache_r": _format_int(row.tokens.cache_read),
             "cache_w": _format_int(row.tokens.cache_write),
             "total": _format_int(row.total_tokens),
-            "cost": _format_cost(row.cost_usd),
+            "actual": _format_cost(row.actual_cost_usd),
+            "virtual": _format_cost(row.virtual_cost_usd),
+            "savings": _format_cost(row.savings_usd),
         }
         for row in rows
     ]
@@ -1061,7 +1187,9 @@ def _print_model_table(
             "cache_r",
             "cache_w",
             "total",
-            "cost",
+            "actual",
+            "virtual",
+            "savings",
         ],
         headers,
         rich_output=rich_output,
@@ -1096,6 +1224,26 @@ def _print_import_result(
     typer.echo(f"  rows seen: {result.rows_seen}")
     typer.echo(f"  rows imported: {result.rows_imported}")
     typer.echo(f"  rows skipped: {result.rows_skipped}")
+
+
+def _resolve_config_path(ctx: typer.Context) -> Path:
+    root_obj = ctx.find_root().obj or {}
+    config_path = root_obj.get("config_path")
+    if config_path is not None and not isinstance(config_path, Path):
+        msg = "Unexpected CLI state for --config."
+        raise TypeError(msg)
+    return resolve_toktrail_config_path(config_path)
+
+
+def _load_resolved_costing_config_or_exit(ctx: typer.Context) -> LoadedCostingConfig:
+    try:
+        return load_resolved_costing_config(_resolve_config_path(ctx))
+    except ValueError as exc:
+        _exit_with_error(str(exc))
+
+
+def _load_costing_config_or_exit(ctx: typer.Context) -> CostingConfig:
+    return _load_resolved_costing_config_or_exit(ctx).config
 
 
 def _resolve_state_db(ctx: typer.Context) -> Path:

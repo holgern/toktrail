@@ -25,5 +25,9 @@ def inferred_provider_from_model(model_id: str) -> str | None:
         return "mistral"
     if model.startswith("deepseek"):
         return "deepseek"
+    if model.startswith("grok") or model.startswith("xai"):
+        return "xai"
+    if model.startswith("raptor") or model.startswith("goldeneye"):
+        return "github"
 
     return None

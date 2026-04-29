@@ -50,6 +50,10 @@ class UsageEvent:
     cost_usd: float
     raw_json: str | None
 
+    @property
+    def source_cost_usd(self) -> float:
+        return self.cost_usd
+
 
 @dataclass(frozen=True)
 class TrackingSession:
@@ -67,3 +71,7 @@ class OpenCodeSessionSummary:
     assistant_message_count: int
     tokens: TokenBreakdown
     cost_usd: float
+
+    @property
+    def source_cost_usd(self) -> float:
+        return self.cost_usd

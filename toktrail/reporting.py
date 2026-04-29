@@ -6,6 +6,42 @@ from toktrail.models import TokenBreakdown, TrackingSession
 
 
 @dataclass(frozen=True)
+class CostTotals:
+    source_cost_usd: float = 0.0
+    actual_cost_usd: float = 0.0
+    virtual_cost_usd: float = 0.0
+    unpriced_count: int = 0
+
+    @property
+    def savings_usd(self) -> float:
+        return self.virtual_cost_usd - self.actual_cost_usd
+
+    def add(
+        self,
+        *,
+        source_cost_usd: float = 0.0,
+        actual_cost_usd: float = 0.0,
+        virtual_cost_usd: float = 0.0,
+        unpriced_count: int = 0,
+    ) -> CostTotals:
+        return CostTotals(
+            source_cost_usd=self.source_cost_usd + source_cost_usd,
+            actual_cost_usd=self.actual_cost_usd + actual_cost_usd,
+            virtual_cost_usd=self.virtual_cost_usd + virtual_cost_usd,
+            unpriced_count=self.unpriced_count + unpriced_count,
+        )
+
+    def as_dict(self) -> dict[str, float | int]:
+        return {
+            "source_cost_usd": self.source_cost_usd,
+            "actual_cost_usd": self.actual_cost_usd,
+            "virtual_cost_usd": self.virtual_cost_usd,
+            "savings_usd": self.savings_usd,
+            "unpriced_count": self.unpriced_count,
+        }
+
+
+@dataclass(frozen=True)
 class UsageReportFilter:
     tracking_session_id: int | None = None
     harness: str | None = None
@@ -44,7 +80,27 @@ class UsageReportFilter:
 @dataclass(frozen=True)
 class SessionTotals:
     tokens: TokenBreakdown
-    cost_usd: float
+    costs: CostTotals
+
+    @property
+    def source_cost_usd(self) -> float:
+        return self.costs.source_cost_usd
+
+    @property
+    def actual_cost_usd(self) -> float:
+        return self.costs.actual_cost_usd
+
+    @property
+    def virtual_cost_usd(self) -> float:
+        return self.costs.virtual_cost_usd
+
+    @property
+    def savings_usd(self) -> float:
+        return self.costs.savings_usd
+
+    @property
+    def unpriced_count(self) -> int:
+        return self.costs.unpriced_count
 
     def as_dict(self) -> dict[str, int | float]:
         return {
@@ -54,7 +110,7 @@ class SessionTotals:
             "cache_read": self.tokens.cache_read,
             "cache_write": self.tokens.cache_write,
             "total": self.tokens.total,
-            "cost_usd": self.cost_usd,
+            **self.costs.as_dict(),
         }
 
 
@@ -63,14 +119,34 @@ class HarnessSummaryRow:
     harness: str
     message_count: int
     total_tokens: int
-    cost_usd: float
+    costs: CostTotals
+
+    @property
+    def source_cost_usd(self) -> float:
+        return self.costs.source_cost_usd
+
+    @property
+    def actual_cost_usd(self) -> float:
+        return self.costs.actual_cost_usd
+
+    @property
+    def virtual_cost_usd(self) -> float:
+        return self.costs.virtual_cost_usd
+
+    @property
+    def savings_usd(self) -> float:
+        return self.costs.savings_usd
+
+    @property
+    def unpriced_count(self) -> int:
+        return self.costs.unpriced_count
 
     def as_dict(self) -> dict[str, int | float | str]:
         return {
             "harness": self.harness,
             "message_count": self.message_count,
             "total_tokens": self.total_tokens,
-            "cost_usd": self.cost_usd,
+            **self.costs.as_dict(),
         }
 
 
@@ -80,11 +156,31 @@ class ModelSummaryRow:
     model_id: str
     message_count: int
     tokens: TokenBreakdown
-    cost_usd: float
+    costs: CostTotals
 
     @property
     def total_tokens(self) -> int:
         return self.tokens.total
+
+    @property
+    def source_cost_usd(self) -> float:
+        return self.costs.source_cost_usd
+
+    @property
+    def actual_cost_usd(self) -> float:
+        return self.costs.actual_cost_usd
+
+    @property
+    def virtual_cost_usd(self) -> float:
+        return self.costs.virtual_cost_usd
+
+    @property
+    def savings_usd(self) -> float:
+        return self.costs.savings_usd
+
+    @property
+    def unpriced_count(self) -> int:
+        return self.costs.unpriced_count
 
     def as_dict(self) -> dict[str, int | float | str]:
         return {
@@ -92,7 +188,7 @@ class ModelSummaryRow:
             "model_id": self.model_id,
             "message_count": self.message_count,
             **self.tokens.as_dict(),
-            "cost_usd": self.cost_usd,
+            **self.costs.as_dict(),
         }
 
 
@@ -101,14 +197,34 @@ class AgentSummaryRow:
     agent: str
     message_count: int
     total_tokens: int
-    cost_usd: float
+    costs: CostTotals
+
+    @property
+    def source_cost_usd(self) -> float:
+        return self.costs.source_cost_usd
+
+    @property
+    def actual_cost_usd(self) -> float:
+        return self.costs.actual_cost_usd
+
+    @property
+    def virtual_cost_usd(self) -> float:
+        return self.costs.virtual_cost_usd
+
+    @property
+    def savings_usd(self) -> float:
+        return self.costs.savings_usd
+
+    @property
+    def unpriced_count(self) -> int:
+        return self.costs.unpriced_count
 
     def as_dict(self) -> dict[str, int | float | str]:
         return {
             "agent": self.agent,
             "message_count": self.message_count,
             "total_tokens": self.total_tokens,
-            "cost_usd": self.cost_usd,
+            **self.costs.as_dict(),
         }
 
 

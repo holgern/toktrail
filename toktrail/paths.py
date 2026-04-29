@@ -5,6 +5,7 @@ from datetime import datetime
 from pathlib import Path
 
 TOKTRAIL_DB_ENV = "TOKTRAIL_DB"
+TOKTRAIL_CONFIG_ENV = "TOKTRAIL_CONFIG"
 COPILOT_FILE_ENV = "TOKTRAIL_COPILOT_FILE"
 COPILOT_OTEL_FILE_EXPORTER_PATH_ENV = "COPILOT_OTEL_FILE_EXPORTER_PATH"
 COPILOT_OTEL_DIR_ENV = "TOKTRAIL_COPILOT_OTEL_DIR"
@@ -27,6 +28,22 @@ def resolve_toktrail_db_path(cli_value: Path | None = None) -> Path:
         path = default_toktrail_db_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def default_toktrail_config_path() -> Path:
+    xdg_config_home = os.environ.get("XDG_CONFIG_HOME")
+    if xdg_config_home:
+        return Path(xdg_config_home).expanduser() / "toktrail" / "config.toml"
+    return Path.home() / ".config" / "toktrail" / "config.toml"
+
+
+def resolve_toktrail_config_path(cli_value: Path | None = None) -> Path:
+    if cli_value is not None:
+        return cli_value.expanduser()
+    env_value = os.environ.get(TOKTRAIL_CONFIG_ENV)
+    if env_value:
+        return Path(env_value).expanduser()
+    return default_toktrail_config_path()
 
 
 def default_opencode_db_path() -> Path:

@@ -128,10 +128,20 @@ def test_insert_usage_events_is_idempotent_and_aggregates_correctly(tmp_path) ->
     assert report.totals.tokens.cache_read == 6
     assert report.totals.tokens.cache_write == 9
     assert report.totals.tokens.total == 63
-    assert report.totals.cost_usd == 0.75
+    assert report.totals.source_cost_usd == 0.75
+    assert report.totals.actual_cost_usd == 0.75
+    assert report.totals.virtual_cost_usd == 0.0
+    assert report.totals.savings_usd == -0.75
+    assert report.totals.unpriced_count == 1
     assert report.by_harness[0].total_tokens == 63
+    assert report.by_harness[0].source_cost_usd == 0.75
+    assert report.by_harness[0].actual_cost_usd == 0.75
     assert report.by_model[0].model_id == "claude-sonnet-4"
+    assert report.by_model[0].source_cost_usd == 0.75
+    assert report.by_model[0].actual_cost_usd == 0.75
     assert report.by_agent[0].agent == "build"
+    assert report.by_agent[0].source_cost_usd == 0.75
+    assert report.by_agent[0].actual_cost_usd == 0.75
 
 
 def test_summarize_usage_applies_filters_and_echoes_them(tmp_path) -> None:
@@ -198,6 +208,16 @@ def test_summarize_usage_applies_filters_and_echoes_them(tmp_path) -> None:
     assert report.totals.tokens.input == 100
     assert report.totals.tokens.output == 5
     assert report.totals.tokens.total == 105
+    assert report.totals.source_cost_usd == 0.1
+    assert report.totals.actual_cost_usd == 0.0
+    assert report.totals.virtual_cost_usd == 0.0
+    assert report.totals.unpriced_count == 1
     assert report.by_harness[0].harness == "pi"
+    assert report.by_harness[0].source_cost_usd == 0.1
+    assert report.by_harness[0].actual_cost_usd == 0.0
     assert report.by_model[0].model_id == "claude-sonnet-4"
+    assert report.by_model[0].source_cost_usd == 0.1
+    assert report.by_model[0].actual_cost_usd == 0.0
     assert report.by_agent[0].agent == "plan"
+    assert report.by_agent[0].source_cost_usd == 0.1
+    assert report.by_agent[0].actual_cost_usd == 0.0

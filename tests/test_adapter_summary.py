@@ -74,7 +74,10 @@ def test_summary_helpers_aggregate_events_consistently() -> None:
     by_agent = summarize_events_by_agent(events)
 
     assert totals.tokens.total == 37
-    assert totals.cost_usd == pytest.approx(0.6)
+    assert totals.source_cost_usd == pytest.approx(0.6)
+    assert totals.actual_cost_usd == 0.0
+    assert totals.virtual_cost_usd == 0.0
+    assert totals.unpriced_count == 2
 
     assert [summary.source_session_id for summary in by_source_session] == [
         "ses-1",
@@ -82,6 +85,8 @@ def test_summary_helpers_aggregate_events_consistently() -> None:
     ]
     assert by_source_session[0].assistant_message_count == 2
     assert by_source_session[0].tokens.total == 27
+    assert by_source_session[0].source_cost_usd == pytest.approx(0.3)
+    assert by_source_session[0].actual_cost_usd == 0.0
     assert by_source_session[0].models == ("claude-sonnet-4",)
     assert by_source_session[0].providers == ("anthropic",)
     assert by_source_session[0].source_paths == ("/tmp/a.jsonl", "/tmp/b.jsonl")
@@ -90,10 +95,14 @@ def test_summary_helpers_aggregate_events_consistently() -> None:
         ("anthropic", "claude-sonnet-4", 27),
         ("openai", "gpt-5", 10),
     ]
+    assert by_model[0].source_cost_usd == pytest.approx(0.3)
+    assert by_model[0].actual_cost_usd == 0.0
     assert [(row.agent, row.total_tokens) for row in by_agent] == [
         ("plan", 27),
         ("unknown", 10),
     ]
+    assert by_agent[0].source_cost_usd == pytest.approx(0.4)
+    assert by_agent[0].actual_cost_usd == 0.0
 
 
 def _event(

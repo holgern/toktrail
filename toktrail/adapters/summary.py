@@ -1,13 +1,16 @@
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from toktrail.adapters.base import SourceSessionSummary
+from toktrail.config import CostingConfig, default_costing_config
+from toktrail.costing import CostBreakdown, UsageCostAtom
 from toktrail.models import TokenBreakdown, UsageEvent
 from toktrail.reporting import (
     AgentSummaryRow,
+    CostTotals,
     HarnessSummaryRow,
     ModelSummaryRow,
     SessionTotals,
@@ -24,42 +27,64 @@ def add_tokens(left: TokenBreakdown, right: TokenBreakdown) -> TokenBreakdown:
     )
 
 
-def summarize_event_totals(events: Iterable[UsageEvent]) -> SessionTotals:
+def summarize_event_totals(
+    events: Iterable[UsageEvent],
+    *,
+    costing_config: CostingConfig | None = None,
+) -> SessionTotals:
+    config = costing_config or default_costing_config()
     tokens = TokenBreakdown()
-    cost_usd = 0.0
-    for event in events:
-        tokens = add_tokens(tokens, event.tokens)
-        cost_usd += event.cost_usd
-    return SessionTotals(tokens=tokens, cost_usd=cost_usd)
+    costs = CostTotals()
+    for atom in _usage_cost_atom_map(
+        events,
+        key_fn=lambda event: (event.harness, event.provider_id, event.model_id),
+    ).values():
+        tokens = add_tokens(tokens, atom.tokens)
+        costs = _add_cost_breakdown(costs, atom.compute_costs(config))
+    return SessionTotals(tokens=tokens, costs=costs)
 
 
 def summarize_events_by_harness(
     events: Iterable[UsageEvent],
+    *,
+    costing_config: CostingConfig | None = None,
 ) -> list[HarnessSummaryRow]:
-    grouped: dict[str, _UsageBucket] = {}
-    for event in events:
-        bucket = grouped.setdefault(event.harness, _UsageBucket())
-        bucket.add(event)
+    config = costing_config or default_costing_config()
+    grouped: dict[str, _AggregateBucket] = {}
+    for atom in _usage_cost_atom_map(
+        events,
+        key_fn=lambda event: (event.harness, event.provider_id, event.model_id),
+    ).values():
+        bucket = grouped.setdefault(atom.harness, _AggregateBucket())
+        bucket.add_atom(atom, config)
     return sorted(
         (
             HarnessSummaryRow(
                 harness=harness,
                 message_count=bucket.message_count,
                 total_tokens=bucket.tokens.total,
-                cost_usd=bucket.cost_usd,
+                costs=bucket.costs,
             )
             for harness, bucket in grouped.items()
         ),
-        key=lambda row: (-row.cost_usd, -row.total_tokens, row.harness),
+        key=lambda row: (-row.actual_cost_usd, -row.total_tokens, row.harness),
     )
 
 
-def summarize_events_by_model(events: Iterable[UsageEvent]) -> list[ModelSummaryRow]:
-    grouped: dict[tuple[str, str], _UsageBucket] = {}
-    for event in events:
-        key = (event.provider_id, event.model_id)
-        bucket = grouped.setdefault(key, _UsageBucket())
-        bucket.add(event)
+def summarize_events_by_model(
+    events: Iterable[UsageEvent],
+    *,
+    costing_config: CostingConfig | None = None,
+) -> list[ModelSummaryRow]:
+    config = costing_config or default_costing_config()
+    grouped: dict[tuple[str, str], _AggregateBucket] = {}
+    for atom in _usage_cost_atom_map(
+        events,
+        key_fn=lambda event: (event.harness, event.provider_id, event.model_id),
+    ).values():
+        key = (atom.provider_id, atom.model_id)
+        bucket = grouped.setdefault(key, _AggregateBucket())
+        bucket.add_atom(atom, config)
     return sorted(
         (
             ModelSummaryRow(
@@ -67,12 +92,12 @@ def summarize_events_by_model(events: Iterable[UsageEvent]) -> list[ModelSummary
                 model_id=model_id,
                 message_count=bucket.message_count,
                 tokens=bucket.tokens,
-                cost_usd=bucket.cost_usd,
+                costs=bucket.costs,
             )
             for (provider_id, model_id), bucket in grouped.items()
         ),
         key=lambda row: (
-            -row.cost_usd,
+            -row.actual_cost_usd,
             -row.message_count,
             row.provider_id,
             row.model_id,
@@ -80,23 +105,35 @@ def summarize_events_by_model(events: Iterable[UsageEvent]) -> list[ModelSummary
     )
 
 
-def summarize_events_by_agent(events: Iterable[UsageEvent]) -> list[AgentSummaryRow]:
-    grouped: dict[str, _UsageBucket] = {}
-    for event in events:
-        agent = event.agent or "unknown"
-        bucket = grouped.setdefault(agent, _UsageBucket())
-        bucket.add(event)
+def summarize_events_by_agent(
+    events: Iterable[UsageEvent],
+    *,
+    costing_config: CostingConfig | None = None,
+) -> list[AgentSummaryRow]:
+    config = costing_config or default_costing_config()
+    grouped: dict[str, _AggregateBucket] = {}
+    for atom in _usage_cost_atom_map(
+        events,
+        key_fn=lambda event: (
+            event.harness,
+            event.provider_id,
+            event.model_id,
+            event.agent or "unknown",
+        ),
+    ).values():
+        bucket = grouped.setdefault(atom.agent, _AggregateBucket())
+        bucket.add_atom(atom, config)
     return sorted(
         (
             AgentSummaryRow(
                 agent=agent,
                 message_count=bucket.message_count,
                 total_tokens=bucket.tokens.total,
-                cost_usd=bucket.cost_usd,
+                costs=bucket.costs,
             )
             for agent, bucket in grouped.items()
         ),
-        key=lambda row: (-row.cost_usd, -row.total_tokens, row.agent),
+        key=lambda row: (-row.actual_cost_usd, -row.total_tokens, row.agent),
     )
 
 
@@ -105,11 +142,25 @@ def summarize_events_by_source_session(
     events: Iterable[UsageEvent],
     *,
     source_paths_by_session: Mapping[str, Iterable[str | Path]] | None = None,
+    costing_config: CostingConfig | None = None,
 ) -> list[SourceSessionSummary]:
+    config = costing_config or default_costing_config()
     grouped: dict[str, _SourceSessionBucket] = {}
     for event in events:
         bucket = grouped.setdefault(event.source_session_id, _SourceSessionBucket())
-        bucket.add(event)
+        bucket.add_event_metadata(event)
+
+    for key, atom in _usage_cost_atom_map(
+        events,
+        key_fn=lambda event: (
+            event.harness,
+            event.source_session_id,
+            event.provider_id,
+            event.model_id,
+        ),
+    ).items():
+        source_session_id = str(key[1])
+        grouped[source_session_id].add_atom(atom, config)
 
     for source_session_id, paths in (source_paths_by_session or {}).items():
         grouped.setdefault(source_session_id, _SourceSessionBucket()).add_paths(paths)
@@ -123,7 +174,7 @@ def summarize_events_by_source_session(
                 last_created_ms=bucket.last_created_ms,
                 assistant_message_count=bucket.message_count,
                 tokens=bucket.tokens,
-                cost_usd=bucket.cost_usd,
+                costs=bucket.costs,
                 models=tuple(sorted(bucket.models)),
                 providers=tuple(sorted(bucket.providers)),
                 source_paths=tuple(sorted(bucket.source_paths)),
@@ -137,15 +188,15 @@ def summarize_events_by_source_session(
 
 
 @dataclass
-class _UsageBucket:
+class _AggregateBucket:
     message_count: int = 0
     tokens: TokenBreakdown = field(default_factory=TokenBreakdown)
-    cost_usd: float = 0.0
+    costs: CostTotals = field(default_factory=CostTotals)
 
-    def add(self, event: UsageEvent) -> None:
-        self.message_count += 1
-        self.tokens = add_tokens(self.tokens, event.tokens)
-        self.cost_usd += event.cost_usd
+    def add_atom(self, atom: UsageCostAtom, config: CostingConfig) -> None:
+        self.message_count += atom.message_count
+        self.tokens = add_tokens(self.tokens, atom.tokens)
+        self.costs = _add_cost_breakdown(self.costs, atom.compute_costs(config))
 
 
 @dataclass
@@ -154,24 +205,83 @@ class _SourceSessionBucket:
     last_created_ms: int = 0
     message_count: int = 0
     tokens: TokenBreakdown = field(default_factory=TokenBreakdown)
-    cost_usd: float = 0.0
+    costs: CostTotals = field(default_factory=CostTotals)
     models: set[str] = field(default_factory=set)
     providers: set[str] = field(default_factory=set)
     source_paths: set[str] = field(default_factory=set)
 
-    def add(self, event: UsageEvent) -> None:
+    def add_event_metadata(self, event: UsageEvent) -> None:
         if self.message_count == 0:
             self.first_created_ms = event.created_ms
             self.last_created_ms = event.created_ms
         else:
             self.first_created_ms = min(self.first_created_ms, event.created_ms)
             self.last_created_ms = max(self.last_created_ms, event.created_ms)
-        self.message_count += 1
-        self.tokens = add_tokens(self.tokens, event.tokens)
-        self.cost_usd += event.cost_usd
         self.models.add(event.model_id)
         self.providers.add(event.provider_id)
+
+    def add_atom(self, atom: UsageCostAtom, config: CostingConfig) -> None:
+        self.message_count += atom.message_count
+        self.tokens = add_tokens(self.tokens, atom.tokens)
+        self.costs = _add_cost_breakdown(self.costs, atom.compute_costs(config))
 
     def add_paths(self, paths: Iterable[str | Path]) -> None:
         for path in paths:
             self.source_paths.add(str(path))
+
+
+def _add_cost_breakdown(costs: CostTotals, breakdown: CostBreakdown) -> CostTotals:
+    return costs.add(
+        source_cost_usd=breakdown.source_cost_usd,
+        actual_cost_usd=breakdown.actual_cost_usd,
+        virtual_cost_usd=breakdown.virtual_cost_usd,
+        unpriced_count=breakdown.unpriced_count,
+    )
+
+
+def _usage_cost_atom_map(
+    events: Iterable[UsageEvent],
+    *,
+    key_fn: Callable[[UsageEvent], tuple[object, ...]],
+) -> dict[tuple[object, ...], UsageCostAtom]:
+    grouped: dict[tuple[object, ...], _CostAtomBucket] = {}
+    for event in events:
+        key = key_fn(event)
+        bucket = grouped.get(key)
+        if bucket is None:
+            bucket = _CostAtomBucket(
+                harness=event.harness,
+                provider_id=event.provider_id,
+                model_id=event.model_id,
+                agent=event.agent or "unknown",
+            )
+            grouped[key] = bucket
+        bucket.add(event)
+    return {key: bucket.as_atom() for key, bucket in grouped.items()}
+
+
+@dataclass
+class _CostAtomBucket:
+    harness: str
+    provider_id: str
+    model_id: str
+    agent: str
+    message_count: int = 0
+    tokens: TokenBreakdown = field(default_factory=TokenBreakdown)
+    source_cost_usd: float = 0.0
+
+    def add(self, event: UsageEvent) -> None:
+        self.message_count += 1
+        self.tokens = add_tokens(self.tokens, event.tokens)
+        self.source_cost_usd += event.source_cost_usd
+
+    def as_atom(self) -> UsageCostAtom:
+        return UsageCostAtom(
+            harness=self.harness,
+            provider_id=self.provider_id,
+            model_id=self.model_id,
+            agent=self.agent,
+            message_count=self.message_count,
+            tokens=self.tokens,
+            source_cost_usd=self.source_cost_usd,
+        )

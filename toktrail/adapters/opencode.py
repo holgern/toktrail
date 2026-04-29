@@ -11,6 +11,7 @@ from urllib.parse import quote
 
 from toktrail.adapters.base import ScanResult, SourceSessionSummary
 from toktrail.adapters.summary import summarize_events_by_source_session
+from toktrail.config import CostingConfig
 from toktrail.models import TokenBreakdown, UsageEvent
 
 OPENCODE_HARNESS = "opencode"
@@ -94,16 +95,20 @@ def parse_opencode_sqlite(db_path: Path) -> list[UsageEvent]:
     return scan_opencode_sqlite(db_path).events
 
 
-def list_opencode_sessions(db_path: Path) -> list[SourceSessionSummary]:
+def list_opencode_sessions(
+    db_path: Path,
+    *,
+    costing_config: CostingConfig | None = None,
+) -> list[SourceSessionSummary]:
     scan = scan_opencode_sqlite(db_path, include_raw_json=False)
     source_paths = {
-        event.source_session_id: [scan.source_path]
-        for event in scan.events
+        event.source_session_id: [scan.source_path] for event in scan.events
     }
     return summarize_events_by_source_session(
         OPENCODE_HARNESS,
         scan.events,
         source_paths_by_session=source_paths,
+        costing_config=costing_config,
     )
 
 
