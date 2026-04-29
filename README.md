@@ -134,11 +134,13 @@ The canonical CLI flow is:
 toktrail init
 toktrail config init
 toktrail start --name <name>
+toktrail sources
 toktrail import
 toktrail status
 toktrail usage today
 toktrail sessions
 toktrail sessions <harness>
+toktrail pricing list --missing-only
 toktrail stop
 ```
 
@@ -189,7 +191,16 @@ toktrail sessions droid
 toktrail sessions amp
 ```
 
-Inspect and manage pricing config:
+Discover configured source paths before importing:
+
+```bash
+toktrail sources
+toktrail sources --harness opencode
+toktrail sources --harness opencode --source /path/to/opencode.db
+toktrail sources --json
+```
+
+Inspect and manage pricing config and used model pricing:
 
 ```bash
 toktrail config path
@@ -200,6 +211,9 @@ toktrail config prices
 toktrail config prices --provider openai --sort model
 toktrail config prices --query gpt-5 --aliases
 toktrail config prices --model gpt-5-mini --json
+toktrail pricing list
+toktrail pricing list --used-only
+toktrail pricing list --missing-only
 toktrail config validate
 toktrail --config /path/to/config.toml status --json
 ```
@@ -466,6 +480,7 @@ Example workflow:
 toktrail config init --template copilot
 toktrail import copilot --copilot-file ~/.copilot/otel/copilot-otel-20260429-090000.jsonl
 toktrail status --price-state unpriced --sort tokens --limit 20
+toktrail pricing list --missing-only
 toktrail config prices --query gpt-5 --json
 toktrail sessions copilot --sort savings --columns source_session_id,actual,virtual,savings
 ```

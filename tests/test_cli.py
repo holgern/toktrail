@@ -382,6 +382,68 @@ def test_cli_opencode_sessions_lists_source_sessions(tmp_path) -> None:
     assert "2023-" in result.output
 
 
+def test_cli_sources_lists_filtered_source(tmp_path) -> None:
+    runner = CliRunner()
+    source_db = tmp_path / "opencode.db"
+    create_source_db(source_db)
+
+    result = runner.invoke(
+        app,
+        [
+            "sources",
+            "--harness",
+            "opencode",
+            "--source",
+            str(source_db),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload == [
+        {
+            "harness": "opencode",
+            "source_path": str(source_db),
+            "exists": True,
+            "sessions": 1,
+            "messages": 1,
+            "tokens": 1850,
+            "warning": "",
+        }
+    ]
+
+
+def test_cli_sources_reports_missing_configured_source(tmp_path) -> None:
+    runner = CliRunner()
+    config_path = tmp_path / "toktrail.toml"
+    missing_db = tmp_path / "missing.db"
+    config_path.write_text(
+        f"""
+config_version = 1
+
+[imports]
+harnesses = ["opencode"]
+
+[imports.sources]
+opencode = "{missing_db}"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(
+        app,
+        ["--config", str(config_path), "sources", "--json"],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload[0]["harness"] == "opencode"
+    assert payload[0]["exists"] is False
+    assert payload[0]["sessions"] == 0
+    assert "OpenCode database not found" in payload[0]["warning"]
+
+
 def test_cli_watch_opencode_exits_cleanly_on_ctrl_c(tmp_path, monkeypatch) -> None:
     runner = CliRunner()
     state_db = tmp_path / "toktrail.db"
@@ -1417,6 +1479,71 @@ def test_cli_usage_supports_price_state_sort_limit(tmp_path) -> None:
     assert payload["display_filters"]["limit"] == 1
     assert [row["model_id"] for row in payload["by_model"]] == ["gpt-5.2-codex"]
     assert payload["totals"]["total"] == 2300
+
+
+def test_cli_pricing_list_used_only_reports_used_models(tmp_path) -> None:
+    runner, state_db, config_path = setup_pricing_status_fixture(tmp_path)
+
+    result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "--config",
+            str(config_path),
+            "pricing",
+            "list",
+            "--used-only",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert [row["provider_id"] for row in payload] == ["anthropic", "openai-codex"]
+    assert [row["model_id"] for row in payload] == [
+        "claude-sonnet-4",
+        "gpt-5.2-codex",
+    ]
+
+
+def test_cli_pricing_list_missing_only_reports_unconfigured_used_models(
+    tmp_path,
+) -> None:
+    runner, state_db, config_path = setup_pricing_status_fixture(tmp_path)
+
+    result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "--config",
+            str(config_path),
+            "pricing",
+            "list",
+            "--missing-only",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload == [
+        {
+            "required": ["virtual"],
+            "harness": "opencode",
+            "provider_id": "openai-codex",
+            "model_id": "gpt-5.2-codex",
+            "thinking_level": None,
+            "message_count": 1,
+            "input": 400,
+            "output": 40,
+            "reasoning": 10,
+            "cache_read": 0,
+            "cache_write": 0,
+            "total": 450,
+        }
+    ]
 
 
 def test_cli_status_rejects_invalid_display_filter_values(tmp_path) -> None:

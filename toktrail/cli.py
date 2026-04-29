@@ -22,12 +22,15 @@ from toktrail.adapters.summary import (
 from toktrail.api.environment import prepare_environment as prepare_api_environment
 from toktrail.api.imports import import_configured_usage as import_configured_usage_api
 from toktrail.api.models import ImportUsageResult
+from toktrail.api.sources import capture_source_snapshot
 from toktrail.config import (
     DEFAULT_TEMPLATE_NAME,
     CostingConfig,
     LoadedCostingConfig,
+    LoadedToktrailConfig,
     Price,
     load_resolved_costing_config,
+    load_resolved_toktrail_config,
     normalize_identity,
     render_config_template,
     summarize_costing_config,
@@ -70,12 +73,14 @@ sessions_app = typer.Typer(
 )
 copilot_app = typer.Typer(help="Inspect and run GitHub Copilot CLI tracking.")
 config_app = typer.Typer(help="Inspect toktrail pricing config.")
+pricing_app = typer.Typer(help="Inspect configured and used model pricing.")
 
 app.add_typer(import_app, name="import")
 app.add_typer(watch_app, name="watch")
 app.add_typer(sessions_app, name="sessions")
 app.add_typer(copilot_app, name="copilot")
 app.add_typer(config_app, name="config")
+app.add_typer(pricing_app, name="pricing")
 
 _VALID_REPORT_PRICE_STATES = {"all", "priced", "unpriced"}
 _VALID_REPORT_SORTS = {
@@ -685,6 +690,170 @@ def config_prices(
         typer.echo(json.dumps(rows, indent=2))
         return
     _print_price_table(rows, aliases=aliases, rich_output=False)
+
+
+@app.command("sources")
+def sources(
+    ctx: typer.Context,
+    harnesses: HarnessesOption = None,
+    source_path: SourcePathOption = None,
+    json_output: JsonOption = False,
+) -> None:
+    loaded = _load_resolved_toktrail_config_or_exit(ctx)
+    selected_harnesses = tuple(harnesses or loaded.config.imports.harnesses)
+    configured_sources = loaded.config.imports.sources or {}
+    if source_path is not None and len(selected_harnesses) != 1:
+        _exit_with_error("--source can only be used with exactly one --harness.")
+
+    rows: list[dict[str, object]] = []
+    for harness in sorted(selected_harnesses):
+        try:
+            snapshot = capture_source_snapshot(
+                harness,
+                source_path=source_path or configured_sources.get(harness),
+                config_path=loaded.path,
+            )
+        except (OSError, ValueError, ToktrailError) as exc:
+            rows.append(
+                {
+                    "harness": harness,
+                    "source_path": str(source_path or ""),
+                    "exists": False,
+                    "sessions": 0,
+                    "messages": 0,
+                    "tokens": 0,
+                    "warning": str(exc),
+                }
+            )
+            continue
+        resolved = snapshot.source_path
+        exists = bool(resolved is not None and resolved.exists())
+        rows.append(
+            {
+                "harness": harness,
+                "source_path": str(resolved) if resolved is not None else "",
+                "exists": exists,
+                "sessions": len(snapshot.sessions),
+                "messages": sum(
+                    summary.assistant_message_count for summary in snapshot.sessions
+                ),
+                "tokens": sum(summary.tokens.total for summary in snapshot.sessions),
+                "warning": "" if exists else "source not found",
+            }
+        )
+
+    if json_output:
+        typer.echo(json.dumps(rows, indent=2))
+        return
+
+    payload_rows = [
+        {
+            "harness": str(row["harness"]),
+            "exists": "yes" if row["exists"] else "no",
+            "sessions": _format_int(int(row["sessions"])),
+            "messages": _format_int(int(row["messages"])),
+            "tokens": _format_int(int(row["tokens"])),
+            "source_path": str(row["source_path"]),
+            "warning": str(row["warning"]),
+        }
+        for row in rows
+    ]
+    _print_table(
+        payload_rows,
+        [
+            "harness",
+            "exists",
+            "sessions",
+            "messages",
+            "tokens",
+            "source_path",
+            "warning",
+        ],
+        {
+            "harness": "harness",
+            "exists": "exists",
+            "sessions": "sessions",
+            "messages": "messages",
+            "tokens": "tokens",
+            "source_path": "source_path",
+            "warning": "warning",
+        },
+        rich_output=False,
+    )
+
+
+@pricing_app.command("list")
+def pricing_list(
+    ctx: typer.Context,
+    used_only: Annotated[bool, typer.Option("--used-only")] = False,
+    missing_only: Annotated[bool, typer.Option("--missing-only")] = False,
+    table: PriceTableOption = "virtual",
+    provider: ProviderOption = None,
+    model: ModelOption = None,
+    query: PriceQueryOption = None,
+    category: CategoryOption = None,
+    release_status: ReleaseStatusOption = None,
+    sort: PriceSortOption = "provider",
+    limit: ReportLimitOption = None,
+    aliases: AliasesOption = False,
+    json_output: JsonOption = False,
+    rich_output: RichOption = False,
+) -> None:
+    if used_only and missing_only:
+        _exit_with_error("Use either --used-only or --missing-only, not both.")
+    if used_only or missing_only:
+        costing_config = _load_costing_config_or_exit(ctx)
+        conn = _open_toktrail_connection(ctx)
+        try:
+            report = summarize_usage(
+                conn,
+                UsageReportFilter(tracking_session_id=None),
+                costing_config=costing_config,
+            )
+        finally:
+            conn.close()
+        if missing_only:
+            rows = _filter_unconfigured_models(
+                report.unconfigured_models,
+                price_state="unpriced",
+                min_messages=None,
+                min_tokens=None,
+            )
+            if json_output:
+                typer.echo(json.dumps([row.as_dict() for row in rows], indent=2))
+                return
+            _print_unconfigured_model_table(rows, rich_output=rich_output)
+            return
+        model_rows = _filter_model_rows(
+            report.by_model,
+            price_state="all",
+            min_messages=None,
+            min_tokens=None,
+            sort="provider",
+            limit=limit,
+        )
+        if json_output:
+            typer.echo(json.dumps([row.as_dict() for row in model_rows], indent=2))
+            return
+        _print_model_table(model_rows, rich_output=rich_output)
+        return
+
+    loaded = _load_resolved_costing_config_or_exit(ctx)
+    filters = _normalize_price_display_filter(
+        table=table,
+        provider=provider,
+        model=model,
+        query=query,
+        category=category,
+        release_status=release_status,
+        sort=sort,
+        limit=limit,
+    )
+    rows = _filter_price_rows(_price_rows(loaded.config, filters.table), filters)
+    if json_output:
+        typer.echo(json.dumps(rows, indent=2))
+        return
+    _print_price_table(rows, aliases=aliases, rich_output=rich_output)
 
 
 @sessions_app.callback(invoke_without_command=True)
@@ -2480,6 +2649,13 @@ def _resolve_config_path(ctx: typer.Context) -> Path:
 def _load_resolved_costing_config_or_exit(ctx: typer.Context) -> LoadedCostingConfig:
     try:
         return load_resolved_costing_config(_resolve_config_path(ctx))
+    except ValueError as exc:
+        _exit_with_error(str(exc))
+
+
+def _load_resolved_toktrail_config_or_exit(ctx: typer.Context) -> LoadedToktrailConfig:
+    try:
+        return load_resolved_toktrail_config(_resolve_config_path(ctx))
     except ValueError as exc:
         _exit_with_error(str(exc))
 
