@@ -2,6 +2,23 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from toktrail.config import normalize_identity
+
+
+def normalize_thinking_level(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    stripped = value.strip()
+    if not stripped:
+        return None
+    try:
+        normalized = normalize_identity(stripped)
+    except ValueError:
+        return None
+    if normalized in {"unknown", "default"}:
+        return None
+    return normalized
+
 
 @dataclass(frozen=True)
 class TokenBreakdown:
@@ -43,6 +60,7 @@ class UsageEvent:
     fingerprint_hash: str
     provider_id: str
     model_id: str
+    thinking_level: str | None
     agent: str | None
     created_ms: int
     completed_ms: int | None

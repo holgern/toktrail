@@ -93,6 +93,10 @@ Key public models:
 - `HarnessEnvironment`
 - `PreparedManualRun`, `FinalizedManualRun`
 
+`UsageEvent` and `ModelSummaryRow` expose `thinking_level` when the source
+harness provides it. This is reporting metadata only; pricing still keys on
+provider and model identity.
+
 All public dataclasses are frozen.
 
 ## Errors
@@ -137,23 +141,35 @@ The API does not collapse these into a single cost field.
 Report and source-summary APIs accept `config_path` so callers can choose the
 pricing config used for actual and virtual costs.
 
+Provider identity is strict: when a usage event already has an explicit provider,
+toktrail does not fall back to inferred provider aliases from the model name.
+
 ## Session and import APIs
 
 ```python
 from pathlib import Path
 
 from toktrail.api.imports import import_usage
-from toktrail.api.reports import session_report
+from toktrail.api.reports import session_report, usage_report
 from toktrail.api.sessions import init_state, start_session
 
 db_path = Path(".toktrail/toktrail.db")
 source_path = Path("tests/fixtures/opencode.db")
 
 init_state(db_path)
+result = import_usage(db_path, "opencode", source_path=source_path)
 session = start_session(db_path, name="benchmark-1")
 result = import_usage(db_path, "opencode", session_id=session.id, source_path=source_path)
 report = session_report(db_path, session.id)
+window = usage_report(db_path, period="today", timezone="UTC")
 ```
+
+`import_usage()` can import canonical usage rows without an active session. A
+later import into a specific tracking session links existing canonical rows to
+that session idempotently instead of duplicating them.
+
+`usage_report()` no longer requires `session_id`. When used for canonical
+period/time-range reporting, it returns `TrackingSessionReport(session=None, ...)`.
 
 ## Manual workflow API
 

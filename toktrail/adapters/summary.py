@@ -37,7 +37,12 @@ def summarize_event_totals(
     costs = CostTotals()
     for atom in _usage_cost_atom_map(
         events,
-        key_fn=lambda event: (event.harness, event.provider_id, event.model_id),
+        key_fn=lambda event: (
+            event.harness,
+            event.provider_id,
+            event.model_id,
+            event.thinking_level,
+        ),
     ).values():
         tokens = add_tokens(tokens, atom.tokens)
         costs = _add_cost_breakdown(costs, atom.compute_costs(config))
@@ -53,7 +58,12 @@ def summarize_events_by_harness(
     grouped: dict[str, _AggregateBucket] = {}
     for atom in _usage_cost_atom_map(
         events,
-        key_fn=lambda event: (event.harness, event.provider_id, event.model_id),
+        key_fn=lambda event: (
+            event.harness,
+            event.provider_id,
+            event.model_id,
+            event.thinking_level,
+        ),
     ).values():
         bucket = grouped.setdefault(atom.harness, _AggregateBucket())
         bucket.add_atom(atom, config)
@@ -75,14 +85,24 @@ def summarize_events_by_model(
     events: Iterable[UsageEvent],
     *,
     costing_config: CostingConfig | None = None,
+    split_thinking: bool = True,
 ) -> list[ModelSummaryRow]:
     config = costing_config or default_costing_config()
-    grouped: dict[tuple[str, str], _AggregateBucket] = {}
+    grouped: dict[tuple[str, str, str | None], _AggregateBucket] = {}
     for atom in _usage_cost_atom_map(
         events,
-        key_fn=lambda event: (event.harness, event.provider_id, event.model_id),
+        key_fn=lambda event: (
+            event.harness,
+            event.provider_id,
+            event.model_id,
+            event.thinking_level if split_thinking else None,
+        ),
     ).values():
-        key = (atom.provider_id, atom.model_id)
+        key = (
+            atom.provider_id,
+            atom.model_id,
+            atom.thinking_level if split_thinking else None,
+        )
         bucket = grouped.setdefault(key, _AggregateBucket())
         bucket.add_atom(atom, config)
     return sorted(
@@ -90,17 +110,19 @@ def summarize_events_by_model(
             ModelSummaryRow(
                 provider_id=provider_id,
                 model_id=model_id,
+                thinking_level=thinking_level,
                 message_count=bucket.message_count,
                 tokens=bucket.tokens,
                 costs=bucket.costs,
             )
-            for (provider_id, model_id), bucket in grouped.items()
+            for (provider_id, model_id, thinking_level), bucket in grouped.items()
         ),
         key=lambda row: (
             -row.actual_cost_usd,
             -row.message_count,
             row.provider_id,
             row.model_id,
+            row.thinking_level or "",
         ),
     )
 
@@ -118,6 +140,7 @@ def summarize_events_by_agent(
             event.harness,
             event.provider_id,
             event.model_id,
+            event.thinking_level,
             event.agent or "unknown",
         ),
     ).values():
@@ -157,6 +180,7 @@ def summarize_events_by_source_session(
             event.source_session_id,
             event.provider_id,
             event.model_id,
+            event.thinking_level,
         ),
     ).items():
         source_session_id = str(key[1])
@@ -253,6 +277,7 @@ def _usage_cost_atom_map(
                 harness=event.harness,
                 provider_id=event.provider_id,
                 model_id=event.model_id,
+                thinking_level=event.thinking_level,
                 agent=event.agent or "unknown",
             )
             grouped[key] = bucket
@@ -265,6 +290,7 @@ class _CostAtomBucket:
     harness: str
     provider_id: str
     model_id: str
+    thinking_level: str | None
     agent: str
     message_count: int = 0
     tokens: TokenBreakdown = field(default_factory=TokenBreakdown)
@@ -280,6 +306,7 @@ class _CostAtomBucket:
             harness=self.harness,
             provider_id=self.provider_id,
             model_id=self.model_id,
+            thinking_level=self.thinking_level,
             agent=self.agent,
             message_count=self.message_count,
             tokens=self.tokens,

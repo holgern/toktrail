@@ -21,10 +21,29 @@ class CostBreakdown:
 
 
 @dataclass(frozen=True)
+class PriceResolution:
+    actual_mode: ActualCostMode
+    actual_price: Price | None
+    virtual_price: Price | None
+    missing_actual_price: bool
+    missing_virtual_price: bool
+
+    @property
+    def missing_kinds(self) -> tuple[str, ...]:
+        kinds: list[str] = []
+        if self.missing_actual_price:
+            kinds.append("actual")
+        if self.missing_virtual_price:
+            kinds.append("virtual")
+        return tuple(kinds)
+
+
+@dataclass(frozen=True)
 class UsageCostAtom:
     harness: str
     provider_id: str
     model_id: str
+    thinking_level: str | None
     agent: str
     message_count: int
     tokens: TokenBreakdown
@@ -108,6 +127,35 @@ def resolve_actual_mode(
     )
 
 
+def resolve_price_resolution(
+    *,
+    harness: str,
+    provider_id: str,
+    model_id: str,
+    config: CostingConfig,
+) -> PriceResolution:
+    actual_mode = resolve_actual_mode(harness, provider_id, model_id, config)
+    actual_price = None
+    missing_actual_price = False
+    if actual_mode == "pricing":
+        actual_price = resolve_price(provider_id, model_id, config.actual_prices)
+        missing_actual_price = actual_price is None
+
+    virtual_price = None
+    missing_virtual_price = False
+    if config.default_virtual_mode == "pricing":
+        virtual_price = resolve_price(provider_id, model_id, config.virtual_prices)
+        missing_virtual_price = virtual_price is None
+
+    return PriceResolution(
+        actual_mode=actual_mode,
+        actual_price=actual_price,
+        virtual_price=virtual_price,
+        missing_actual_price=missing_actual_price,
+        missing_virtual_price=missing_virtual_price,
+    )
+
+
 def compute_costs(
     *,
     harness: str,
@@ -118,42 +166,40 @@ def compute_costs(
     message_count: int,
     config: CostingConfig,
 ) -> CostBreakdown:
-    actual_mode = resolve_actual_mode(harness, provider_id, model_id, config)
+    resolution = resolve_price_resolution(
+        harness=harness,
+        provider_id=provider_id,
+        model_id=model_id,
+        config=config,
+    )
     actual_cost_usd = source_cost_usd
     virtual_cost_usd = 0.0
-    missing_price = False
 
-    if actual_mode == "zero":
+    if resolution.actual_mode == "zero":
         actual_cost_usd = 0.0
-    elif actual_mode == "pricing":
-        actual_price = resolve_price(provider_id, model_id, config.actual_prices)
-        if actual_price is None:
+    elif resolution.actual_mode == "pricing":
+        if resolution.actual_price is None:
             actual_cost_usd = 0.0
-            missing_price = True
         else:
-            actual_cost_usd = cost_from_price(tokens, actual_price)
+            actual_cost_usd = cost_from_price(tokens, resolution.actual_price)
 
-    if config.default_virtual_mode == "pricing":
-        virtual_price = resolve_price(provider_id, model_id, config.virtual_prices)
-        if virtual_price is None:
-            missing_price = True
-        else:
-            virtual_cost_usd = cost_from_price(tokens, virtual_price)
+    if resolution.virtual_price is not None:
+        virtual_cost_usd = cost_from_price(tokens, resolution.virtual_price)
 
     return CostBreakdown(
         source_cost_usd=source_cost_usd,
         actual_cost_usd=actual_cost_usd,
         virtual_cost_usd=virtual_cost_usd,
-        unpriced_count=1 if missing_price and message_count > 0 else 0,
+        unpriced_count=1 if resolution.missing_kinds and message_count > 0 else 0,
     )
 
 
 def _provider_candidates(provider_id: str, model_id: str) -> tuple[str, ...]:
-    candidates: list[str] = []
     normalized_provider = provider_id.strip().lower()
     if normalized_provider and normalized_provider != "unknown":
-        normalized_provider = normalize_price_key(provider_id)
-        candidates.append(normalized_provider)
+        return (normalize_price_key(provider_id),)
+
+    candidates: list[str] = []
     inferred_provider = inferred_provider_from_model(model_id)
     if inferred_provider is not None:
         normalized_inferred = normalize_price_key(inferred_provider)

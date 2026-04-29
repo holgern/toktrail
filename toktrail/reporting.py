@@ -48,9 +48,11 @@ class UsageReportFilter:
     source_session_id: str | None = None
     provider_id: str | None = None
     model_id: str | None = None
+    thinking_level: str | None = None
     agent: str | None = None
     since_ms: int | None = None
     until_ms: int | None = None
+    split_thinking: bool = True
 
     def as_dict(
         self,
@@ -68,12 +70,16 @@ class UsageReportFilter:
             values["provider_id"] = self.provider_id
         if self.model_id is not None:
             values["model_id"] = self.model_id
+        if self.thinking_level is not None:
+            values["thinking_level"] = self.thinking_level
         if self.agent is not None:
             values["agent"] = self.agent
         if self.since_ms is not None:
             values["since_ms"] = self.since_ms
         if self.until_ms is not None:
             values["until_ms"] = self.until_ms
+        if not self.split_thinking:
+            values["split_thinking"] = False
         return values
 
 
@@ -154,6 +160,7 @@ class HarnessSummaryRow:
 class ModelSummaryRow:
     provider_id: str
     model_id: str
+    thinking_level: str | None
     message_count: int
     tokens: TokenBreakdown
     costs: CostTotals
@@ -182,10 +189,11 @@ class ModelSummaryRow:
     def unpriced_count(self) -> int:
         return self.costs.unpriced_count
 
-    def as_dict(self) -> dict[str, int | float | str]:
+    def as_dict(self) -> dict[str, int | float | str | None]:
         return {
             "provider_id": self.provider_id,
             "model_id": self.model_id,
+            "thinking_level": self.thinking_level,
             "message_count": self.message_count,
             **self.tokens.as_dict(),
             **self.costs.as_dict(),
@@ -230,7 +238,7 @@ class AgentSummaryRow:
 
 @dataclass(frozen=True)
 class TrackingSessionReport:
-    session: TrackingSession
+    session: TrackingSession | None
     totals: SessionTotals
     by_harness: list[HarnessSummaryRow]
     by_model: list[ModelSummaryRow]
@@ -239,7 +247,9 @@ class TrackingSessionReport:
 
     def as_dict(self) -> dict[str, object]:
         return {
-            "session": {
+            "session": None
+            if self.session is None
+            else {
                 "id": self.session.id,
                 "name": self.session.name,
                 "started_at_ms": self.session.started_at_ms,

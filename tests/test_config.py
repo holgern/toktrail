@@ -6,6 +6,7 @@ from toktrail.config import (
     COPILOT_TEMPLATE_NAME,
     Price,
     load_costing_config,
+    load_toktrail_config,
     normalize_identity,
     render_config_template,
 )
@@ -37,6 +38,18 @@ def test_load_costing_config_parses_minimal_config(tmp_path) -> None:
     assert config.default_virtual_mode == "pricing"
     assert config.missing_price == "warn"
     assert [rule.mode for rule in config.actual_rules] == ["source", "zero", "zero"]
+
+
+def test_load_toktrail_config_parses_import_settings(tmp_path) -> None:
+    config_path = tmp_path / "toktrail.toml"
+    config_path.write_text(render_config_template(), encoding="utf-8")
+
+    config = load_toktrail_config(config_path)
+
+    assert config.imports.harnesses == ("opencode", "pi", "copilot")
+    assert config.imports.missing_source == "warn"
+    assert config.imports.include_raw_json is False
+    assert config.imports.sources["opencode"].name == "opencode.db"
 
 
 def test_load_costing_config_parses_copilot_template(tmp_path) -> None:

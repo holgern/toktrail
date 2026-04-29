@@ -6,12 +6,11 @@ from copy import deepcopy
 import pytest
 
 from tests.helpers import VALID_ASSISTANT, create_opencode_db, insert_message
-from toktrail.api.imports import import_usage
+from toktrail.api.imports import import_configured_usage, import_usage
 from toktrail.api.reports import session_report
 from toktrail.api.sessions import init_state, start_session
 from toktrail.errors import (
     InvalidAPIUsageError,
-    NoActiveSessionError,
     SessionNotFoundError,
 )
 
@@ -34,14 +33,16 @@ def test_import_usage_defaults_to_active_session_and_is_idempotent(tmp_path) -> 
     assert report.totals.tokens.total == 3900
 
 
-def test_import_usage_missing_sessions_raise(tmp_path) -> None:
+def test_import_usage_without_active_session_imports_unscoped_events(tmp_path) -> None:
     state_db = tmp_path / "toktrail.db"
     source_db = tmp_path / "opencode.db"
     _create_opencode_messages(source_db)
     init_state(state_db)
 
-    with pytest.raises(NoActiveSessionError, match="active tracking session"):
-        import_usage(state_db, "opencode", source_path=source_db)
+    result = import_usage(state_db, "opencode", source_path=source_db)
+
+    assert result.tracking_session_id is None
+    assert result.rows_imported == 2
     with pytest.raises(SessionNotFoundError, match="Tracking session not found"):
         import_usage(state_db, "opencode", session_id=999, source_path=source_db)
 
@@ -111,6 +112,81 @@ def test_import_usage_include_raw_json_false_stores_no_raw_json(tmp_path) -> Non
     assert result.events_skipped == 0
     assert row is not None
     assert row[0] == 2
+
+
+def test_import_usage_can_ignore_active_session_when_requested(tmp_path) -> None:
+    state_db = tmp_path / "toktrail.db"
+    source_db = tmp_path / "opencode.db"
+    _create_opencode_messages(source_db)
+    init_state(state_db)
+    start_session(state_db, name="active")
+
+    result = import_usage(
+        state_db,
+        "opencode",
+        source_path=source_db,
+        use_active_session=False,
+    )
+
+    assert result.tracking_session_id is None
+    assert result.rows_imported == 2
+
+
+def test_import_configured_usage_imports_all_configured_harnesses(tmp_path) -> None:
+    state_db = tmp_path / "toktrail.db"
+    source_db = tmp_path / "opencode.db"
+    _create_opencode_messages(source_db)
+    config_path = tmp_path / "toktrail.toml"
+    config_path.write_text(
+        f"""
+config_version = 1
+
+[imports]
+harnesses = ["opencode", "pi"]
+missing_source = "warn"
+include_raw_json = false
+
+[imports.sources]
+opencode = "{source_db}"
+pi = "{tmp_path / 'missing-pi'}"
+""".strip(),
+        encoding="utf-8",
+    )
+    init_state(state_db)
+
+    results = import_configured_usage(state_db, config_path=config_path)
+
+    assert [
+        (result.harness, result.status, result.rows_imported) for result in results
+    ] == [
+        ("opencode", "ok", 2),
+        ("pi", "skipped", 0),
+    ]
+
+
+def test_later_session_import_links_existing_unscoped_events_without_duplicates(
+    tmp_path,
+) -> None:
+    state_db = tmp_path / "toktrail.db"
+    source_db = tmp_path / "opencode.db"
+    _create_opencode_messages(source_db)
+    init_state(state_db)
+
+    first = import_usage(state_db, "opencode", source_path=source_db)
+    session = start_session(state_db, name="linked")
+    second = import_usage(
+        state_db,
+        "opencode",
+        session_id=session.id,
+        source_path=source_db,
+    )
+    report = session_report(state_db, session.id)
+
+    assert first.tracking_session_id is None
+    assert first.rows_imported == 2
+    assert second.rows_imported == 0
+    assert second.rows_linked == 2
+    assert report.totals.tokens.total == 3900
 
 
 def _create_opencode_messages(path) -> None:

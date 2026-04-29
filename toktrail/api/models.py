@@ -125,6 +125,7 @@ class UsageEvent:
     fingerprint_hash: str
     provider_id: str
     model_id: str
+    thinking_level: str | None
     agent: str | None
     created_ms: int
     completed_ms: int | None
@@ -146,6 +147,7 @@ class UsageEvent:
             "fingerprint_hash": self.fingerprint_hash,
             "provider_id": self.provider_id,
             "model_id": self.model_id,
+            "thinking_level": self.thinking_level,
             "agent": self.agent,
             "created_ms": self.created_ms,
             "completed_ms": self.completed_ms,
@@ -290,9 +292,9 @@ class HarnessDefinition:
 
 @dataclass(frozen=True)
 class ImportUsageResult:
-    tracking_session_id: int
+    tracking_session_id: int | None
     harness: str
-    source_path: Path
+    source_path: Path | None
     source_session_id: str | None
     rows_seen: int
     rows_imported: int
@@ -304,19 +306,25 @@ class ImportUsageResult:
     since_ms: int | None = None
     first_event_ms: int | None = None
     last_event_ms: int | None = None
+    rows_linked: int = 0
+    status: str = "ok"
+    error_message: str | None = None
 
     def as_dict(self) -> dict[str, object]:
         return {
             "tracking_session_id": self.tracking_session_id,
             "harness": self.harness,
-            "source_path": str(self.source_path),
+            "source_path": _path_text(self.source_path),
             "source_session_id": self.source_session_id,
             "rows_seen": self.rows_seen,
             "rows_imported": self.rows_imported,
+            "rows_linked": self.rows_linked,
             "rows_skipped": self.rows_skipped,
             "events_seen": self.events_seen,
             "events_imported": self.events_imported,
             "events_skipped": self.events_skipped,
+            "status": self.status,
+            "error_message": self.error_message,
             "files_seen": self.files_seen,
             "since_ms": self.since_ms,
             "first_event_ms": self.first_event_ms,
@@ -358,6 +366,7 @@ class HarnessSummaryRow:
 class ModelSummaryRow:
     provider_id: str
     model_id: str
+    thinking_level: str | None
     message_count: int
     tokens: TokenBreakdown
     costs: CostTotals
@@ -370,6 +379,7 @@ class ModelSummaryRow:
         return {
             "provider_id": self.provider_id,
             "model_id": self.model_id,
+            "thinking_level": self.thinking_level,
             "message_count": self.message_count,
             **self.tokens.as_dict(),
             **self.costs.as_dict(),

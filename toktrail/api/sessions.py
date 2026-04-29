@@ -47,7 +47,11 @@ def start_session(
     if session is None:
         msg = f"Tracking session not found after creation: {session_id}"
         raise StateDatabaseError(msg)
-    return _to_public_tracking_session(session)
+    public_session = _to_public_tracking_session(session)
+    if public_session is None:
+        msg = f"Tracking session not found after creation: {session_id}"
+        raise StateDatabaseError(msg)
+    return public_session
 
 
 def stop_session(
@@ -86,7 +90,11 @@ def stop_session(
     if updated is None:
         msg = f"Tracking session not found after stop: {selected_session_id}"
         raise StateDatabaseError(msg)
-    return _to_public_tracking_session(updated)
+    public_session = _to_public_tracking_session(updated)
+    if public_session is None:
+        msg = f"Tracking session not found after stop: {selected_session_id}"
+        raise StateDatabaseError(msg)
+    return public_session
 
 
 def get_active_session(db_path: Path | None) -> TrackingSession | None:
@@ -101,7 +109,11 @@ def get_active_session(db_path: Path | None) -> TrackingSession | None:
     if session is None:
         msg = f"Tracking session not found: {session_id}"
         raise StateDatabaseError(msg)
-    return _to_public_tracking_session(session)
+    public_session = _to_public_tracking_session(session)
+    if public_session is None:
+        msg = f"Tracking session not found: {session_id}"
+        raise StateDatabaseError(msg)
+    return public_session
 
 
 def require_active_session(db_path: Path | None) -> TrackingSession:
@@ -121,7 +133,11 @@ def get_session(db_path: Path | None, session_id: int) -> TrackingSession:
     if session is None:
         msg = f"Tracking session not found: {session_id}"
         raise SessionNotFoundError(msg)
-    return _to_public_tracking_session(session)
+    public_session = _to_public_tracking_session(session)
+    if public_session is None:
+        msg = f"Tracking session not found: {session_id}"
+        raise StateDatabaseError(msg)
+    return public_session
 
 
 def list_sessions(
@@ -136,7 +152,10 @@ def list_sessions(
     finally:
         conn.close()
     public_sessions = tuple(
-        _to_public_tracking_session(session) for session in sessions
+        public_session
+        for session in sessions
+        for public_session in (_to_public_tracking_session(session),)
+        if public_session is not None
     )
     if not include_ended:
         public_sessions = tuple(

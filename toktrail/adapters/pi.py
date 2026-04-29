@@ -10,7 +10,7 @@ from pathlib import Path
 from toktrail.adapters.base import ScanResult, SourceSessionSummary
 from toktrail.adapters.summary import summarize_events_by_source_session
 from toktrail.config import CostingConfig
-from toktrail.models import TokenBreakdown, UsageEvent
+from toktrail.models import TokenBreakdown, UsageEvent, normalize_thinking_level
 
 PI_HARNESS = "pi"
 
@@ -206,6 +206,7 @@ def _parse_pi_entry_line(
     provider_id = _as_str(message.get("provider"))
     if provider_id is None:
         return None
+    thinking_level = _thinking_level(message)
 
     created_ms = _parse_rfc3339_ms(entry.get("timestamp")) or fallback_timestamp
     source_message_id = _as_str(entry.get("id"))
@@ -229,6 +230,7 @@ def _parse_pi_entry_line(
         fingerprint_hash="",
         provider_id=provider_id,
         model_id=model_id,
+        thinking_level=thinking_level,
         agent=None,
         created_ms=created_ms,
         completed_ms=None,
@@ -319,6 +321,32 @@ def _make_fingerprint(event: UsageEvent) -> str:
         "cache_write": event.tokens.cache_write,
         "cost_usd": event.cost_usd,
         "agent": event.agent,
+        "thinking_level": event.thinking_level,
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _thinking_level(message: dict[str, object]) -> str | None:
+    for key in (
+        "reasoningEffort",
+        "reasoning_effort",
+        "thinkingLevel",
+        "thinking_level",
+    ):
+        normalized = normalize_thinking_level(message.get(key))
+        if normalized is not None:
+            return normalized
+    metadata = message.get("metadata")
+    if not isinstance(metadata, dict):
+        return None
+    for key in (
+        "reasoningEffort",
+        "reasoning_effort",
+        "thinkingLevel",
+        "thinking_level",
+    ):
+        normalized = normalize_thinking_level(metadata.get(key))
+        if normalized is not None:
+            return normalized
+    return None

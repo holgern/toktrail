@@ -61,7 +61,11 @@ def _to_public_cost_totals(value: InternalCostTotals) -> CostTotals:
     )
 
 
-def _to_public_tracking_session(value: InternalTrackingSession) -> TrackingSession:
+def _to_public_tracking_session(
+    value: InternalTrackingSession | None,
+) -> TrackingSession | None:
+    if value is None:
+        return None
     return TrackingSession(
         id=value.id,
         name=value.name,
@@ -85,6 +89,7 @@ def _to_public_usage_event(
         fingerprint_hash=value.fingerprint_hash,
         provider_id=value.provider_id,
         model_id=value.model_id,
+        thinking_level=value.thinking_level,
         agent=value.agent,
         created_ms=value.created_ms,
         completed_ms=value.completed_ms,
@@ -136,6 +141,7 @@ def _to_public_model_row(value: InternalModelSummaryRow) -> ModelSummaryRow:
     return ModelSummaryRow(
         provider_id=value.provider_id,
         model_id=value.model_id,
+        thinking_level=value.thinking_level,
         message_count=value.message_count,
         tokens=_to_public_token_breakdown(value.tokens),
         costs=_to_public_cost_totals(value.costs),

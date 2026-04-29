@@ -4,12 +4,19 @@ import json
 import shlex
 import subprocess
 from copy import deepcopy
+from datetime import datetime
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from tests.helpers import VALID_ASSISTANT, create_opencode_db, insert_message
 from toktrail.cli import app
+
+
+@pytest.fixture(autouse=True)
+def isolate_default_config(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("TOKTRAIL_CONFIG", str(tmp_path / "missing-config.toml"))
 
 
 def write_jsonl_rows(path: Path, rows: list[dict[str, object]]) -> None:
@@ -28,6 +35,19 @@ def create_source_db(path: Path) -> None:
         session_id="ses-1",
         data=deepcopy(VALID_ASSISTANT),
     )
+    conn.commit()
+    conn.close()
+
+
+def create_thinking_source_db(path: Path) -> None:
+    conn = create_opencode_db(path)
+    high = deepcopy(VALID_ASSISTANT)
+    high["thinkingLevel"] = "high"
+    insert_message(conn, row_id="row-1", session_id="ses-1", data=high)
+    low = deepcopy(VALID_ASSISTANT)
+    low["id"] = "msg-low"
+    low["thinkingLevel"] = "low"
+    insert_message(conn, row_id="row-2", session_id="ses-1", data=low)
     conn.commit()
     conn.close()
 
@@ -231,6 +251,209 @@ def test_cli_import_copilot_status(tmp_path) -> None:
     assert payload["by_harness"][0]["harness"] == "copilot"
     assert payload["totals"]["input"] == 100
     assert payload["totals"]["output"] == 5
+
+
+def test_cli_status_supports_thinking_filter_and_collapse(tmp_path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    source_db = tmp_path / "opencode.db"
+    create_thinking_source_db(source_db)
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    runner.invoke(app, ["--db", str(state_db), "start", "--name", "test-session"])
+    runner.invoke(
+        app,
+        ["--db", str(state_db), "import", "opencode", "--opencode-db", str(source_db)],
+    )
+
+    filtered = runner.invoke(
+        app,
+        ["--db", str(state_db), "status", "1", "--json", "--thinking", "high"],
+    )
+    collapsed = runner.invoke(
+        app,
+        ["--db", str(state_db), "status", "1", "--json", "--collapse-thinking"],
+    )
+    human = runner.invoke(app, ["--db", str(state_db), "status", "1"])
+
+    assert filtered.exit_code == 0, filtered.output
+    assert collapsed.exit_code == 0, collapsed.output
+    filtered_payload = json.loads(filtered.output)
+    collapsed_payload = json.loads(collapsed.output)
+    assert [
+        (row["thinking_level"], row["message_count"])
+        for row in filtered_payload["by_model"]
+    ] == [("high", 1)]
+    assert [
+        (row["thinking_level"], row["message_count"])
+        for row in collapsed_payload["by_model"]
+    ] == [(None, 2)]
+    assert "thinking" in human.output
+
+
+def test_cli_plain_import_uses_config_without_active_session(tmp_path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    source_db = tmp_path / "opencode.db"
+    config_path = tmp_path / "toktrail.toml"
+    create_source_db(source_db)
+    config_path.write_text(
+        f"""
+config_version = 1
+
+[imports]
+harnesses = ["opencode"]
+missing_source = "warn"
+include_raw_json = false
+
+[imports.sources]
+opencode = "{source_db}"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    init_result = runner.invoke(app, ["--db", str(state_db), "init"])
+    assert init_result.exit_code == 0, init_result.output
+
+    result = runner.invoke(
+        app,
+        ["--db", str(state_db), "--config", str(config_path), "import", "--json"],
+    )
+    payload = json.loads(result.output)
+
+    assert result.exit_code == 0, result.output
+    assert payload[0]["harness"] == "opencode"
+    assert payload[0]["tracking_session_id"] is None
+    assert payload[0]["rows_imported"] == 1
+    assert payload[0]["rows_linked"] == 0
+
+
+def test_cli_usage_today_reports_unscoped_imports(tmp_path, monkeypatch) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    source_db = tmp_path / "opencode.db"
+    config_path = tmp_path / "toktrail.toml"
+    create_source_db(source_db)
+    config_path.write_text(
+        f"""
+config_version = 1
+
+[imports]
+harnesses = ["opencode"]
+missing_source = "warn"
+include_raw_json = false
+
+[imports.sources]
+opencode = "{source_db}"
+""".strip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "toktrail.periods.current_time_in_zone",
+        lambda tz: datetime(2023, 11, 14, 23, 0, tzinfo=tz),
+    )
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    runner.invoke(app, ["--db", str(state_db), "--config", str(config_path), "import"])
+    result = runner.invoke(
+        app,
+        ["--db", str(state_db), "usage", "today", "--utc", "--json"],
+    )
+    payload = json.loads(result.output)
+
+    assert result.exit_code == 0, result.output
+    assert payload["session"] is None
+    assert payload["filters"]["period"] == "today"
+    assert payload["filters"]["timezone"] == "UTC"
+    assert payload["totals"]["total"] == 1850
+
+
+def test_cli_usage_supports_explicit_since_until_boundaries(tmp_path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    source_db = tmp_path / "opencode.db"
+    config_path = tmp_path / "toktrail.toml"
+    create_source_db(source_db)
+    config_path.write_text(
+        f"""
+config_version = 1
+
+[imports]
+harnesses = ["opencode"]
+missing_source = "warn"
+include_raw_json = false
+
+[imports.sources]
+opencode = "{source_db}"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    runner.invoke(app, ["--db", str(state_db), "--config", str(config_path), "import"])
+    result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "usage",
+            "--since",
+            "2023-11-14T00:00:00Z",
+            "--until",
+            "2023-11-15T00:00:00Z",
+            "--utc",
+            "--json",
+        ],
+    )
+    payload = json.loads(result.output)
+
+    assert result.exit_code == 0, result.output
+    assert payload["filters"]["since_ms"] == 1699920000000
+    assert payload["filters"]["until_ms"] == 1700006400000
+    assert payload["filters"]["timezone"] == "UTC"
+    assert payload["totals"]["total"] == 1850
+
+
+def test_cli_plain_import_supports_harness_override_and_source(tmp_path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    source_db = tmp_path / "opencode.db"
+    config_path = tmp_path / "toktrail.toml"
+    create_source_db(source_db)
+    config_path.write_text(
+        """
+config_version = 1
+
+[imports]
+harnesses = ["pi"]
+missing_source = "warn"
+include_raw_json = false
+""".strip(),
+        encoding="utf-8",
+    )
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+
+    result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "--config",
+            str(config_path),
+            "import",
+            "--harness",
+            "opencode",
+            "--source",
+            str(source_db),
+            "--json",
+        ],
+    )
+    payload = json.loads(result.output)
+
+    assert result.exit_code == 0, result.output
+    assert [row["harness"] for row in payload] == ["opencode"]
+    assert payload[0]["rows_imported"] == 1
 
 
 def test_cli_import_missing_copilot_file_fails(tmp_path) -> None:

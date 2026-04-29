@@ -12,7 +12,7 @@ from urllib.parse import quote
 from toktrail.adapters.base import ScanResult, SourceSessionSummary
 from toktrail.adapters.summary import summarize_events_by_source_session
 from toktrail.config import CostingConfig
-from toktrail.models import TokenBreakdown, UsageEvent
+from toktrail.models import TokenBreakdown, UsageEvent, normalize_thinking_level
 
 OPENCODE_HARNESS = "opencode"
 
@@ -167,6 +167,7 @@ def _parse_opencode_row(
     completed_ms = _timestamp_ms(time_value.get("completed"))
     source_message_id = _as_str(payload.get("id"))
     provider_id = _as_str(payload.get("providerID")) or "unknown"
+    thinking_level = _thinking_level(payload)
     agent = _normalized_agent(payload)
     token_breakdown = TokenBreakdown(
         input=_as_non_negative_int(tokens_value.get("input")),
@@ -187,6 +188,7 @@ def _parse_opencode_row(
         fingerprint_hash="",
         provider_id=provider_id,
         model_id=model_id,
+        thinking_level=thinking_level,
         agent=agent,
         created_ms=created_ms,
         completed_ms=completed_ms,
@@ -281,6 +283,7 @@ def _make_fingerprint(event: UsageEvent) -> str:
         "cache_read": event.tokens.cache_read,
         "cache_write": event.tokens.cache_write,
         "cost_usd": event.cost_usd,
+        "thinking_level": event.thinking_level,
         "agent": event.agent,
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
@@ -301,4 +304,29 @@ def _normalized_agent(payload: dict[str, object]) -> str | None:
     agent = _as_str(payload.get("agent"))
     if agent is not None:
         return normalize_opencode_agent_name(agent)
+    return None
+
+
+def _thinking_level(payload: dict[str, object]) -> str | None:
+    for key in (
+        "reasoningEffort",
+        "reasoning_effort",
+        "thinkingLevel",
+        "thinking_level",
+    ):
+        normalized = normalize_thinking_level(payload.get(key))
+        if normalized is not None:
+            return normalized
+    request = payload.get("request")
+    if not isinstance(request, dict):
+        return None
+    for key in (
+        "reasoningEffort",
+        "reasoning_effort",
+        "thinkingLevel",
+        "thinking_level",
+    ):
+        normalized = normalize_thinking_level(request.get(key))
+        if normalized is not None:
+            return normalized
     return None

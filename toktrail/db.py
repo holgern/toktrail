@@ -18,12 +18,14 @@ from toktrail.reporting import (
     UsageReportFilter,
 )
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 @dataclass(frozen=True)
 class InsertUsageResult:
     rows_inserted: int
+    rows_linked: int = 0
+    rows_skipped: int = 0
 
 
 def _now_ms() -> int:
@@ -49,9 +51,16 @@ def migrate(conn: sqlite3.Connection) -> None:
     if current_version > SCHEMA_VERSION:
         msg = f"Unsupported schema version: {current_version}"
         raise ValueError(msg)
-    if current_version == SCHEMA_VERSION:
-        return
+    if current_version == 0:
+        _create_schema_v2(conn)
+    elif current_version == 1:
+        _migrate_v1_to_v2(conn)
+    if current_version != SCHEMA_VERSION:
+        conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+        conn.commit()
 
+
+def _create_schema_v2(conn: sqlite3.Connection) -> None:
     conn.executescript(
         """
         CREATE TABLE IF NOT EXISTS tracking_sessions (
@@ -98,6 +107,7 @@ def migrate(conn: sqlite3.Connection) -> None:
             role TEXT NOT NULL DEFAULT 'assistant',
             provider_id TEXT NOT NULL DEFAULT 'unknown',
             model_id TEXT NOT NULL,
+            thinking_level TEXT,
             agent TEXT,
             created_ms INTEGER NOT NULL,
             completed_ms INTEGER,
@@ -121,12 +131,54 @@ def migrate(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_usage_events_fingerprint
         ON usage_events(harness, fingerprint_hash);
 
-        CREATE INDEX IF NOT EXISTS idx_usage_events_model
-        ON usage_events(provider_id, model_id);
+        CREATE INDEX IF NOT EXISTS idx_usage_events_model_thinking
+        ON usage_events(provider_id, model_id, thinking_level);
+
+        CREATE TABLE IF NOT EXISTS tracking_session_events (
+            tracking_session_id INTEGER NOT NULL
+                REFERENCES tracking_sessions(id) ON DELETE CASCADE,
+            usage_event_id INTEGER NOT NULL
+                REFERENCES usage_events(id) ON DELETE CASCADE,
+            created_at_ms INTEGER NOT NULL,
+            PRIMARY KEY (tracking_session_id, usage_event_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_tracking_session_events_usage
+        ON tracking_session_events(usage_event_id);
         """
     )
-    conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
-    conn.commit()
+
+
+def _migrate_v1_to_v2(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        """
+        ALTER TABLE usage_events ADD COLUMN thinking_level TEXT;
+
+        CREATE INDEX IF NOT EXISTS idx_usage_events_model_thinking
+        ON usage_events(provider_id, model_id, thinking_level);
+
+        CREATE TABLE IF NOT EXISTS tracking_session_events (
+            tracking_session_id INTEGER NOT NULL
+                REFERENCES tracking_sessions(id) ON DELETE CASCADE,
+            usage_event_id INTEGER NOT NULL
+                REFERENCES usage_events(id) ON DELETE CASCADE,
+            created_at_ms INTEGER NOT NULL,
+            PRIMARY KEY (tracking_session_id, usage_event_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_tracking_session_events_usage
+        ON tracking_session_events(usage_event_id);
+
+        INSERT OR IGNORE INTO tracking_session_events (
+            tracking_session_id,
+            usage_event_id,
+            created_at_ms
+        )
+        SELECT tracking_session_id, id, imported_at_ms
+        FROM usage_events
+        WHERE tracking_session_id IS NOT NULL;
+        """
+    )
 
 
 def create_tracking_session(
@@ -288,7 +340,7 @@ def attach_harness_session(
 
 def insert_usage_events(
     conn: sqlite3.Connection,
-    tracking_session_id: int,
+    tracking_session_id: int | None,
     events: list[UsageEvent],
     *,
     since_ms: int | None = None,
@@ -298,30 +350,34 @@ def insert_usage_events(
     ]
     harness_session_ids: dict[tuple[str, str], int] = {}
     rows_inserted = 0
+    rows_linked = 0
     imported_at_ms = _now_ms()
 
     with conn:
-        grouped_ranges = _group_event_ranges(filtered_events)
-        for (
-            harness,
-            source_session_id,
-        ), (
-            first_seen_ms,
-            last_seen_ms,
-        ) in grouped_ranges.items():
-            harness_session_ids[(harness, source_session_id)] = attach_harness_session(
-                conn,
-                tracking_session_id,
+        if tracking_session_id is not None:
+            grouped_ranges = _group_event_ranges(filtered_events)
+            for (
                 harness,
                 source_session_id,
-                first_seen_ms=first_seen_ms,
-                last_seen_ms=last_seen_ms,
-            )
+            ), (
+                first_seen_ms,
+                last_seen_ms,
+            ) in grouped_ranges.items():
+                harness_session_ids[(harness, source_session_id)] = (
+                    attach_harness_session(
+                        conn,
+                        tracking_session_id,
+                        harness,
+                        source_session_id,
+                        first_seen_ms=first_seen_ms,
+                        last_seen_ms=last_seen_ms,
+                    )
+                )
 
         for event in filtered_events:
-            harness_session_id = harness_session_ids[
+            harness_session_id = harness_session_ids.get(
                 (event.harness, event.source_session_id)
-            ]
+            )
             cursor = conn.execute(
                 """
                 INSERT OR IGNORE INTO usage_events (
@@ -337,6 +393,7 @@ def insert_usage_events(
                     role,
                     provider_id,
                     model_id,
+                    thinking_level,
                     agent,
                     created_ms,
                     completed_ms,
@@ -351,7 +408,7 @@ def insert_usage_events(
                 )
                 VALUES (
                     ?, ?, ?, ?, ?, ?, ?, ?, ?, 'assistant',
-                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
                 )
                 """,
                 (
@@ -366,6 +423,7 @@ def insert_usage_events(
                     event.fingerprint_hash,
                     event.provider_id,
                     event.model_id,
+                    event.thinking_level,
                     event.agent,
                     event.created_ms,
                     event.completed_ms,
@@ -380,8 +438,44 @@ def insert_usage_events(
                 ),
             )
             rows_inserted += cursor.rowcount
+            if tracking_session_id is None:
+                continue
+            event_row = conn.execute(
+                """
+                SELECT id
+                FROM usage_events
+                WHERE harness = ? AND global_dedup_key = ?
+                """,
+                (event.harness, event.global_dedup_key),
+            ).fetchone()
+            if event_row is None:
+                msg = (
+                    "Inserted usage event row could not be reloaded for "
+                    f"{event.harness}:{event.global_dedup_key}"
+                )
+                raise ValueError(msg)
+            link_cursor = conn.execute(
+                """
+                INSERT OR IGNORE INTO tracking_session_events (
+                    tracking_session_id,
+                    usage_event_id,
+                    created_at_ms
+                )
+                VALUES (?, ?, ?)
+                """,
+                (
+                    tracking_session_id,
+                    _required_int(event_row["id"]),
+                    imported_at_ms,
+                ),
+            )
+            rows_linked += link_cursor.rowcount
 
-    return InsertUsageResult(rows_inserted=rows_inserted)
+    return InsertUsageResult(
+        rows_inserted=rows_inserted,
+        rows_linked=rows_linked,
+        rows_skipped=len(filtered_events) - rows_inserted,
+    )
 
 
 def summarize_tracking_session(
@@ -403,36 +497,47 @@ def summarize_usage(
     *,
     costing_config: CostingConfig | None = None,
 ) -> TrackingSessionReport:
-    if filters.tracking_session_id is None:
-        msg = "UsageReportFilter.tracking_session_id is required."
-        raise ValueError(msg)
+    session = None
+    if filters.tracking_session_id is not None:
+        session = get_tracking_session(conn, filters.tracking_session_id)
+        if session is None:
+            msg = f"Tracking session not found: {filters.tracking_session_id}"
+            raise ValueError(msg)
 
-    session = get_tracking_session(conn, filters.tracking_session_id)
-    if session is None:
-        msg = f"Tracking session not found: {filters.tracking_session_id}"
-        raise ValueError(msg)
-
-    where_clause, params = _usage_report_where(filters)
+    source_clause, where_clause, params = _usage_report_query_parts(filters)
+    group_by_columns = ["ue.harness", "ue.provider_id", "ue.model_id"]
+    if filters.split_thinking:
+        group_by_columns.append("ue.thinking_level")
+    group_by_columns.append("COALESCE(ue.agent, 'unknown')")
+    thinking_select = (
+        "ue.thinking_level AS thinking_level"
+        if filters.split_thinking
+        else "NULL AS thinking_level"
+    )
     atom_rows = conn.execute(
         """
         SELECT
-            harness,
-            provider_id,
-            model_id,
-            COALESCE(agent, 'unknown') AS agent,
+            ue.harness,
+            ue.provider_id,
+            ue.model_id,
+            """
+        + thinking_select
+        + """
+            ,
+            COALESCE(ue.agent, 'unknown') AS agent,
             COUNT(*) AS message_count,
-            COALESCE(SUM(input_tokens), 0) AS input_tokens,
-            COALESCE(SUM(output_tokens), 0) AS output_tokens,
-            COALESCE(SUM(reasoning_tokens), 0) AS reasoning_tokens,
-            COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens,
-            COALESCE(SUM(cache_write_tokens), 0) AS cache_write_tokens,
-            COALESCE(SUM(cost_usd), 0.0) AS source_cost_usd
-        FROM usage_events
+            COALESCE(SUM(ue.input_tokens), 0) AS input_tokens,
+            COALESCE(SUM(ue.output_tokens), 0) AS output_tokens,
+            COALESCE(SUM(ue.reasoning_tokens), 0) AS reasoning_tokens,
+            COALESCE(SUM(ue.cache_read_tokens), 0) AS cache_read_tokens,
+            COALESCE(SUM(ue.cache_write_tokens), 0) AS cache_write_tokens,
+            COALESCE(SUM(ue.cost_usd), 0.0) AS source_cost_usd
         """
+        + source_clause
         + where_clause
         + """
-        GROUP BY harness, provider_id, model_id, COALESCE(agent, 'unknown')
-        """,
+        GROUP BY """
+        + ", ".join(group_by_columns),
         params,
     ).fetchall()
 
@@ -440,7 +545,7 @@ def summarize_usage(
     totals_tokens = TokenBreakdown()
     totals_costs = CostTotals()
     by_harness: dict[str, _ReportBucket] = {}
-    by_model: dict[tuple[str, str], _ReportBucket] = {}
+    by_model: dict[tuple[str, str, str | None], _ReportBucket] = {}
     by_agent: dict[str, _ReportBucket] = {}
 
     for row in atom_rows:
@@ -448,6 +553,11 @@ def summarize_usage(
             harness=str(row["harness"]),
             provider_id=str(row["provider_id"]),
             model_id=str(row["model_id"]),
+            thinking_level=(
+                str(row["thinking_level"])
+                if row["thinking_level"] is not None
+                else None
+            ),
             agent=str(row["agent"]),
             message_count=_required_int(row["message_count"]),
             tokens=_row_tokens(row),
@@ -459,17 +569,14 @@ def summarize_usage(
 
         by_harness.setdefault(atom.harness, _ReportBucket()).add(atom, config)
         by_model.setdefault(
-            (atom.provider_id, atom.model_id),
+            (atom.provider_id, atom.model_id, atom.thinking_level),
             _ReportBucket(),
         ).add(atom, config)
         by_agent.setdefault(atom.agent, _ReportBucket()).add(atom, config)
 
     return TrackingSessionReport(
         session=session,
-        totals=SessionTotals(
-            tokens=totals_tokens,
-            costs=totals_costs,
-        ),
+        totals=SessionTotals(tokens=totals_tokens, costs=totals_costs),
         by_harness=[
             HarnessSummaryRow(
                 harness=harness,
@@ -490,17 +597,19 @@ def summarize_usage(
             ModelSummaryRow(
                 provider_id=provider_id,
                 model_id=model_id,
+                thinking_level=thinking_level,
                 message_count=bucket.message_count,
                 tokens=bucket.tokens,
                 costs=bucket.costs,
             )
-            for (provider_id, model_id), bucket in sorted(
+            for (provider_id, model_id, thinking_level), bucket in sorted(
                 by_model.items(),
                 key=lambda item: (
                     -item[1].costs.actual_cost_usd,
                     -item[1].message_count,
                     item[0][0],
                     item[0][1],
+                    item[0][2] or "",
                 ),
             )
         ],
@@ -524,37 +633,46 @@ def summarize_usage(
     )
 
 
-def _usage_report_where(filters: UsageReportFilter) -> tuple[str, list[object]]:
+def _usage_report_query_parts(
+    filters: UsageReportFilter,
+) -> tuple[str, str, list[object]]:
     clauses: list[str] = []
     params: list[object] = []
 
+    source_clause = " FROM usage_events AS ue"
     if filters.tracking_session_id is not None:
-        clauses.append("tracking_session_id = ?")
+        source_clause += (
+            " JOIN tracking_session_events AS tse ON tse.usage_event_id = ue.id"
+        )
+        clauses.append("tse.tracking_session_id = ?")
         params.append(filters.tracking_session_id)
     if filters.harness is not None:
-        clauses.append("harness = ?")
+        clauses.append("ue.harness = ?")
         params.append(filters.harness)
     if filters.source_session_id is not None:
-        clauses.append("source_session_id = ?")
+        clauses.append("ue.source_session_id = ?")
         params.append(filters.source_session_id)
     if filters.provider_id is not None:
-        clauses.append("provider_id = ?")
+        clauses.append("ue.provider_id = ?")
         params.append(filters.provider_id)
     if filters.model_id is not None:
-        clauses.append("model_id = ?")
+        clauses.append("ue.model_id = ?")
         params.append(filters.model_id)
+    if filters.thinking_level is not None:
+        clauses.append("COALESCE(ue.thinking_level, '') = ?")
+        params.append(filters.thinking_level)
     if filters.agent is not None:
-        clauses.append("COALESCE(agent, 'unknown') = ?")
+        clauses.append("COALESCE(ue.agent, 'unknown') = ?")
         params.append(filters.agent)
     if filters.since_ms is not None:
-        clauses.append("created_ms >= ?")
+        clauses.append("ue.created_ms >= ?")
         params.append(filters.since_ms)
     if filters.until_ms is not None:
-        clauses.append("created_ms <= ?")
+        clauses.append("ue.created_ms < ?")
         params.append(filters.until_ms)
 
     where_clause = f" WHERE {' AND '.join(clauses)}" if clauses else ""
-    return where_clause, params
+    return source_clause, where_clause, params
 
 
 def _tracking_session_from_row(row: sqlite3.Row) -> TrackingSession:

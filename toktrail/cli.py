@@ -20,6 +20,8 @@ from toktrail.adapters.summary import (
     summarize_events_by_model,
 )
 from toktrail.api.environment import prepare_environment as prepare_api_environment
+from toktrail.api.imports import import_configured_usage as import_configured_usage_api
+from toktrail.api.models import ImportUsageResult
 from toktrail.config import (
     DEFAULT_TEMPLATE_NAME,
     CostingConfig,
@@ -39,7 +41,7 @@ from toktrail.db import (
     migrate,
     summarize_usage,
 )
-from toktrail.errors import InvalidAPIUsageError
+from toktrail.errors import InvalidAPIUsageError, ToktrailError
 from toktrail.formatting import format_epoch_ms_compact
 from toktrail.models import UsageEvent
 from toktrail.paths import (
@@ -47,7 +49,14 @@ from toktrail.paths import (
     resolve_toktrail_config_path,
     resolve_toktrail_db_path,
 )
-from toktrail.reporting import ModelSummaryRow, UsageReportFilter
+from toktrail.periods import resolve_time_range
+from toktrail.reporting import (
+    ModelSummaryRow,
+    UsageReportFilter,
+)
+from toktrail.reporting import (
+    TrackingSessionReport as InternalTrackingSessionReport,
+)
 
 app = typer.Typer(help="Track harness token usage in local SQLite sessions.")
 import_app = typer.Typer(help="Import usage from external harnesses.")
@@ -93,8 +102,10 @@ SourceSessionOption = Annotated[str | None, typer.Option("--source-session")]
 NameOption = Annotated[str | None, typer.Option("--name")]
 JsonOption = Annotated[bool, typer.Option("--json")]
 HarnessOption = Annotated[str | None, typer.Option("--harness")]
+HarnessesOption = Annotated[list[str] | None, typer.Option("--harness")]
 ProviderOption = Annotated[str | None, typer.Option("--provider")]
 ModelOption = Annotated[str | None, typer.Option("--model")]
+ThinkingOption = Annotated[str | None, typer.Option("--thinking")]
 AgentOption = Annotated[str | None, typer.Option("--agent")]
 SinceMsOption = Annotated[int | None, typer.Option("--since-ms")]
 UntilMsOption = Annotated[int | None, typer.Option("--until-ms")]
@@ -106,6 +117,10 @@ LimitOption = Annotated[int | None, typer.Option("--limit", min=1)]
 SortOption = Annotated[str, typer.Option("--sort")]
 ColumnsOption = Annotated[str | None, typer.Option("--columns")]
 RichOption = Annotated[bool, typer.Option("--rich")]
+CollapseThinkingOption = Annotated[bool, typer.Option("--collapse-thinking")]
+TimeBoundaryOption = Annotated[str | None, typer.Option("--since")]
+UntilBoundaryOption = Annotated[str | None, typer.Option("--until")]
+TimezoneOption = Annotated[str | None, typer.Option("--timezone")]
 OpenCodeDbOption = Annotated[
     Path | None,
     typer.Option("--opencode-db", "--db", help="Override OpenCode DB path."),
@@ -128,6 +143,8 @@ SinceStartOption = Annotated[bool, typer.Option("--since-start")]
 NoRawOption = Annotated[bool, typer.Option("--no-raw")]
 IntervalOption = Annotated[float, typer.Option("--interval", min=0.1)]
 CopilotRunArgs = Annotated[list[str], typer.Argument(help="Command to run after --.")]
+SourcePathOption = Annotated[Path | None, typer.Option("--source")]
+RawOption = Annotated[bool | None, typer.Option("--raw/--no-raw")]
 
 
 @app.callback()
@@ -197,10 +214,12 @@ def status(
     source_session_id: SourceSessionOption = None,
     provider_id: ProviderOption = None,
     model_id: ModelOption = None,
+    thinking_level: ThinkingOption = None,
     agent: AgentOption = None,
     since_ms: SinceMsOption = None,
     until_ms: UntilMsOption = None,
     rich_output: RichOption = False,
+    collapse_thinking: CollapseThinkingOption = False,
 ) -> None:
     costing_config = _load_costing_config_or_exit(ctx)
     conn = _open_toktrail_connection(ctx)
@@ -219,9 +238,11 @@ def status(
                 source_session_id=source_session_id,
                 provider_id=provider_id,
                 model_id=model_id,
+                thinking_level=thinking_level,
                 agent=agent,
                 since_ms=since_ms,
                 until_ms=until_ms,
+                split_thinking=not collapse_thinking,
             ),
             costing_config=costing_config,
         )
@@ -232,30 +253,119 @@ def status(
         typer.echo(json.dumps(report.as_dict(), indent=2))
         return
 
-    typer.echo(
-        f"toktrail session {report.session.id}: {report.session.name or '(unnamed)'}"
-    )
+    session = report.session
+    if session is None:
+        msg = "Tracking session report unexpectedly has no session."
+        raise TypeError(msg)
+    typer.echo(f"toktrail session {session.id}: {session.name or '(unnamed)'}")
+    _print_usage_summary(report, rich_output=rich_output)
+
+
+@app.command()
+def usage(
+    ctx: typer.Context,
+    period: Annotated[str | None, typer.Argument()] = None,
+    json_output: JsonOption = False,
+    harness: HarnessOption = None,
+    source_session_id: SourceSessionOption = None,
+    provider_id: ProviderOption = None,
+    model_id: ModelOption = None,
+    thinking_level: ThinkingOption = None,
+    agent: AgentOption = None,
+    since: TimeBoundaryOption = None,
+    until: UntilBoundaryOption = None,
+    timezone_name: TimezoneOption = None,
+    utc: UtcOption = False,
+    rich_output: RichOption = False,
+    collapse_thinking: CollapseThinkingOption = False,
+) -> None:
+    try:
+        resolved_range = resolve_time_range(
+            period=period,
+            timezone_name=timezone_name,
+            utc=utc,
+            since_text=since,
+            until_text=until,
+        )
+    except ValueError as exc:
+        _exit_with_error(str(exc))
+
+    costing_config = _load_costing_config_or_exit(ctx)
+    conn = _open_toktrail_connection(ctx)
+    try:
+        report = summarize_usage(
+            conn,
+            UsageReportFilter(
+                tracking_session_id=None,
+                harness=harness,
+                source_session_id=source_session_id,
+                provider_id=provider_id,
+                model_id=model_id,
+                thinking_level=thinking_level,
+                agent=agent,
+                since_ms=resolved_range.since_ms,
+                until_ms=resolved_range.until_ms,
+                split_thinking=not collapse_thinking,
+            ),
+            costing_config=costing_config,
+        )
+    finally:
+        conn.close()
+
+    if json_output:
+        payload = report.as_dict()
+        filters = payload.get("filters")
+        if not isinstance(filters, dict):
+            msg = "Usage report payload unexpectedly missing filters."
+            raise TypeError(msg)
+        if resolved_range.period is not None:
+            filters["period"] = resolved_range.period
+        if (
+            resolved_range.period is not None
+            or timezone_name is not None
+            or utc
+            or since is not None
+            or until is not None
+        ):
+            filters["timezone"] = resolved_range.timezone
+        typer.echo(json.dumps(payload, indent=2))
+        return
+
+    title = "toktrail usage"
+    if resolved_range.period is not None:
+        title = f"{title} ({resolved_range.period})"
+    typer.echo(title)
+    _print_usage_summary(report, rich_output=rich_output)
+
+
+def _print_usage_summary(
+    report: InternalTrackingSessionReport,
+    *,
+    rich_output: bool,
+) -> None:
     typer.echo("")
     typer.echo("Totals")
-    typer.echo(f"  input:       {_format_int(report.totals.tokens.input)}")
-    typer.echo(f"  output:      {_format_int(report.totals.tokens.output)}")
-    typer.echo(f"  reasoning:   {_format_int(report.totals.tokens.reasoning)}")
-    typer.echo(f"  cache read:  {_format_int(report.totals.tokens.cache_read)}")
-    typer.echo(f"  cache write: {_format_int(report.totals.tokens.cache_write)}")
-    typer.echo(f"  total:       {_format_int(report.totals.tokens.total)}")
+    totals = report.totals
+    typer.echo(f"  input:       {_format_int(totals.tokens.input)}")
+    typer.echo(f"  output:      {_format_int(totals.tokens.output)}")
+    typer.echo(f"  reasoning:   {_format_int(totals.tokens.reasoning)}")
+    typer.echo(f"  cache read:  {_format_int(totals.tokens.cache_read)}")
+    typer.echo(f"  cache write: {_format_int(totals.tokens.cache_write)}")
+    typer.echo(f"  total:       {_format_int(totals.tokens.total)}")
 
     typer.echo("")
     typer.echo("Costs")
-    typer.echo(f"  source:   {_format_cost(report.totals.source_cost_usd)}")
-    typer.echo(f"  actual:   {_format_cost(report.totals.actual_cost_usd)}")
-    typer.echo(f"  virtual:  {_format_cost(report.totals.virtual_cost_usd)}")
-    typer.echo(f"  savings:  {_format_cost(report.totals.savings_usd)}")
-    typer.echo(f"  unpriced: {report.totals.unpriced_count} model groups")
+    typer.echo(f"  source:   {_format_cost(totals.source_cost_usd)}")
+    typer.echo(f"  actual:   {_format_cost(totals.actual_cost_usd)}")
+    typer.echo(f"  virtual:  {_format_cost(totals.virtual_cost_usd)}")
+    typer.echo(f"  savings:  {_format_cost(totals.savings_usd)}")
+    typer.echo(f"  unpriced: {totals.unpriced_count} model groups")
 
     typer.echo("")
     typer.echo("By harness")
-    if report.by_harness:
-        for harness_row in report.by_harness:
+    by_harness = report.by_harness
+    if by_harness:
+        for harness_row in by_harness:
             typer.echo(
                 f"  {harness_row.harness:<12}"
                 f"{_format_int(harness_row.total_tokens):>12} tokens   "
@@ -268,15 +378,17 @@ def status(
 
     typer.echo("")
     typer.echo("By model")
-    if report.by_model:
-        _print_model_table(report.by_model, rich_output=rich_output)
+    by_model = report.by_model
+    if by_model:
+        _print_model_table(by_model, rich_output=rich_output)
     else:
         typer.echo("  (none)")
 
     typer.echo("")
     typer.echo("By agent")
-    if report.by_agent:
-        for agent_row in report.by_agent:
+    by_agent = report.by_agent
+    if by_agent:
+        for agent_row in by_agent:
             typer.echo(
                 f"  {agent_row.agent:<12}"
                 f"{_format_int(agent_row.total_tokens):>12} tokens   "
@@ -358,6 +470,39 @@ def sessions(ctx: typer.Context) -> None:
             f"started={format_epoch_ms_compact(session.started_at_ms)}\t"
             f"ended={format_epoch_ms_compact(session.ended_at_ms)}"
         )
+
+
+@import_app.callback(invoke_without_command=True)
+def import_usage_command(
+    ctx: typer.Context,
+    harnesses: HarnessesOption = None,
+    source_path: SourcePathOption = None,
+    session_id: SessionOption = None,
+    no_session: Annotated[bool, typer.Option("--no-session")] = False,
+    raw: RawOption = None,
+    json_output: JsonOption = False,
+) -> None:
+    if ctx.invoked_subcommand is not None:
+        return
+    if session_id is not None and no_session:
+        _exit_with_error("Use either --session or --no-session, not both.")
+    try:
+        results = import_configured_usage_api(
+            _resolve_state_db(ctx),
+            harnesses=harnesses,
+            source_path=source_path,
+            session_id=session_id,
+            use_active_session=not no_session,
+            include_raw_json=raw,
+            config_path=_resolve_config_path(ctx),
+        )
+    except (OSError, ValueError, ToktrailError) as exc:
+        _exit_with_error(str(exc))
+
+    if json_output:
+        typer.echo(json.dumps([result.as_dict() for result in results], indent=2))
+        return
+    _print_configured_import_results(results)
 
 
 @import_app.command("opencode")
@@ -1166,6 +1311,7 @@ def _print_model_table(
 ) -> None:
     headers = {
         "provider_model": "provider/model",
+        "thinking": "thinking",
         "msgs": "msgs",
         "input": "input",
         "output": "output",
@@ -1177,9 +1323,11 @@ def _print_model_table(
         "virtual": "virtual",
         "savings": "savings",
     }
+    include_thinking = any(row.thinking_level is not None for row in rows)
     payload_rows = [
         {
             "provider_model": f"{row.provider_id}/{row.model_id}",
+            "thinking": row.thinking_level or "-",
             "msgs": _format_int(row.message_count),
             "input": _format_int(row.tokens.input),
             "output": _format_int(row.tokens.output),
@@ -1193,10 +1341,11 @@ def _print_model_table(
         }
         for row in rows
     ]
-    _print_table(
-        payload_rows,
+    columns = ["provider_model"]
+    if include_thinking:
+        columns.append("thinking")
+    columns.extend(
         [
-            "provider_model",
             "msgs",
             "input",
             "output",
@@ -1207,7 +1356,11 @@ def _print_model_table(
             "actual",
             "virtual",
             "savings",
-        ],
+        ]
+    )
+    _print_table(
+        payload_rows,
+        columns,
         headers,
         rich_output=rich_output,
     )
@@ -1241,6 +1394,39 @@ def _print_import_result(
     typer.echo(f"  rows seen: {result.rows_seen}")
     typer.echo(f"  rows imported: {result.rows_imported}")
     typer.echo(f"  rows skipped: {result.rows_skipped}")
+
+
+def _print_configured_import_results(results: tuple[ImportUsageResult, ...]) -> None:
+    typer.echo("Imported usage")
+    rows = []
+    for result in results:
+        rows.append(
+            {
+                "harness": result.harness,
+                "source": (
+                    str(result.source_path)
+                    if result.source_path is not None
+                    else "(none)"
+                ),
+                "inserted": _format_int(result.rows_imported),
+                "linked": _format_int(result.rows_linked),
+                "skipped": _format_int(result.rows_skipped),
+                "status": result.status,
+            }
+        )
+    _print_table(
+        rows,
+        ["harness", "source", "inserted", "linked", "skipped", "status"],
+        {
+            "harness": "harness",
+            "source": "source",
+            "inserted": "inserted",
+            "linked": "linked",
+            "skipped": "skipped",
+            "status": "status",
+        },
+        rich_output=False,
+    )
 
 
 def _resolve_config_path(ctx: typer.Context) -> Path:

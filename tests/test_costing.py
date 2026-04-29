@@ -10,6 +10,7 @@ from toktrail.costing import (
     cost_from_price,
     resolve_actual_mode,
     resolve_price,
+    resolve_price_resolution,
 )
 from toktrail.models import TokenBreakdown
 
@@ -77,14 +78,26 @@ def test_resolve_price_prefers_exact_model_match() -> None:
     assert resolve_price("openai", "gpt-5-mini", [alias_only, exact]) == exact
 
 
-def test_resolve_price_matches_alias_and_inferred_provider() -> None:
+def test_resolve_price_matches_alias_for_unknown_provider() -> None:
     price = make_price(
         provider="anthropic",
         model="claude-sonnet-4",
         aliases=("Claude Sonnet 4",),
     )
 
-    assert resolve_price("github-copilot", "Claude Sonnet 4", [price]) == price
+    assert resolve_price("unknown", "Claude Sonnet 4", [price]) == price
+
+
+def test_resolve_price_keeps_explicit_provider_strict() -> None:
+    price = make_price(provider="openai", model="gpt-5.4")
+
+    assert resolve_price("github-copilot", "gpt-5.4", [price]) is None
+
+
+def test_resolve_price_keeps_explicit_provider_identity_distinct() -> None:
+    price = make_price(provider="openai", model="gpt-5.4")
+
+    assert resolve_price("openai-codex", "gpt-5.4", [price]) is None
 
 
 @pytest.mark.parametrize("missing_price_mode", ["warn", "zero"])
@@ -173,6 +186,99 @@ def test_compute_costs_uses_pricing_actual_mode() -> None:
     )
 
     assert breakdown.actual_cost_usd == pytest.approx(0.0002)
+
+
+def test_resolve_price_resolution_reports_missing_virtual_price() -> None:
+    resolution = resolve_price_resolution(
+        harness="copilot",
+        provider_id="openai",
+        model_id="gpt-5-mini",
+        config=CostingConfig(
+            default_actual_mode="zero",
+            default_virtual_mode="pricing",
+        ),
+    )
+
+    assert resolution.actual_mode == "zero"
+    assert resolution.actual_price is None
+    assert resolution.virtual_price is None
+    assert resolution.missing_actual_price is False
+    assert resolution.missing_virtual_price is True
+    assert resolution.missing_kinds == ("virtual",)
+
+
+def test_resolve_price_resolution_reports_missing_actual_price_only_when_actual_mode_pricing() -> None:
+    pricing_resolution = resolve_price_resolution(
+        harness="copilot",
+        provider_id="openai",
+        model_id="gpt-5-mini",
+        config=CostingConfig(
+            default_actual_mode="pricing",
+            default_virtual_mode="zero",
+        ),
+    )
+    source_resolution = resolve_price_resolution(
+        harness="copilot",
+        provider_id="openai",
+        model_id="gpt-5-mini",
+        config=CostingConfig(
+            default_actual_mode="source",
+            default_virtual_mode="zero",
+        ),
+    )
+
+    assert pricing_resolution.missing_actual_price is True
+    assert pricing_resolution.missing_kinds == ("actual",)
+    assert source_resolution.missing_actual_price is False
+    assert source_resolution.missing_kinds == ()
+
+
+def test_price_resolution_keeps_explicit_provider_strict() -> None:
+    price = make_price(provider="openai", model="gpt-5.4")
+    resolution = resolve_price_resolution(
+        harness="copilot",
+        provider_id="github-copilot",
+        model_id="gpt-5.4",
+        config=CostingConfig(
+            default_actual_mode="pricing",
+            default_virtual_mode="pricing",
+            actual_prices=(price,),
+            virtual_prices=(price,),
+        ),
+    )
+
+    assert resolution.actual_price is None
+    assert resolution.virtual_price is None
+    assert resolution.missing_kinds == ("actual", "virtual")
+
+
+def test_compute_costs_keeps_existing_unpriced_count_behavior() -> None:
+    config = CostingConfig(
+        default_actual_mode="pricing",
+        default_virtual_mode="pricing",
+    )
+
+    missing_with_messages = compute_costs(
+        harness="copilot",
+        provider_id="openai",
+        model_id="gpt-5-mini",
+        tokens=TokenBreakdown(input=100),
+        source_cost_usd=0.0,
+        message_count=1,
+        config=config,
+    )
+    missing_without_messages = compute_costs(
+        harness="copilot",
+        provider_id="openai",
+        model_id="gpt-5-mini",
+        tokens=TokenBreakdown(input=100),
+        source_cost_usd=0.0,
+        message_count=0,
+        config=config,
+    )
+
+    assert missing_with_messages.unpriced_count == 1
+    assert missing_without_messages.unpriced_count == 0
 
 
 def test_resolve_actual_mode_uses_rule_specificity() -> None:

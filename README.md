@@ -42,16 +42,18 @@ importing internals like `toktrail.db` or `toktrail.adapters.*`.
 from pathlib import Path
 
 from toktrail.api.imports import import_usage
-from toktrail.api.reports import session_report
+from toktrail.api.reports import session_report, usage_report
 from toktrail.api.sessions import init_state, start_session
 
 db_path = Path(".toktrail/toktrail.db")
 source_path = Path("tests/fixtures/opencode.db")
 
 init_state(db_path)
+import_usage(db_path, "opencode", source_path=source_path)
 session = start_session(db_path, name="benchmark-run")
 import_usage(db_path, "opencode", session_id=session.id, source_path=source_path)
-report = session_report(db_path, session.id)
+session_usage = session_report(db_path, session.id)
+today_usage = usage_report(db_path, period="today", timezone="UTC")
 ```
 
 See [`API.md`](API.md) for the stable import boundary, public models, workflow
@@ -71,9 +73,13 @@ Start a tracking session:
 toktrail start --name refactor-auth-flow
 ```
 
-Import usage into the active tracking session:
+Import usage from config or a single harness:
 
 ```bash
+toktrail config init
+toktrail import
+toktrail import --harness opencode --source tests/fixtures/opencode.db
+toktrail import --no-session
 toktrail import opencode
 toktrail import pi
 toktrail import pi --pi-path ~/.pi/agent/sessions
@@ -96,8 +102,19 @@ Show the current session totals:
 ```bash
 toktrail status
 toktrail status --json
+toktrail status --thinking high --json
+toktrail status --collapse-thinking
 toktrail --config ~/.config/toktrail/config.toml status --json
 toktrail status --harness pi --source-session pi_ses_001 --json
+```
+
+Show period-based usage across canonical ledger rows, even without an active
+tracking session:
+
+```bash
+toktrail usage today
+toktrail usage last-week --utc --json
+toktrail usage --since 2026-05-01 --until 2026-06-01 --timezone Europe/Berlin
 ```
 
 Stop the active tracking session:
@@ -136,6 +153,22 @@ toktrail config show
 toktrail config validate
 toktrail --config /path/to/config.toml status --json
 ```
+
+Import usage:
+
+```bash
+toktrail import
+toktrail import --harness opencode --source /path/to/opencode.db
+toktrail import --harness pi --source ~/.pi/agent/sessions
+toktrail import --session 3
+toktrail import --no-session
+toktrail import --raw
+toktrail import --no-raw
+```
+
+The plain `toktrail import` command reads enabled harnesses and source paths from
+`[imports]` and `[imports.sources]` in `config.toml`. Legacy
+`toktrail import opencode|pi|copilot` subcommands still work for compatibility.
 
 Import or watch OpenCode usage:
 
@@ -272,8 +305,14 @@ toktrail never prints raw OpenCode, Pi, or Copilot JSON in CLI output.
 - virtual cost based on configured pricing tables
 - savings (`virtual - actual`) plus unpriced model-group counts
 - grouped summaries by harness, model, and agent/mode
+- thinking-level metadata on model rows when the source exposes it
 - optional filtered views by harness, source session, provider, model, agent,
   and created-at time range
+
+`toktrail usage` applies the same token and cost reporting to the canonical
+ledger without requiring a tracking session. Named periods use half-open
+`[since, until)` windows for `today`, `yesterday`, `this-week`, `last-week`,
+`this-month`, and `last-month`.
 
 `toktrail status --json` returns the same information in a machine-readable JSON
 shape for automation.
@@ -300,6 +339,11 @@ toktrail sessions copilot --sort savings --columns source_session_id,actual,virt
 Virtual and pricing-based actual costs are computed at report time, not during
 import. Updating `config.toml` immediately changes future `status` and
 `sessions` output for already imported data without re-importing source files.
+
+Pricing is provider-aware. If an event already has a real provider, toktrail
+does not fall back to an inferred provider from the model name. That keeps
+identities like `github-copilot/gpt-5.4` and `openai-codex/gpt-5.4` distinct
+from `openai/gpt-5.4`.
 
 ## Limitations
 

@@ -67,6 +67,7 @@ def test_public_models_preserve_raw_json_privacy_by_default() -> None:
         fingerprint_hash="fp-1",
         provider_id="anthropic",
         model_id="claude-3-5-sonnet",
+        thinking_level="high",
         agent=None,
         created_ms=1,
         completed_ms=None,
@@ -77,4 +78,5 @@ def test_public_models_preserve_raw_json_privacy_by_default() -> None:
 
     assert "raw_json" not in event.as_dict()
     assert event.as_dict(include_raw_json=True)["raw_json"] == '{"secret": true}'
+    assert event.as_dict()["thinking_level"] == "high"
     assert CostTotals(actual_cost_usd=1.0, virtual_cost_usd=2.5).savings_usd == 1.5

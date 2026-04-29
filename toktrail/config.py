@@ -16,6 +16,7 @@ from toktrail.paths import resolve_toktrail_config_path
 ActualCostMode = Literal["source", "zero", "pricing"]
 VirtualCostMode = Literal["zero", "pricing"]
 MissingPriceMode = Literal["zero", "warn"]
+ImportMissingSourceMode = Literal["warn", "error", "skip"]
 
 CONFIG_VERSION = 1
 DEFAULT_TEMPLATE_NAME = "default"
@@ -23,6 +24,7 @@ COPILOT_TEMPLATE_NAME = "copilot"
 _VALID_ACTUAL_COST_MODES = {"source", "zero", "pricing"}
 _VALID_VIRTUAL_COST_MODES = {"zero", "pricing"}
 _VALID_MISSING_PRICE_MODES = {"zero", "warn"}
+_VALID_IMPORT_MISSING_SOURCE_MODES = {"warn", "error", "skip"}
 _PRICE_FIELDS = {
     "provider",
     "model",
@@ -36,6 +38,7 @@ _PRICE_FIELDS = {
     "release_status",
 }
 _ACTUAL_COST_RULE_FIELDS = {"harness", "provider", "model", "mode"}
+_IMPORT_FIELDS = {"harnesses", "sources", "missing_source", "include_raw_json"}
 _COSTING_FIELDS = {
     "default_actual_mode",
     "default_virtual_mode",
@@ -43,12 +46,23 @@ _COSTING_FIELDS = {
     "price_profile",
 }
 _PRICING_FIELDS = {"virtual", "actual"}
+_SUPPORTED_HARNESSES = {"opencode", "pi", "copilot"}
 _SEPARATOR_RE = re.compile(r"[/_\s]+")
 _INVALID_IDENTITY_CHARS_RE = re.compile(r"[^a-z0-9.-]+")
 _DASH_RE = re.compile(r"-+")
 
 DEFAULT_CONFIG_TEXT = """\
 config_version = 1
+
+[imports]
+harnesses = ["opencode", "pi", "copilot"]
+missing_source = "warn"
+include_raw_json = false
+
+[imports.sources]
+opencode = "~/.local/share/opencode/opencode.db"
+pi = "~/.pi/agent/sessions"
+copilot = "~/.copilot/otel"
 
 [costing]
 default_actual_mode = "source"
@@ -70,6 +84,16 @@ mode = "zero"
 
 COPILOT_TEMPLATE_TEXT = """\
 config_version = 1
+
+[imports]
+harnesses = ["opencode", "pi", "copilot"]
+missing_source = "warn"
+include_raw_json = false
+
+[imports.sources]
+opencode = "~/.local/share/opencode/opencode.db"
+pi = "~/.pi/agent/sessions"
+copilot = "~/.copilot/otel"
 
 [costing]
 default_actual_mode = "source"
@@ -401,10 +425,34 @@ class CostingConfig:
 
 
 @dataclass(frozen=True)
+class ImportConfig:
+    harnesses: tuple[str, ...] = ("opencode", "pi", "copilot")
+    sources: dict[str, Path] | None = None
+    missing_source: ImportMissingSourceMode = "warn"
+    include_raw_json: bool = False
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "sources", dict(self.sources or {}))
+
+
+@dataclass(frozen=True)
+class ToktrailConfig:
+    costing: CostingConfig
+    imports: ImportConfig
+
+
+@dataclass(frozen=True)
 class LoadedCostingConfig:
     path: Path
     exists: bool
     config: CostingConfig
+
+
+@dataclass(frozen=True)
+class LoadedToktrailConfig:
+    path: Path
+    exists: bool
+    config: ToktrailConfig
 
 
 @dataclass(frozen=True)
@@ -439,6 +487,17 @@ def default_costing_config() -> CostingConfig:
     )
 
 
+def default_import_config() -> ImportConfig:
+    return ImportConfig()
+
+
+def default_toktrail_config() -> ToktrailConfig:
+    return ToktrailConfig(
+        costing=default_costing_config(),
+        imports=default_import_config(),
+    )
+
+
 def render_config_template(template: str = DEFAULT_TEMPLATE_NAME) -> str:
     if template == DEFAULT_TEMPLATE_NAME:
         return DEFAULT_CONFIG_TEXT
@@ -449,8 +508,12 @@ def render_config_template(template: str = DEFAULT_TEMPLATE_NAME) -> str:
 
 
 def load_costing_config(path: Path) -> CostingConfig:
+    return load_toktrail_config(path).costing
+
+
+def load_toktrail_config(path: Path) -> ToktrailConfig:
     if not path.exists():
-        return default_costing_config()
+        return default_toktrail_config()
     if not path.is_file():
         msg = f"Toktrail config path is not a file: {path}"
         raise ValueError(msg)
@@ -460,41 +523,61 @@ def load_costing_config(path: Path) -> CostingConfig:
     except tomllib.TOMLDecodeError as exc:
         msg = f"Invalid TOML in toktrail config {path}: {exc}"
         raise ValueError(msg) from exc
-    return parse_costing_config(data)
+    return parse_toktrail_config(data)
 
 
 def load_resolved_costing_config(
     cli_value: Path | None = None,
 ) -> LoadedCostingConfig:
-    path = resolve_toktrail_config_path(cli_value)
+    loaded = load_resolved_toktrail_config(cli_value)
     return LoadedCostingConfig(
+        path=loaded.path,
+        exists=loaded.exists,
+        config=loaded.config.costing,
+    )
+
+
+def load_resolved_toktrail_config(
+    cli_value: Path | None = None,
+) -> LoadedToktrailConfig:
+    path = resolve_toktrail_config_path(cli_value)
+    return LoadedToktrailConfig(
         path=path,
         exists=path.exists(),
-        config=load_costing_config(path),
+        config=load_toktrail_config(path),
     )
 
 
 def parse_costing_config(data: object) -> CostingConfig:
+    return parse_toktrail_config(data).costing
+
+
+def parse_toktrail_config(data: object) -> ToktrailConfig:
     if not isinstance(data, dict):
         msg = "Toktrail config must be a TOML table."
         raise ValueError(msg)
 
-    config = default_costing_config()
+    default_config = default_toktrail_config()
+    costing_default = default_config.costing
     config_version = _parse_config_version(data.get("config_version", CONFIG_VERSION))
     costing_table = _parse_optional_table(data.get("costing"), context="costing")
     _validate_allowed_keys(costing_table, _COSTING_FIELDS, context="costing")
     default_actual_mode = _parse_choice(
-        costing_table.get("default_actual_mode", config.default_actual_mode),
+        costing_table.get(
+            "default_actual_mode", costing_default.default_actual_mode
+        ),
         valid=_VALID_ACTUAL_COST_MODES,
         context="costing.default_actual_mode",
     )
     default_virtual_mode = _parse_choice(
-        costing_table.get("default_virtual_mode", config.default_virtual_mode),
+        costing_table.get(
+            "default_virtual_mode", costing_default.default_virtual_mode
+        ),
         valid=_VALID_VIRTUAL_COST_MODES,
         context="costing.default_virtual_mode",
     )
     missing_price = _parse_choice(
-        costing_table.get("missing_price", config.missing_price),
+        costing_table.get("missing_price", costing_default.missing_price),
         valid=_VALID_MISSING_PRICE_MODES,
         context="costing.missing_price",
     )
@@ -505,7 +588,7 @@ def parse_costing_config(data: object) -> CostingConfig:
 
     actual_rules = _parse_actual_cost_rules(
         data.get("actual_cost"),
-        config.actual_rules,
+        costing_default.actual_rules,
     )
     pricing_table = _parse_optional_table(data.get("pricing"), context="pricing")
     _validate_allowed_keys(pricing_table, _PRICING_FIELDS, context="pricing")
@@ -518,15 +601,21 @@ def parse_costing_config(data: object) -> CostingConfig:
         context="pricing.actual",
     )
 
-    return CostingConfig(
-        config_version=config_version,
-        default_actual_mode=cast(ActualCostMode, default_actual_mode),
-        default_virtual_mode=cast(VirtualCostMode, default_virtual_mode),
-        missing_price=cast(MissingPriceMode, missing_price),
-        price_profile=price_profile,
-        actual_rules=actual_rules,
-        virtual_prices=virtual_prices,
-        actual_prices=actual_prices,
+    return ToktrailConfig(
+        costing=CostingConfig(
+            config_version=config_version,
+            default_actual_mode=cast(ActualCostMode, default_actual_mode),
+            default_virtual_mode=cast(VirtualCostMode, default_virtual_mode),
+            missing_price=cast(MissingPriceMode, missing_price),
+            price_profile=price_profile,
+            actual_rules=actual_rules,
+            virtual_prices=virtual_prices,
+            actual_prices=actual_prices,
+        ),
+        imports=_parse_import_config(
+            data.get("imports"),
+            default_config.imports,
+        ),
     )
 
 
@@ -575,6 +664,76 @@ def _parse_optional_table(
         msg = f"{context} must be a TOML table."
         raise ValueError(msg)
     return value
+
+
+def _parse_import_config(
+    value: object,
+    default_config: ImportConfig,
+) -> ImportConfig:
+    imports_table = _parse_optional_table(value, context="imports")
+    _validate_allowed_keys(imports_table, _IMPORT_FIELDS, context="imports")
+    return ImportConfig(
+        harnesses=_parse_import_harnesses(
+            imports_table.get("harnesses", list(default_config.harnesses)),
+            context="imports.harnesses",
+        ),
+        sources=_parse_import_sources(
+            imports_table.get("sources"),
+            context="imports.sources",
+        ),
+        missing_source=cast(
+            ImportMissingSourceMode,
+            _parse_choice(
+                imports_table.get("missing_source", default_config.missing_source),
+                valid=_VALID_IMPORT_MISSING_SOURCE_MODES,
+                context="imports.missing_source",
+            ),
+        ),
+        include_raw_json=_parse_bool(
+            imports_table.get("include_raw_json", default_config.include_raw_json),
+            context="imports.include_raw_json",
+        ),
+    )
+
+
+def _parse_import_harnesses(value: object, *, context: str) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        msg = f"{context} must be a list of harness names."
+        raise ValueError(msg)
+    harnesses: list[str] = []
+    seen: set[str] = set()
+    for index, item in enumerate(value, start=1):
+        harness = _parse_supported_harness(item, context=f"{context}[{index}]")
+        if harness in seen:
+            msg = f"{context}[{index}] duplicates harness {harness!r}."
+            raise ValueError(msg)
+        seen.add(harness)
+        harnesses.append(harness)
+    if not harnesses:
+        msg = f"{context} must contain at least one harness."
+        raise ValueError(msg)
+    return tuple(harnesses)
+
+
+def _parse_import_sources(value: object, *, context: str) -> dict[str, Path]:
+    table = _parse_optional_table(value, context=context)
+    sources: dict[str, Path] = {}
+    for raw_harness, raw_path in table.items():
+        harness = _parse_supported_harness(
+            raw_harness,
+            context=f"{context}.{raw_harness}",
+        )
+        path_value = _parse_string(raw_path, context=f"{context}.{raw_harness}")
+        sources[harness] = Path(path_value).expanduser()
+    return sources
+
+
+def _parse_supported_harness(value: object, *, context: str) -> str:
+    harness = normalize_identity(_parse_string(value, context=context))
+    if harness not in _SUPPORTED_HARNESSES:
+        msg = f"{context} must be one of: {', '.join(sorted(_SUPPORTED_HARNESSES))}."
+        raise ValueError(msg)
+    return harness
 
 
 def _parse_actual_cost_rules(
@@ -762,6 +921,13 @@ def _parse_non_negative_float(
         msg = f"{context} must be non-negative."
         raise ValueError(msg)
     return numeric_value
+
+
+def _parse_bool(value: object, *, context: str) -> bool:
+    if not isinstance(value, bool):
+        msg = f"{context} must be a boolean."
+        raise ValueError(msg)
+    return value
 
 
 def _parse_rule_identity(value: object, *, context: str) -> str | None:

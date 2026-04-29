@@ -156,6 +156,24 @@ def test_parse_preserves_same_timestamp_rows_with_different_tokens(tmp_path) -> 
     assert {event.source_message_id for event in events} == {"msg_123", "msg_999"}
 
 
+def test_parse_extracts_thinking_level_from_payload_and_request() -> None:
+    payload = deepcopy(VALID_ASSISTANT)
+    payload["thinkingLevel"] = " High "
+
+    event = parse_opencode_row("row-1", "ses-1", json.dumps(payload))
+
+    assert event is not None
+    assert event.thinking_level == "high"
+
+    nested_payload = deepcopy(VALID_ASSISTANT)
+    nested_payload["request"] = {"reasoning_effort": "medium"}
+
+    nested_event = parse_opencode_row("row-2", "ses-1", json.dumps(nested_payload))
+
+    assert nested_event is not None
+    assert nested_event.thinking_level == "medium"
+
+
 def test_parse_returns_empty_list_for_missing_db(tmp_path) -> None:
     missing_db = tmp_path / "missing.db"
 

@@ -141,6 +141,20 @@ def test_parse_copilot_keeps_cache_read_when_input_is_missing(tmp_path) -> None:
     assert events[0].tokens.cache_read == 50
 
 
+def test_parse_copilot_extracts_thinking_level_from_attributes(tmp_path) -> None:
+    copilot_file = create_test_file(
+        tmp_path / "copilot.jsonl",
+        (
+            '{"type":"span","traceId":"trace-1","spanId":"span-1","name":"chat claude","endTime":[1775934264,0],"attributes":{"gen_ai.operation.name":"chat","gen_ai.response.model":"claude-sonnet-4","gen_ai.request.reasoning_effort":" high ","gen_ai.usage.input_tokens":100}}\n'
+        ),
+    )
+
+    events = parse_copilot_file(copilot_file)
+
+    assert len(events) == 1
+    assert events[0].thinking_level == "high"
+
+
 def test_parse_copilot_returns_empty_for_missing_file(tmp_path) -> None:
     missing_file = tmp_path / "missing.jsonl"
 

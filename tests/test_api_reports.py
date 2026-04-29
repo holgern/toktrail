@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+from copy import deepcopy
+from datetime import datetime, timezone
 
 import pytest
 
@@ -62,6 +64,66 @@ def test_session_report_applies_config_and_uses_state_db_only(tmp_path) -> None:
     assert report.totals.costs.savings_usd == report.totals.costs.virtual_cost_usd
 
 
-def test_usage_report_requires_session_id(tmp_path) -> None:
-    with pytest.raises(InvalidAPIUsageError, match="requires session_id"):
-        usage_report(tmp_path / "toktrail.db")
+def test_usage_report_supports_periods_without_tracking_session(
+    tmp_path, monkeypatch
+) -> None:
+    state_db = tmp_path / "toktrail.db"
+    source_db = tmp_path / "opencode.db"
+    conn = create_opencode_db(source_db)
+    insert_message(conn, row_id="row-1", session_id="ses-1", data=VALID_ASSISTANT)
+    conn.commit()
+    conn.close()
+    init_state(state_db)
+    import_usage(state_db, "opencode", source_path=source_db)
+    monkeypatch.setattr(
+        "toktrail.periods.current_time_in_zone",
+        lambda tz: datetime(2023, 11, 14, 23, 0, tzinfo=tz),
+    )
+
+    report = usage_report(state_db, period="today", timezone="UTC")
+
+    assert report.session is None
+    assert report.filters["period"] == "today"
+    assert report.filters["timezone"] == "UTC"
+    assert report.totals.tokens.total == 1850
+
+
+def test_usage_report_rejects_period_and_since_until_together(tmp_path) -> None:
+    with pytest.raises(InvalidAPIUsageError, match="either period or since/until"):
+        usage_report(
+            tmp_path / "toktrail.db",
+            period="today",
+            since_ms=int(
+                datetime(2023, 11, 14, tzinfo=timezone.utc).timestamp() * 1000
+            ),
+        )
+
+
+def test_session_report_supports_thinking_filter_and_collapse(tmp_path) -> None:
+    state_db = tmp_path / "toktrail.db"
+    source_db = tmp_path / "opencode.db"
+    conn = create_opencode_db(source_db)
+    high = deepcopy(VALID_ASSISTANT)
+    high["thinkingLevel"] = "high"
+    insert_message(conn, row_id="row-1", session_id="ses-1", data=high)
+    low = deepcopy(VALID_ASSISTANT)
+    low["id"] = "msg-low"
+    low["thinkingLevel"] = "low"
+    insert_message(conn, row_id="row-2", session_id="ses-1", data=low)
+    conn.commit()
+    conn.close()
+
+    init_state(state_db)
+    session = start_session(state_db, name="thinking")
+    import_usage(state_db, "opencode", session_id=session.id, source_path=source_db)
+
+    filtered = session_report(state_db, session.id, thinking_level="high")
+    collapsed = session_report(state_db, session.id, split_thinking=False)
+
+    assert [(row.model_id, row.thinking_level) for row in filtered.by_model] == [
+        ("claude-sonnet-4", "high")
+    ]
+    assert [
+        (row.model_id, row.thinking_level, row.message_count)
+        for row in collapsed.by_model
+    ] == [("claude-sonnet-4", None, 2)]

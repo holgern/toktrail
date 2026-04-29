@@ -161,6 +161,24 @@ def test_parse_pi_falls_back_to_file_mtime_for_invalid_timestamp(tmp_path) -> No
     assert event.created_ms == expected_created_ms
 
 
+def test_parse_pi_extracts_thinking_level_from_message_metadata(tmp_path) -> None:
+    session_file = tmp_path / "session.jsonl"
+    write_pi_session(
+        session_file,
+        (
+            '{"type":"session","id":"pi_ses_006","cwd":"/tmp"}\n'
+            '{"type":"message","timestamp":"2026-01-01T00:00:01.000Z",'
+            '"message":{"role":"assistant","model":"m","provider":"p",'
+            '"thinkingLevel":" low ","metadata":{"reasoning_effort":"high"},'
+            '"usage":{"input":1,"output":2,"cacheRead":3,"cacheWrite":4}}}\n'
+        ),
+    )
+
+    event = parse_pi_file(session_file)[0]
+
+    assert event.thinking_level == "low"
+
+
 def test_list_pi_sessions_aggregates_messages(tmp_path) -> None:
     session_file = tmp_path / "session.jsonl"
     write_pi_session(

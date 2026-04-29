@@ -23,6 +23,7 @@ def make_usage_event(
     harness: str = "opencode",
     provider_id: str = "anthropic",
     model_id: str = "claude-sonnet-4",
+    thinking_level: str | None = None,
     agent: str | None = "build",
 ) -> UsageEvent:
     token_breakdown = tokens or TokenBreakdown(
@@ -42,6 +43,7 @@ def make_usage_event(
         fingerprint_hash=f"fingerprint-{dedup_suffix}",
         provider_id=provider_id,
         model_id=model_id,
+        thinking_level=thinking_level,
         agent=agent,
         created_ms=1700000000000 + int(dedup_suffix[-1]) * 100,
         completed_ms=1700000000100 + int(dedup_suffix[-1]) * 100,
@@ -65,8 +67,13 @@ def test_migrate_creates_tables_and_is_idempotent(tmp_path) -> None:
     }
     user_version = int(conn.execute("PRAGMA user_version").fetchone()[0])
 
-    assert {"tracking_sessions", "harness_sessions", "usage_events"} <= table_names
-    assert user_version == 1
+    assert {
+        "tracking_sessions",
+        "harness_sessions",
+        "usage_events",
+        "tracking_session_events",
+    } <= table_names
+    assert user_version == 2
 
 
 def test_create_tracking_session_and_end_session(tmp_path) -> None:
@@ -161,6 +168,7 @@ def test_summarize_usage_applies_filters_and_echoes_them(tmp_path) -> None:
                 tokens=TokenBreakdown(input=100, output=5),
                 provider_id="anthropic",
                 model_id="claude-sonnet-4",
+                thinking_level="high",
                 agent="plan",
             ),
             make_usage_event(
@@ -171,6 +179,7 @@ def test_summarize_usage_applies_filters_and_echoes_them(tmp_path) -> None:
                 tokens=TokenBreakdown(input=50, cache_read=10),
                 provider_id="anthropic",
                 model_id="claude-sonnet-4",
+                thinking_level="low",
                 agent=None,
             ),
             make_usage_event(
@@ -194,6 +203,7 @@ def test_summarize_usage_applies_filters_and_echoes_them(tmp_path) -> None:
             source_session_id="pi-1",
             provider_id="anthropic",
             model_id="claude-sonnet-4",
+            thinking_level="high",
             agent="plan",
         ),
     )
@@ -203,6 +213,7 @@ def test_summarize_usage_applies_filters_and_echoes_them(tmp_path) -> None:
         "source_session_id": "pi-1",
         "provider_id": "anthropic",
         "model_id": "claude-sonnet-4",
+        "thinking_level": "high",
         "agent": "plan",
     }
     assert report.totals.tokens.input == 100
@@ -216,8 +227,106 @@ def test_summarize_usage_applies_filters_and_echoes_them(tmp_path) -> None:
     assert report.by_harness[0].source_cost_usd == 0.1
     assert report.by_harness[0].actual_cost_usd == 0.0
     assert report.by_model[0].model_id == "claude-sonnet-4"
+    assert report.by_model[0].thinking_level == "high"
     assert report.by_model[0].source_cost_usd == 0.1
     assert report.by_model[0].actual_cost_usd == 0.0
     assert report.by_agent[0].agent == "plan"
     assert report.by_agent[0].source_cost_usd == 0.1
     assert report.by_agent[0].actual_cost_usd == 0.0
+
+
+def test_summarize_usage_supports_unscoped_period_ranges(tmp_path) -> None:
+    conn = connect(tmp_path / "toktrail.db")
+    migrate(conn)
+    first = make_usage_event(dedup_suffix="1", cost_usd=0.1)
+    second = make_usage_event(dedup_suffix="2", cost_usd=0.2)
+
+    insert_usage_events(conn, None, [first, second])
+    report = summarize_usage(
+        conn,
+        UsageReportFilter(
+            since_ms=first.created_ms,
+            until_ms=second.created_ms,
+        ),
+    )
+
+    assert report.session is None
+    assert report.totals.tokens.total == first.tokens.total
+    assert report.totals.source_cost_usd == first.source_cost_usd
+
+
+def test_summarize_usage_can_split_and_collapse_thinking_levels(tmp_path) -> None:
+    conn = connect(tmp_path / "toktrail.db")
+    migrate(conn)
+    session_id = create_tracking_session(conn, "thinking")
+
+    insert_usage_events(
+        conn,
+        session_id,
+        [
+            make_usage_event(
+                dedup_suffix="1",
+                provider_id="openai",
+                model_id="gpt-5.4",
+                thinking_level="high",
+                tokens=TokenBreakdown(input=10, output=5),
+                cost_usd=0.0,
+            ),
+            make_usage_event(
+                dedup_suffix="2",
+                provider_id="openai",
+                model_id="gpt-5.4",
+                thinking_level="low",
+                tokens=TokenBreakdown(input=20, output=7),
+                cost_usd=0.0,
+            ),
+        ],
+    )
+
+    split_report = summarize_usage(
+        conn,
+        UsageReportFilter(tracking_session_id=session_id),
+    )
+    collapsed_report = summarize_usage(
+        conn,
+        UsageReportFilter(tracking_session_id=session_id, split_thinking=False),
+    )
+
+    assert [
+        (row.provider_id, row.model_id, row.thinking_level, row.total_tokens)
+        for row in split_report.by_model
+    ] == [
+        ("openai", "gpt-5.4", "high", 15),
+        ("openai", "gpt-5.4", "low", 27),
+    ]
+    assert [
+        (row.provider_id, row.model_id, row.thinking_level, row.total_tokens)
+        for row in collapsed_report.by_model
+    ] == [("openai", "gpt-5.4", None, 42)]
+    assert split_report.totals.tokens.total == collapsed_report.totals.tokens.total
+    assert (
+        split_report.totals.actual_cost_usd
+        == collapsed_report.totals.actual_cost_usd
+    )
+
+
+def test_session_report_uses_tracking_session_events_for_membership(
+    tmp_path,
+) -> None:
+    conn = connect(tmp_path / "toktrail.db")
+    migrate(conn)
+    first_session_id = create_tracking_session(conn, "first")
+    event = make_usage_event(dedup_suffix="1", cost_usd=0.0)
+
+    first_insert = insert_usage_events(conn, first_session_id, [event])
+    end_tracking_session(conn, first_session_id)
+    second_session_id = create_tracking_session(conn, "second")
+    second_insert = insert_usage_events(conn, second_session_id, [event])
+    second_report = summarize_tracking_session(conn, second_session_id)
+
+    assert first_insert.rows_inserted == 1
+    assert first_insert.rows_linked == 1
+    assert second_insert.rows_inserted == 0
+    assert second_insert.rows_linked == 1
+    assert second_report.session.id == second_session_id
+    assert second_report.totals.tokens.total == event.tokens.total

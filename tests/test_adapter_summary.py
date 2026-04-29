@@ -105,11 +105,48 @@ def test_summary_helpers_aggregate_events_consistently() -> None:
     assert by_agent[0].actual_cost_usd == 0.0
 
 
+def test_summarize_events_by_model_can_collapse_thinking_levels() -> None:
+    events = [
+        _event(
+            source_session_id="ses-1",
+            provider_id="openai",
+            model_id="gpt-5.4",
+            thinking_level="high",
+            agent="plan",
+            created_ms=1000,
+            tokens=TokenBreakdown(input=10, output=2),
+            cost_usd=0.1,
+        ),
+        _event(
+            source_session_id="ses-1",
+            provider_id="openai",
+            model_id="gpt-5.4",
+            thinking_level="low",
+            agent="plan",
+            created_ms=2000,
+            tokens=TokenBreakdown(input=4, reasoning=6),
+            cost_usd=0.2,
+        ),
+    ]
+
+    split_rows = summarize_events_by_model(events)
+    collapsed_rows = summarize_events_by_model(events, split_thinking=False)
+
+    assert [(row.thinking_level, row.total_tokens) for row in split_rows] == [
+        ("high", 12),
+        ("low", 10),
+    ]
+    assert [(row.thinking_level, row.total_tokens) for row in collapsed_rows] == [
+        (None, 22)
+    ]
+
+
 def _event(
     *,
     source_session_id: str,
     provider_id: str,
     model_id: str,
+    thinking_level: str | None = None,
     agent: str | None,
     created_ms: int,
     tokens: TokenBreakdown,
@@ -126,6 +163,7 @@ def _event(
         fingerprint_hash=dedup_key,
         provider_id=provider_id,
         model_id=model_id,
+        thinking_level=thinking_level,
         agent=agent,
         created_ms=created_ms,
         completed_ms=None,

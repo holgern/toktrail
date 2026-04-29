@@ -10,7 +10,7 @@ from typing import Any
 from toktrail.adapters.base import ScanResult, SourceSessionSummary
 from toktrail.adapters.summary import summarize_events_by_source_session
 from toktrail.config import CostingConfig
-from toktrail.models import TokenBreakdown, UsageEvent
+from toktrail.models import TokenBreakdown, UsageEvent, normalize_thinking_level
 from toktrail.provider_identity import inferred_provider_from_model
 
 COPILOT_HARNESS = "copilot"
@@ -188,6 +188,18 @@ def _parse_copilot_line(
         or "unknown"
     )
     provider_id = inferred_provider_from_model(model) or "github-copilot"
+    thinking_level = normalize_thinking_level(
+        _first_non_empty_attr(
+            attributes,
+            [
+                "gen_ai.request.reasoning_effort",
+                "gen_ai.openai.request.reasoning_effort",
+                "gen_ai.request.thinking_level",
+                "github.copilot.chat.reasoning_effort",
+                "github.copilot.chat.thinking_level",
+            ],
+        )
+    )
 
     trace_id = _as_str(span.get("traceId")) or "unknown-trace"
     span_id = _as_str(span.get("spanId")) or "unknown-span"
@@ -224,6 +236,7 @@ def _parse_copilot_line(
         fingerprint_hash="",
         provider_id=provider_id,
         model_id=model,
+        thinking_level=thinking_level,
         agent=None,
         created_ms=timestamp_ms,
         completed_ms=end_time_ms,
@@ -333,6 +346,7 @@ def _make_fingerprint(event: UsageEvent) -> str:
         "reasoning": event.tokens.reasoning,
         "cache_read": event.tokens.cache_read,
         "cache_write": event.tokens.cache_write,
+        "thinking_level": event.thinking_level,
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
