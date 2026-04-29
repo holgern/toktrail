@@ -6,6 +6,7 @@ from pathlib import Path
 from toktrail.api.harnesses import supported_harnesses
 from toktrail.api.models import CostTotals, TokenBreakdown, UsageEvent
 from toktrail.api.paths import (
+    default_droid_sessions_path,
     default_goose_sessions_db_path,
     default_source_path,
     resolve_source_path,
@@ -98,23 +99,28 @@ def test_public_models_preserve_raw_json_privacy_by_default() -> None:
     assert CostTotals(actual_cost_usd=1.0, virtual_cost_usd=2.5).savings_usd == 1.5
 
 
-def test_public_harness_metadata_and_paths_include_codex_and_goose(
+def test_public_harness_metadata_and_paths_include_codex_goose_and_droid(
     monkeypatch,
     tmp_path,
 ) -> None:
     codex_env_path = tmp_path / "codex-sessions"
     copilot_env_path = tmp_path / "copilot.jsonl"
     goose_env_path = tmp_path / "goose-sessions.db"
+    droid_env_path = tmp_path / "factory-sessions"
     monkeypatch.setenv("TOKTRAIL_CODEX_SESSIONS", str(codex_env_path))
     monkeypatch.setenv("TOKTRAIL_COPILOT_FILE", str(copilot_env_path))
     monkeypatch.setenv("TOKTRAIL_GOOSE_SESSIONS", str(goose_env_path))
+    monkeypatch.setenv("TOKTRAIL_DROID_SESSIONS", str(droid_env_path))
 
     harness_names = {definition.name for definition in supported_harnesses()}
 
     assert "codex" in harness_names
     assert "goose" in harness_names
+    assert "droid" in harness_names
     assert default_source_path("codex") == Path.home() / ".codex" / "sessions"
     assert default_source_path("goose") == default_goose_sessions_db_path()
+    assert default_source_path("droid") == default_droid_sessions_path()
+    assert default_source_path("droid") == Path.home() / ".factory" / "sessions"
     assert resolve_source_path("codex", tmp_path / "explicit-codex") == (
         tmp_path / "explicit-codex"
     )
@@ -123,3 +129,7 @@ def test_public_harness_metadata_and_paths_include_codex_and_goose(
         tmp_path / "explicit-goose.db"
     )
     assert resolve_source_path("goose") == goose_env_path
+    assert resolve_source_path("droid", tmp_path / "explicit-droid") == (
+        tmp_path / "explicit-droid"
+    )
+    assert resolve_source_path("droid") == droid_env_path

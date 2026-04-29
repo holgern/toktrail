@@ -21,6 +21,7 @@ run coding agent without importing toktrail internals.
 - GitHub Copilot CLI: `copilot`
 - Codex CLI: `codex`
 - Goose: `goose`
+- Droid: `droid`
 
 ## Run examples
 
@@ -30,6 +31,7 @@ python examples/manual_run_pi.py
 python examples/manual_run_copilot.py --shell bash
 python examples/manual_run_codex.py
 python examples/manual_run_goose.py
+python examples/manual_run_droid.py
 ```
 
 ## Goose API example
@@ -44,6 +46,20 @@ from toktrail.api.sources import list_source_sessions
 source_path = default_goose_sessions_db_path()
 result = import_usage(Path(".toktrail/toktrail.db"), "goose", source_path=source_path)
 sessions = list_source_sessions("goose", source_path=source_path, limit=5)
+```
+
+## Droid API example
+
+```python
+from pathlib import Path
+
+from toktrail.api.imports import import_usage
+from toktrail.api.paths import default_droid_sessions_path
+from toktrail.api.sources import list_source_sessions
+
+source_path = default_droid_sessions_path()
+result = import_usage(Path(".toktrail/toktrail.db"), "droid", source_path=source_path)
+sessions = list_source_sessions("droid", source_path=source_path, limit=5)
 ```
 
 ## Per-harness notes
@@ -72,6 +88,11 @@ Goose usually writes cumulative SQLite session rows to
 paste the printed prompt, wait for the answer, exit Goose, then press Enter in
 the Python script. Use `--source /path/to/sessions.db` to override the source
 path.
+
+Droid usually writes cumulative settings JSON files under
+`~/.factory/sessions`. Start Droid in this repository, paste the printed prompt,
+wait for the answer, exit Droid, then press Enter in the Python script. Use
+`--source /path/to/factory/sessions` to override the source path.
 
 ## Detailed output
 

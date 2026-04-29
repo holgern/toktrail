@@ -7,12 +7,14 @@ from pathlib import Path
 from toktrail.adapters.base import ScanResult, SourceSessionSummary
 from toktrail.adapters.codex import list_codex_sessions, scan_codex_path
 from toktrail.adapters.copilot import list_copilot_sessions, scan_copilot_path
+from toktrail.adapters.droid import list_droid_sessions, scan_droid_path
 from toktrail.adapters.goose import list_goose_sessions, scan_goose_sqlite
 from toktrail.adapters.opencode import list_opencode_sessions, scan_opencode_sqlite
 from toktrail.adapters.pi import list_pi_sessions, scan_pi_path
 from toktrail.paths import (
     resolve_codex_sessions_path,
     resolve_copilot_source_path,
+    resolve_droid_sessions_path,
     resolve_goose_sessions_path,
     resolve_opencode_db_path,
     resolve_pi_sessions_path,
@@ -63,6 +65,13 @@ HARNESS_REGISTRY: dict[str, HarnessDefinition] = {
         resolve_source_path=resolve_goose_sessions_path,
         scan=scan_goose_sqlite,
         list_sessions=list_goose_sessions,
+    ),
+    "droid": HarnessDefinition(
+        name="droid",
+        display_name="Droid",
+        resolve_source_path=resolve_droid_sessions_path,
+        scan=scan_droid_path,
+        list_sessions=list_droid_sessions,
     ),
 }
 

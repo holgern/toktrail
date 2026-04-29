@@ -9,10 +9,12 @@ from toktrail.paths import (
     COPILOT_OTEL_FILE_EXPORTER_PATH_ENV,
     GOOSE_PATH_ROOT_ENV,
     TOKTRAIL_CODEX_SESSIONS_ENV,
+    TOKTRAIL_DROID_SESSIONS_ENV,
     TOKTRAIL_GOOSE_SESSIONS_ENV,
     TOKTRAIL_PI_SESSIONS_ENV,
     default_codex_sessions_path,
     default_copilot_otel_dir,
+    default_droid_sessions_path,
     default_goose_sessions_db_path,
     default_opencode_db_path,
     default_pi_sessions_path,
@@ -67,6 +69,15 @@ _HARNESSES: tuple[HarnessDefinition, ...] = (
         default_source_path=default_goose_sessions_db_path(),
         source_path_env_vars=(TOKTRAIL_GOOSE_SESSIONS_ENV, GOOSE_PATH_ROOT_ENV),
         source_path_kind="file",
+    ),
+    HarnessDefinition(
+        name="droid",
+        display_name="Droid",
+        supports_watch=False,
+        supports_environment=False,
+        default_source_path=default_droid_sessions_path(),
+        source_path_env_vars=(TOKTRAIL_DROID_SESSIONS_ENV,),
+        source_path_kind="path",
     ),
 )
 

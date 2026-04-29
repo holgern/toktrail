@@ -11,6 +11,7 @@ from tests.helpers import (
     create_opencode_db,
     insert_message,
 )
+from tests.test_droid_parser import write_droid_settings
 from tests.test_goose_parser import create_goose_db, insert_session
 from toktrail.api.imports import import_configured_usage, import_usage
 from toktrail.api.reports import session_report
@@ -168,30 +169,65 @@ def test_import_usage_supports_codex_source(tmp_path) -> None:
     assert report.totals.tokens.total == 155
 
 
+def test_import_usage_supports_droid_source(tmp_path) -> None:
+    state_db = tmp_path / "toktrail.db"
+    droid_source = tmp_path / "factory" / "sessions"
+    write_droid_settings(droid_source / "droid-1.settings.json")
+    init_state(state_db)
+    session = start_session(state_db, name="droid")
+
+    first = import_usage(
+        state_db,
+        "droid",
+        source_path=droid_source,
+        session_id=session.id,
+    )
+    second = import_usage(
+        state_db,
+        "droid",
+        source_path=droid_source,
+        session_id=session.id,
+    )
+    report = session_report(state_db, session.id)
+
+    assert first.rows_imported == 1
+    assert second.rows_imported == 0
+    assert report.by_harness[0].harness == "droid"
+    assert report.totals.tokens.input == 1234
+    assert report.totals.tokens.output == 567
+    assert report.totals.tokens.reasoning == 34
+    assert report.totals.tokens.cache_read == 12
+    assert report.totals.tokens.cache_write == 89
+    assert report.totals.tokens.total == 1936
+
+
 def test_import_configured_usage_imports_all_configured_harnesses(tmp_path) -> None:
     state_db = tmp_path / "toktrail.db"
     source_db = tmp_path / "opencode.db"
     codex_file = tmp_path / "codex" / "session-001.jsonl"
     goose_db = tmp_path / "goose" / "sessions.db"
+    droid_source = tmp_path / "factory" / "sessions"
     _create_opencode_messages(source_db)
     create_codex_session_file(codex_file)
     create_goose_db(goose_db)
     insert_session(goose_db)
+    write_droid_settings(droid_source / "droid-1.settings.json")
     config_path = tmp_path / "toktrail.toml"
     config_path.write_text(
         f"""
 config_version = 1
 
 [imports]
-harnesses = ["opencode", "pi", "codex", "goose"]
+harnesses = ["opencode", "pi", "codex", "goose", "droid"]
 missing_source = "warn"
 include_raw_json = false
 
 [imports.sources]
 opencode = "{source_db}"
-pi = "{tmp_path / 'missing-pi'}"
+pi = "{tmp_path / "missing-pi"}"
 codex = "{codex_file}"
 goose = "{goose_db}"
+droid = "{droid_source}"
 """.strip(),
         encoding="utf-8",
     )
@@ -206,6 +242,7 @@ goose = "{goose_db}"
         ("pi", "skipped", 0),
         ("codex", "ok", 1),
         ("goose", "ok", 1),
+        ("droid", "ok", 1),
     ]
 
 

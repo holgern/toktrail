@@ -6,7 +6,13 @@ def inferred_provider_from_model(model_id: str) -> str | None:
     if not model or model == "unknown":
         return None
 
-    if model.startswith("claude") or "anthropic" in model:
+    if (
+        model.startswith("claude")
+        or model.startswith("opus-")
+        or model.startswith("sonnet-")
+        or model.startswith("haiku-")
+        or "anthropic" in model
+    ):
         return "anthropic"
     if (
         model.startswith("gpt-")

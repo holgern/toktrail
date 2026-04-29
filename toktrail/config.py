@@ -46,7 +46,7 @@ _COSTING_FIELDS = {
     "price_profile",
 }
 _PRICING_FIELDS = {"virtual", "actual"}
-_SUPPORTED_HARNESSES = {"opencode", "pi", "copilot", "codex", "goose"}
+_SUPPORTED_HARNESSES = {"opencode", "pi", "copilot", "codex", "goose", "droid"}
 _SEPARATOR_RE = re.compile(r"[/_\s]+")
 _INVALID_IDENTITY_CHARS_RE = re.compile(r"[^a-z0-9.-]+")
 _DASH_RE = re.compile(r"-+")
@@ -55,7 +55,7 @@ DEFAULT_CONFIG_TEXT = """\
 config_version = 1
 
 [imports]
-harnesses = ["opencode", "pi", "copilot", "codex", "goose"]
+harnesses = ["opencode", "pi", "copilot", "codex", "goose", "droid"]
 missing_source = "warn"
 include_raw_json = false
 
@@ -65,6 +65,7 @@ pi = "~/.pi/agent/sessions"
 copilot = "~/.copilot/otel"
 codex = "~/.codex/sessions"
 goose = "~/.local/share/goose/sessions/sessions.db"
+droid = "~/.factory/sessions"
 
 [costing]
 default_actual_mode = "source"
@@ -90,13 +91,17 @@ mode = "zero"
 [[actual_cost]]
 harness = "goose"
 mode = "zero"
+
+[[actual_cost]]
+harness = "droid"
+mode = "zero"
 """
 
 COPILOT_TEMPLATE_TEXT = """\
 config_version = 1
 
 [imports]
-harnesses = ["opencode", "pi", "copilot", "codex", "goose"]
+harnesses = ["opencode", "pi", "copilot", "codex", "goose", "droid"]
 missing_source = "warn"
 include_raw_json = false
 
@@ -106,6 +111,7 @@ pi = "~/.pi/agent/sessions"
 copilot = "~/.copilot/otel"
 codex = "~/.codex/sessions"
 goose = "~/.local/share/goose/sessions/sessions.db"
+droid = "~/.factory/sessions"
 
 [costing]
 default_actual_mode = "source"
@@ -131,6 +137,10 @@ mode = "zero"
 
 [[actual_cost]]
 harness = "goose"
+mode = "zero"
+
+[[actual_cost]]
+harness = "droid"
 mode = "zero"
 
 # OpenAI
@@ -446,7 +456,14 @@ class CostingConfig:
 
 @dataclass(frozen=True)
 class ImportConfig:
-    harnesses: tuple[str, ...] = ("opencode", "pi", "copilot", "codex")
+    harnesses: tuple[str, ...] = (
+        "opencode",
+        "pi",
+        "copilot",
+        "codex",
+        "goose",
+        "droid",
+    )
     sources: dict[str, Path] | None = None
     missing_source: ImportMissingSourceMode = "warn"
     include_raw_json: bool = False
@@ -511,6 +528,12 @@ def default_costing_config() -> CostingConfig:
             ),
             ActualCostRule(
                 harness="goose",
+                provider=None,
+                model=None,
+                mode="zero",
+            ),
+            ActualCostRule(
+                harness="droid",
                 provider=None,
                 model=None,
                 mode="zero",
@@ -595,16 +618,12 @@ def parse_toktrail_config(data: object) -> ToktrailConfig:
     costing_table = _parse_optional_table(data.get("costing"), context="costing")
     _validate_allowed_keys(costing_table, _COSTING_FIELDS, context="costing")
     default_actual_mode = _parse_choice(
-        costing_table.get(
-            "default_actual_mode", costing_default.default_actual_mode
-        ),
+        costing_table.get("default_actual_mode", costing_default.default_actual_mode),
         valid=_VALID_ACTUAL_COST_MODES,
         context="costing.default_actual_mode",
     )
     default_virtual_mode = _parse_choice(
-        costing_table.get(
-            "default_virtual_mode", costing_default.default_virtual_mode
-        ),
+        costing_table.get("default_virtual_mode", costing_default.default_virtual_mode),
         valid=_VALID_VIRTUAL_COST_MODES,
         context="costing.default_virtual_mode",
     )

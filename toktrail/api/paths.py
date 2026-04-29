@@ -8,6 +8,9 @@ from toktrail.paths import (
     default_codex_sessions_path as _default_codex_sessions_path,
 )
 from toktrail.paths import (
+    default_droid_sessions_path as _default_droid_sessions_path,
+)
+from toktrail.paths import (
     default_goose_sessions_db_path as _default_goose_sessions_db_path,
 )
 from toktrail.paths import (
@@ -19,6 +22,7 @@ from toktrail.paths import (
 from toktrail.paths import (
     resolve_codex_sessions_path,
     resolve_copilot_source_path,
+    resolve_droid_sessions_path,
     resolve_goose_sessions_path,
     resolve_opencode_db_path,
     resolve_pi_sessions_path,
@@ -64,6 +68,10 @@ def default_goose_sessions_db_path() -> Path:
     return _default_goose_sessions_db_path()
 
 
+def default_droid_sessions_path() -> Path:
+    return _default_droid_sessions_path()
+
+
 def resolve_source_path(
     harness: str,
     source_path: Path | None = None,
@@ -79,12 +87,15 @@ def resolve_source_path(
         return resolve_codex_sessions_path(source_path)
     if normalized == "goose":
         return resolve_goose_sessions_path(source_path)
+    if normalized == "droid":
+        return resolve_droid_sessions_path(source_path)
     msg = f"Unsupported harness: {harness}"
     raise StateDatabaseError(msg)
 
 
 __all__ = [
     "default_codex_sessions_path",
+    "default_droid_sessions_path",
     "default_goose_sessions_db_path",
     "default_source_path",
     "default_toktrail_config_path",

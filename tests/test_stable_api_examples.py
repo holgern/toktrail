@@ -28,6 +28,7 @@ EXAMPLE_PATHS = (
     Path("examples/manual_run_copilot.py"),
     Path("examples/manual_run_codex.py"),
     Path("examples/manual_run_goose.py"),
+    Path("examples/manual_run_droid.py"),
 )
 
 WRAPPER_MODULES = (
@@ -36,6 +37,7 @@ WRAPPER_MODULES = (
     "examples.manual_run_copilot",
     "examples.manual_run_codex",
     "examples.manual_run_goose",
+    "examples.manual_run_droid",
 )
 
 FORBIDDEN_TOKTRAIL_IMPORTS = (
@@ -86,12 +88,8 @@ def test_examples_import_only_public_toktrail_modules() -> None:
 
 def test_manual_workflow_prepares_before_input_and_finalizes_after_input() -> None:
     tree = _parse(Path("examples/_manual_run_common.py"))
-    functions = [
-        node for node in tree.body if isinstance(node, ast.FunctionDef)
-    ]
-    run_function = next(
-        node for node in functions if node.name == "run_manual_example"
-    )
+    functions = [node for node in tree.body if isinstance(node, ast.FunctionDef)]
+    run_function = next(node for node in functions if node.name == "run_manual_example")
     calls = [
         node.func.id
         for node in ast.walk(run_function)

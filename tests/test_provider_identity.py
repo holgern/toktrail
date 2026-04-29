@@ -5,6 +5,9 @@ from toktrail.provider_identity import inferred_provider_from_model
 
 def test_inferred_provider_from_model_known_models() -> None:
     assert inferred_provider_from_model("claude-sonnet-4") == "anthropic"
+    assert inferred_provider_from_model("opus-4") == "anthropic"
+    assert inferred_provider_from_model("sonnet-4") == "anthropic"
+    assert inferred_provider_from_model("haiku-3") == "anthropic"
     assert inferred_provider_from_model("gpt-5.4-mini") == "openai"
     assert inferred_provider_from_model("gemini-2.5-pro") == "google"
     assert inferred_provider_from_model("grok-code-fast-1") == "xai"

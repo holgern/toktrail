@@ -97,6 +97,27 @@ def create_goose_source_db(path: Path) -> None:
     conn.close()
 
 
+def create_droid_source(path: Path) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    (path / "droid-1.settings.json").write_text(
+        json.dumps(
+            {
+                "model": "custom:Claude-Opus-4.5-Thinking-[Anthropic]-0",
+                "providerLock": "anthropic",
+                "providerLockTimestamp": "2024-12-26T12:00:00Z",
+                "tokenUsage": {
+                    "inputTokens": 1234,
+                    "outputTokens": 567,
+                    "cacheCreationTokens": 89,
+                    "cacheReadTokens": 12,
+                    "thinkingTokens": 34,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
 def create_thinking_source_db(path: Path) -> None:
     conn = create_opencode_db(path)
     high = deepcopy(VALID_ASSISTANT)
@@ -462,6 +483,68 @@ def test_cli_import_goose_status(tmp_path) -> None:
     assert payload["totals"]["reasoning"] == 20
     assert payload["totals"]["total"] == 150
     assert payload["totals"]["source_cost_usd"] == 0.0
+
+
+def test_cli_import_droid_status(tmp_path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    source_path = tmp_path / "factory" / "sessions"
+    create_droid_source(source_path)
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    runner.invoke(app, ["--db", str(state_db), "start", "--name", "droid"])
+    result = runner.invoke(
+        app,
+        ["--db", str(state_db), "import", "droid", "--droid-path", str(source_path)],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Imported Droid usage:" in result.output
+    assert "rows imported: 1" in result.output
+
+    status = runner.invoke(app, ["--db", str(state_db), "status", "1", "--json"])
+    payload = json.loads(status.output)
+    assert payload["by_harness"][0]["harness"] == "droid"
+    assert payload["totals"]["input"] == 1234
+    assert payload["totals"]["output"] == 567
+    assert payload["totals"]["reasoning"] == 34
+    assert payload["totals"]["cache_read"] == 12
+    assert payload["totals"]["cache_write"] == 89
+    assert payload["totals"]["total"] == 1936
+
+
+def test_cli_sessions_droid_breakdown_shows_token_columns(tmp_path) -> None:
+    runner = CliRunner()
+    source_path = tmp_path / "factory" / "sessions"
+    create_droid_source(source_path)
+
+    result = runner.invoke(
+        app,
+        [
+            "sessions",
+            "droid",
+            "--droid-path",
+            str(source_path),
+            "--last",
+            "--breakdown",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Droid source session droid-1" in result.output
+    assert "input:" in result.output
+    assert "output:" in result.output
+    assert "reasoning:" in result.output
+    assert "cache read:" in result.output
+    assert "cache write:" in result.output
+
+
+def test_cli_watch_droid_is_not_registered() -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(app, ["watch", "droid"])
+
+    assert result.exit_code != 0
 
 
 def test_cli_status_supports_thinking_filter_and_collapse(tmp_path) -> None:
