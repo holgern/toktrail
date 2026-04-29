@@ -555,5 +555,6 @@ __all__ = [
     "TokenBreakdown",
     "TrackingSession",
     "TrackingSessionReport",
+    "UnconfiguredModelRow",
     "UsageEvent",
 ]

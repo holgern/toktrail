@@ -36,6 +36,27 @@ from toktrail.api.models import (
     UsageEvent,
 )
 
+from toktrail.api.config import (
+    config_exists,
+    config_summary,
+    init_config,
+    render_config_template,
+)
+from toktrail.api.harnesses import (
+    get_harness_definition,
+    is_supported_harness,
+    normalize_harness_name,
+    supported_harnesses,
+)
+from toktrail.api.paths import (
+    default_codex_sessions_path,
+    default_source_path,
+    default_toktrail_config_path,
+    default_toktrail_db_path,
+    resolve_source_path,
+    resolve_toktrail_config_path,
+    resolve_toktrail_db_path,
+)
 from toktrail.api.sessions import (
     get_active_session,
     get_session,
@@ -51,7 +72,7 @@ from toktrail.api.sources import (
     list_source_sessions,
     scan_usage,
 )
-from toktrail.api.imports import import_usage
+from toktrail.api.imports import import_configured_usage, import_usage
 from toktrail.api.reports import session_report, usage_report
 from toktrail.api.environment import prepare_environment
 from toktrail.api.workflow import finalize_manual_run, prepare_manual_run
@@ -157,7 +178,7 @@ toktrail does not fall back to inferred provider aliases from the model name.
 ```python
 from pathlib import Path
 
-from toktrail.api.imports import import_usage
+from toktrail.api.imports import import_configured_usage, import_usage
 from toktrail.api.sources import capture_source_snapshot, list_source_sessions
 from toktrail.api.reports import session_report, usage_report
 from toktrail.api.sessions import init_state, start_session
@@ -184,6 +205,29 @@ same public API used for OpenCode, Pi, and Copilot.
 
 `usage_report()` no longer requires `session_id`. When used for canonical
 period/time-range reporting, it returns `TrackingSessionReport(session=None, ...)`.
+
+### Configured import
+
+Use `import_configured_usage()` when the caller wants the same behavior as plain
+`toktrail import`: read enabled harnesses from `[imports].harnesses`, source
+paths from `[imports.sources]`, raw JSON behavior from
+`[imports].include_raw_json`, and missing-source handling from
+`[imports].missing_source`.
+
+```python
+from pathlib import Path
+
+from toktrail.api.imports import import_configured_usage
+
+results = import_configured_usage(
+    Path(".toktrail/toktrail.db"),
+    config_path=Path("~/.config/toktrail/config.toml").expanduser(),
+    use_active_session=False,
+)
+```
+
+Use `import_usage()` when the caller already selected one harness and source
+path.
 
 ## Manual workflow API
 

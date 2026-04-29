@@ -79,25 +79,12 @@ Import usage from config or a single harness:
 ```bash
 toktrail config init
 toktrail import
-toktrail import --harness opencode --source tests/fixtures/opencode.db
 toktrail import --harness codex --source ~/.codex/sessions
 toktrail import --no-session
-toktrail import opencode
-toktrail import pi
-toktrail import codex
-toktrail import codex --codex-path ~/.codex/sessions
-toktrail import codex --source-session session-001
-toktrail import codex --since-start --no-raw
-toktrail import pi --pi-path ~/.pi/agent/sessions
-toktrail import pi --pi-path ~/.pi/agent/sessions/<encoded-cwd>/session.jsonl
-toktrail import pi --source-session pi_ses_001
-toktrail import pi --since-start
-toktrail import pi --no-raw
-toktrail import copilot --copilot-file /path/to/copilot-otel.jsonl
 ```
 
-For local acceptance and testing, a sample OpenCode source database is checked
-in at `tests/fixtures/opencode.db`:
+For local acceptance and testing, the repository includes a sample OpenCode
+source database at `tests/fixtures/opencode.db`:
 
 ```bash
 toktrail import opencode --opencode-db tests/fixtures/opencode.db
@@ -130,6 +117,42 @@ Stop the active tracking session:
 ```bash
 toktrail stop
 ```
+
+## Command model
+
+The canonical CLI flow is:
+
+```bash
+toktrail init
+toktrail config init
+toktrail start --name <name>
+toktrail import
+toktrail status
+toktrail usage today
+toktrail sessions
+toktrail sessions <harness>
+toktrail stop
+```
+
+Use `toktrail import` for normal operation. It reads enabled harnesses and
+source paths from `config.toml`:
+
+```toml
+[imports]
+harnesses = ["opencode", "pi", "copilot", "codex"]
+missing_source = "warn"
+include_raw_json = false
+
+[imports.sources]
+opencode = "~/.local/share/opencode/opencode.db"
+pi = "~/.pi/agent/sessions"
+copilot = "~/.copilot/otel"
+codex = "~/.codex/sessions"
+```
+
+Use `toktrail import --harness <name> --source <path>` for one-off imports.
+Harness-specific subcommands such as `toktrail import codex` remain available
+for compatibility, but they are not the preferred documented workflow.
 
 ## Commands
 
@@ -184,6 +207,8 @@ The plain `toktrail import` command reads enabled harnesses and source paths fro
 `[imports]` and `[imports.sources]` in `config.toml`. Legacy
 `toktrail import opencode|pi|copilot|codex` subcommands still work for
 compatibility.
+
+## Advanced: harness-specific import and watch
 
 Import or watch OpenCode usage:
 

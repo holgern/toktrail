@@ -26,6 +26,15 @@ def test_public_modules_import_successfully() -> None:
         assert importlib.import_module(module_name) is not None
 
 
+def test_public_models_star_export_includes_documented_models() -> None:
+    namespace: dict[str, object] = {}
+    exec("from toktrail.api.models import *", namespace, namespace)
+
+    assert "UnconfiguredModelRow" in namespace
+    assert "TrackingSessionReport" in namespace
+    assert "FinalizedManualRun" in namespace
+
+
 def test_solvecost_style_imports_use_only_public_modules() -> None:
     namespace: dict[str, object] = {}
     exec(
