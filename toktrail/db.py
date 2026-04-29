@@ -12,6 +12,7 @@ from toktrail.reporting import (
     ModelSummaryRow,
     SessionTotals,
     TrackingSessionReport,
+    UsageReportFilter,
 )
 
 SCHEMA_VERSION = 1
@@ -375,10 +376,23 @@ def insert_usage_events(
 def summarize_tracking_session(
     conn: sqlite3.Connection, session_id: int
 ) -> TrackingSessionReport:
-    session = get_tracking_session(conn, session_id)
-    if session is None:
-        msg = f"Tracking session not found: {session_id}"
+    return summarize_usage(conn, UsageReportFilter(tracking_session_id=session_id))
+
+
+def summarize_usage(
+    conn: sqlite3.Connection,
+    filters: UsageReportFilter,
+) -> TrackingSessionReport:
+    if filters.tracking_session_id is None:
+        msg = "UsageReportFilter.tracking_session_id is required."
         raise ValueError(msg)
+
+    session = get_tracking_session(conn, filters.tracking_session_id)
+    if session is None:
+        msg = f"Tracking session not found: {filters.tracking_session_id}"
+        raise ValueError(msg)
+
+    where_clause, params = _usage_report_where(filters)
 
     totals_row = conn.execute(
         """
@@ -390,9 +404,9 @@ def summarize_tracking_session(
             COALESCE(SUM(cache_write_tokens), 0) AS cache_write_tokens,
             COALESCE(SUM(cost_usd), 0.0) AS cost_usd
         FROM usage_events
-        WHERE tracking_session_id = ?
-        """,
-        (session_id,),
+        """
+        + where_clause,
+        params,
     ).fetchone()
 
     by_harness_rows = conn.execute(
@@ -406,11 +420,13 @@ def summarize_tracking_session(
             ) AS total_tokens,
             SUM(cost_usd) AS cost_usd
         FROM usage_events
-        WHERE tracking_session_id = ?
+        """
+        + where_clause
+        + """
         GROUP BY harness
         ORDER BY cost_usd DESC, total_tokens DESC
         """,
-        (session_id,),
+        params,
     ).fetchall()
     by_model_rows = conn.execute(
         """
@@ -425,11 +441,13 @@ def summarize_tracking_session(
             SUM(cache_write_tokens) AS cache_write_tokens,
             SUM(cost_usd) AS cost_usd
         FROM usage_events
-        WHERE tracking_session_id = ?
+        """
+        + where_clause
+        + """
         GROUP BY provider_id, model_id
         ORDER BY cost_usd DESC, message_count DESC
         """,
-        (session_id,),
+        params,
     ).fetchall()
     by_agent_rows = conn.execute(
         """
@@ -442,11 +460,13 @@ def summarize_tracking_session(
             ) AS total_tokens,
             SUM(cost_usd) AS cost_usd
         FROM usage_events
-        WHERE tracking_session_id = ?
+        """
+        + where_clause
+        + """
         GROUP BY COALESCE(agent, 'unknown')
         ORDER BY cost_usd DESC, total_tokens DESC
         """,
-        (session_id,),
+        params,
     ).fetchall()
 
     return TrackingSessionReport(
@@ -483,7 +503,41 @@ def summarize_tracking_session(
             )
             for row in by_agent_rows
         ],
+        filters=filters,
     )
+
+
+def _usage_report_where(filters: UsageReportFilter) -> tuple[str, list[object]]:
+    clauses: list[str] = []
+    params: list[object] = []
+
+    if filters.tracking_session_id is not None:
+        clauses.append("tracking_session_id = ?")
+        params.append(filters.tracking_session_id)
+    if filters.harness is not None:
+        clauses.append("harness = ?")
+        params.append(filters.harness)
+    if filters.source_session_id is not None:
+        clauses.append("source_session_id = ?")
+        params.append(filters.source_session_id)
+    if filters.provider_id is not None:
+        clauses.append("provider_id = ?")
+        params.append(filters.provider_id)
+    if filters.model_id is not None:
+        clauses.append("model_id = ?")
+        params.append(filters.model_id)
+    if filters.agent is not None:
+        clauses.append("COALESCE(agent, 'unknown') = ?")
+        params.append(filters.agent)
+    if filters.since_ms is not None:
+        clauses.append("created_ms >= ?")
+        params.append(filters.since_ms)
+    if filters.until_ms is not None:
+        clauses.append("created_ms <= ?")
+        params.append(filters.until_ms)
+
+    where_clause = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+    return where_clause, params
 
 
 def _tracking_session_from_row(row: sqlite3.Row) -> TrackingSession:

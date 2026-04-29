@@ -214,6 +214,9 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 
+.codex
+.pi-lens/
+
 # Streamlit
 .streamlit/secrets.toml
 .taskledger/

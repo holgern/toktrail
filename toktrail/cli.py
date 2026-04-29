@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
+import shlex
 import sqlite3
+import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -9,12 +12,13 @@ from typing import Annotated, NoReturn
 
 import typer
 
-from toktrail.adapters.copilot import scan_copilot_file
-from toktrail.adapters.opencode import (
-    list_opencode_sessions,
-    scan_opencode_sqlite,
+from toktrail.adapters.base import SourceSessionSummary
+from toktrail.adapters.registry import get_harness
+from toktrail.adapters.summary import (
+    summarize_event_totals,
+    summarize_events_by_agent,
+    summarize_events_by_model,
 )
-from toktrail.adapters.pi import list_pi_sessions, scan_pi_path
 from toktrail.db import (
     connect,
     create_tracking_session,
@@ -24,25 +28,33 @@ from toktrail.db import (
     insert_usage_events,
     list_tracking_sessions,
     migrate,
-    summarize_tracking_session,
+    summarize_usage,
 )
+from toktrail.formatting import format_epoch_ms_compact
+from toktrail.models import UsageEvent
 from toktrail.paths import (
-    resolve_copilot_file_path,
-    resolve_opencode_db_path,
-    resolve_pi_sessions_path,
+    new_copilot_otel_file_path,
     resolve_toktrail_db_path,
 )
+from toktrail.reporting import ModelSummaryRow, UsageReportFilter
 
 app = typer.Typer(help="Track harness token usage in local SQLite sessions.")
 import_app = typer.Typer(help="Import usage from external harnesses.")
 watch_app = typer.Typer(help="Watch external harnesses and import new usage.")
+sessions_app = typer.Typer(
+    invoke_without_command=True,
+    help="List toktrail tracking sessions and raw source sessions.",
+)
 opencode_app = typer.Typer(help="Inspect OpenCode source data.")
 pi_app = typer.Typer(help="Inspect Pi source data.")
+copilot_app = typer.Typer(help="Inspect and run GitHub Copilot CLI tracking.")
 
 app.add_typer(import_app, name="import")
 app.add_typer(watch_app, name="watch")
+app.add_typer(sessions_app, name="sessions")
 app.add_typer(opencode_app, name="opencode")
 app.add_typer(pi_app, name="pi")
+app.add_typer(copilot_app, name="copilot")
 
 
 @dataclass(frozen=True)
@@ -64,13 +76,33 @@ SessionOption = Annotated[int | None, typer.Option("--session")]
 SourceSessionOption = Annotated[str | None, typer.Option("--source-session")]
 NameOption = Annotated[str | None, typer.Option("--name")]
 JsonOption = Annotated[bool, typer.Option("--json")]
+HarnessOption = Annotated[str | None, typer.Option("--harness")]
+ProviderOption = Annotated[str | None, typer.Option("--provider")]
+ModelOption = Annotated[str | None, typer.Option("--model")]
+AgentOption = Annotated[str | None, typer.Option("--agent")]
+SinceMsOption = Annotated[int | None, typer.Option("--since-ms")]
+UntilMsOption = Annotated[int | None, typer.Option("--until-ms")]
+SourceSessionArgument = Annotated[str | None, typer.Argument()]
+LastOption = Annotated[bool, typer.Option("--last")]
+BreakdownOption = Annotated[bool, typer.Option("--breakdown")]
+UtcOption = Annotated[bool, typer.Option("--utc")]
+LimitOption = Annotated[int | None, typer.Option("--limit", min=1)]
+SortOption = Annotated[str, typer.Option("--sort")]
+ColumnsOption = Annotated[str | None, typer.Option("--columns")]
+RichOption = Annotated[bool, typer.Option("--rich")]
 OpenCodeDbOption = Annotated[
     Path | None,
     typer.Option("--opencode-db", "--db", help="Override OpenCode DB path."),
 ]
-CopilotFileOption = Annotated[
+CopilotPathOption = Annotated[
     Path | None,
-    typer.Option("--copilot-file", "--file", help="Copilot CLI OTEL JSONL file."),
+    typer.Option(
+        "--copilot-file",
+        "--copilot-path",
+        "--file",
+        "--path",
+        help="Copilot CLI OTEL JSONL file or directory.",
+    ),
 ]
 PiPathOption = Annotated[
     Path | None,
@@ -79,6 +111,7 @@ PiPathOption = Annotated[
 SinceStartOption = Annotated[bool, typer.Option("--since-start")]
 NoRawOption = Annotated[bool, typer.Option("--no-raw")]
 IntervalOption = Annotated[float, typer.Option("--interval", min=0.1)]
+CopilotRunArgs = Annotated[list[str], typer.Argument(help="Command to run after --.")]
 
 
 @app.callback()
@@ -143,6 +176,14 @@ def status(
     ctx: typer.Context,
     session_id: SessionArgument = None,
     json_output: JsonOption = False,
+    harness: HarnessOption = None,
+    source_session_id: SourceSessionOption = None,
+    provider_id: ProviderOption = None,
+    model_id: ModelOption = None,
+    agent: AgentOption = None,
+    since_ms: SinceMsOption = None,
+    until_ms: UntilMsOption = None,
+    rich_output: RichOption = False,
 ) -> None:
     conn = _open_toktrail_connection(ctx)
     try:
@@ -152,7 +193,19 @@ def status(
         if selected_session_id is None:
             _exit_with_error("No active tracking session found.")
 
-        report = summarize_tracking_session(conn, selected_session_id)
+        report = summarize_usage(
+            conn,
+            UsageReportFilter(
+                tracking_session_id=selected_session_id,
+                harness=harness,
+                source_session_id=source_session_id,
+                provider_id=provider_id,
+                model_id=model_id,
+                agent=agent,
+                since_ms=since_ms,
+                until_ms=until_ms,
+            ),
+        )
     finally:
         conn.close()
 
@@ -188,12 +241,7 @@ def status(
     typer.echo("")
     typer.echo("By model")
     if report.by_model:
-        for model_row in report.by_model:
-            typer.echo(
-                f"  {model_row.provider_id}/{model_row.model_id:<24}"
-                f"{_format_int(model_row.total_tokens):>12} tokens   "
-                f"{_format_cost(model_row.cost_usd)}"
-            )
+        _print_model_table(report.by_model, rich_output=rich_output)
     else:
         typer.echo("  (none)")
 
@@ -210,8 +258,10 @@ def status(
         typer.echo("  (none)")
 
 
-@app.command()
+@sessions_app.callback(invoke_without_command=True)
 def sessions(ctx: typer.Context) -> None:
+    if ctx.invoked_subcommand is not None:
+        return
     conn = _open_toktrail_connection(ctx)
     try:
         tracking_sessions = list_tracking_sessions(conn)
@@ -226,7 +276,8 @@ def sessions(ctx: typer.Context) -> None:
         state = "active" if session.ended_at_ms is None else "stopped"
         typer.echo(
             f"{session.id}\t{state}\t{session.name or '(unnamed)'}\t"
-            f"started={session.started_at_ms}\tended={session.ended_at_ms}"
+            f"started={format_epoch_ms_compact(session.started_at_ms)}\t"
+            f"ended={format_epoch_ms_compact(session.ended_at_ms)}"
         )
 
 
@@ -239,11 +290,12 @@ def import_opencode(
     since_start: SinceStartOption = False,
     no_raw: NoRawOption = False,
 ) -> None:
-    result = _run_opencode_import(
+    result = _run_harness_import(
         ctx,
+        harness_name="opencode",
+        source_path=opencode_db,
         tracking_session_id=session_id,
         source_session_id=source_session_id,
-        opencode_db=opencode_db,
         since_start=since_start,
         no_raw=no_raw,
     )
@@ -255,15 +307,16 @@ def import_copilot(
     ctx: typer.Context,
     session_id: SessionOption = None,
     source_session_id: SourceSessionOption = None,
-    copilot_file: CopilotFileOption = None,
+    copilot_path: CopilotPathOption = None,
     since_start: SinceStartOption = False,
     no_raw: NoRawOption = False,
 ) -> None:
-    result = _run_copilot_import(
+    result = _run_harness_import(
         ctx,
+        harness_name="copilot",
+        source_path=copilot_path,
         tracking_session_id=session_id,
         source_session_id=source_session_id,
-        copilot_file=copilot_file,
         since_start=since_start,
         no_raw=no_raw,
     )
@@ -279,11 +332,12 @@ def import_pi(
     since_start: SinceStartOption = False,
     no_raw: NoRawOption = False,
 ) -> None:
-    result = _run_pi_import(
+    result = _run_harness_import(
         ctx,
+        harness_name="pi",
+        source_path=pi_path,
         tracking_session_id=session_id,
         source_session_id=source_session_id,
-        pi_path=pi_path,
         since_start=since_start,
         no_raw=no_raw,
     )
@@ -300,30 +354,16 @@ def watch_opencode(
     since_start: SinceStartOption = False,
     no_raw: NoRawOption = False,
 ) -> None:
-    total_seen = 0
-    total_imported = 0
-    total_skipped = 0
-    try:
-        while True:
-            result = _run_opencode_import(
-                ctx,
-                tracking_session_id=session_id,
-                source_session_id=source_session_id,
-                opencode_db=opencode_db,
-                since_start=since_start,
-                no_raw=no_raw,
-            )
-            total_seen += result.rows_seen
-            total_imported += result.rows_imported
-            total_skipped += result.rows_skipped
-            _print_import_result(result)
-            time.sleep(interval)
-    except KeyboardInterrupt:
-        typer.echo("")
-        typer.echo("Stopped watching OpenCode.")
-        typer.echo(f"  rows seen:     {total_seen}")
-        typer.echo(f"  rows imported: {total_imported}")
-        typer.echo(f"  rows skipped:  {total_skipped}")
+    _watch_harness(
+        ctx,
+        harness_name="opencode",
+        source_path=opencode_db,
+        tracking_session_id=session_id,
+        source_session_id=source_session_id,
+        interval=interval,
+        since_start=since_start,
+        no_raw=no_raw,
+    )
 
 
 @watch_app.command("copilot")
@@ -331,35 +371,21 @@ def watch_copilot(
     ctx: typer.Context,
     session_id: SessionOption = None,
     source_session_id: SourceSessionOption = None,
-    copilot_file: CopilotFileOption = None,
+    copilot_path: CopilotPathOption = None,
     interval: IntervalOption = 2.0,
     since_start: SinceStartOption = False,
     no_raw: NoRawOption = False,
 ) -> None:
-    total_seen = 0
-    total_imported = 0
-    total_skipped = 0
-    try:
-        while True:
-            result = _run_copilot_import(
-                ctx,
-                tracking_session_id=session_id,
-                source_session_id=source_session_id,
-                copilot_file=copilot_file,
-                since_start=since_start,
-                no_raw=no_raw,
-            )
-            total_seen += result.rows_seen
-            total_imported += result.rows_imported
-            total_skipped += result.rows_skipped
-            _print_import_result(result)
-            time.sleep(interval)
-    except KeyboardInterrupt:
-        typer.echo("")
-        typer.echo("Stopped watching Copilot.")
-        typer.echo(f"  rows seen:     {total_seen}")
-        typer.echo(f"  rows imported: {total_imported}")
-        typer.echo(f"  rows skipped:  {total_skipped}")
+    _watch_harness(
+        ctx,
+        harness_name="copilot",
+        source_path=copilot_path,
+        tracking_session_id=session_id,
+        source_session_id=source_session_id,
+        interval=interval,
+        since_start=since_start,
+        no_raw=no_raw,
+    )
 
 
 @watch_app.command("pi")
@@ -372,16 +398,343 @@ def watch_pi(
     since_start: SinceStartOption = False,
     no_raw: NoRawOption = False,
 ) -> None:
+    _watch_harness(
+        ctx,
+        harness_name="pi",
+        source_path=pi_path,
+        tracking_session_id=session_id,
+        source_session_id=source_session_id,
+        interval=interval,
+        since_start=since_start,
+        no_raw=no_raw,
+    )
+
+
+@sessions_app.command("opencode")
+def sessions_opencode(
+    source_session_id: SourceSessionArgument = None,
+    opencode_db: OpenCodeDbOption = None,
+    last: LastOption = False,
+    breakdown: BreakdownOption = False,
+    json_output: JsonOption = False,
+    utc: UtcOption = False,
+    limit: LimitOption = None,
+    sort: SortOption = "last",
+    columns: ColumnsOption = None,
+    rich_output: RichOption = False,
+) -> None:
+    _run_source_sessions_command(
+        "opencode",
+        source_path=opencode_db,
+        source_session_id=source_session_id,
+        last=last,
+        breakdown=breakdown,
+        json_output=json_output,
+        utc=utc,
+        limit=limit,
+        sort=sort,
+        columns=columns,
+        rich_output=rich_output,
+    )
+
+
+@sessions_app.command("pi")
+def sessions_pi(
+    source_session_id: SourceSessionArgument = None,
+    pi_path: PiPathOption = None,
+    last: LastOption = False,
+    breakdown: BreakdownOption = False,
+    json_output: JsonOption = False,
+    utc: UtcOption = False,
+    limit: LimitOption = None,
+    sort: SortOption = "last",
+    columns: ColumnsOption = None,
+    rich_output: RichOption = False,
+) -> None:
+    _run_source_sessions_command(
+        "pi",
+        source_path=pi_path,
+        source_session_id=source_session_id,
+        last=last,
+        breakdown=breakdown,
+        json_output=json_output,
+        utc=utc,
+        limit=limit,
+        sort=sort,
+        columns=columns,
+        rich_output=rich_output,
+    )
+
+
+@sessions_app.command("copilot")
+def sessions_copilot(
+    source_session_id: SourceSessionArgument = None,
+    copilot_path: CopilotPathOption = None,
+    last: LastOption = False,
+    breakdown: BreakdownOption = False,
+    json_output: JsonOption = False,
+    utc: UtcOption = False,
+    limit: LimitOption = None,
+    sort: SortOption = "last",
+    columns: ColumnsOption = None,
+    rich_output: RichOption = False,
+) -> None:
+    _run_source_sessions_command(
+        "copilot",
+        source_path=copilot_path,
+        source_session_id=source_session_id,
+        last=last,
+        breakdown=breakdown,
+        json_output=json_output,
+        utc=utc,
+        limit=limit,
+        sort=sort,
+        columns=columns,
+        rich_output=rich_output,
+    )
+
+
+@opencode_app.command("sessions")
+def opencode_sessions(
+    source_session_id: SourceSessionArgument = None,
+    opencode_db: OpenCodeDbOption = None,
+    last: LastOption = False,
+    breakdown: BreakdownOption = False,
+    json_output: JsonOption = False,
+    utc: UtcOption = False,
+    limit: LimitOption = None,
+    sort: SortOption = "last",
+    columns: ColumnsOption = None,
+    rich_output: RichOption = False,
+) -> None:
+    sessions_opencode(
+        source_session_id=source_session_id,
+        opencode_db=opencode_db,
+        last=last,
+        breakdown=breakdown,
+        json_output=json_output,
+        utc=utc,
+        limit=limit,
+        sort=sort,
+        columns=columns,
+        rich_output=rich_output,
+    )
+
+
+@pi_app.command("sessions")
+def pi_sessions(
+    source_session_id: SourceSessionArgument = None,
+    pi_path: PiPathOption = None,
+    last: LastOption = False,
+    breakdown: BreakdownOption = False,
+    json_output: JsonOption = False,
+    utc: UtcOption = False,
+    limit: LimitOption = None,
+    sort: SortOption = "last",
+    columns: ColumnsOption = None,
+    rich_output: RichOption = False,
+) -> None:
+    sessions_pi(
+        source_session_id=source_session_id,
+        pi_path=pi_path,
+        last=last,
+        breakdown=breakdown,
+        json_output=json_output,
+        utc=utc,
+        limit=limit,
+        sort=sort,
+        columns=columns,
+        rich_output=rich_output,
+    )
+
+
+@copilot_app.command("sessions")
+def copilot_sessions(
+    source_session_id: SourceSessionArgument = None,
+    copilot_path: CopilotPathOption = None,
+    last: LastOption = False,
+    breakdown: BreakdownOption = False,
+    json_output: JsonOption = False,
+    utc: UtcOption = False,
+    limit: LimitOption = None,
+    sort: SortOption = "last",
+    columns: ColumnsOption = None,
+    rich_output: RichOption = False,
+) -> None:
+    sessions_copilot(
+        source_session_id=source_session_id,
+        copilot_path=copilot_path,
+        last=last,
+        breakdown=breakdown,
+        json_output=json_output,
+        utc=utc,
+        limit=limit,
+        sort=sort,
+        columns=columns,
+        rich_output=rich_output,
+    )
+
+
+@copilot_app.command(
+    "run",
+    context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
+)
+def copilot_run(
+    ctx: typer.Context,
+    session_id: SessionOption = None,
+    no_import: Annotated[bool, typer.Option("--no-import")] = False,
+    no_raw: NoRawOption = False,
+    otel_file: Annotated[Path | None, typer.Option("--otel-file")] = None,
+) -> None:
+    command = list(ctx.args)
+    if command and command[0] == "--":
+        command = command[1:]
+    if not command:
+        _exit_with_error("Missing command after '--'.")
+
+    path = (otel_file or new_copilot_otel_file_path()).expanduser()
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    env = os.environ.copy()
+    env["COPILOT_OTEL_ENABLED"] = "true"
+    env["COPILOT_OTEL_EXPORTER_TYPE"] = "file"
+    env["COPILOT_OTEL_FILE_EXPORTER_PATH"] = str(path)
+    env["TOKTRAIL_COPILOT_FILE"] = str(path)
+
+    completed = subprocess.run(command, env=env, check=False)
+    typer.echo(f"Copilot OTEL file: {path}")
+
+    if not no_import:
+        result = _run_harness_import(
+            ctx,
+            harness_name="copilot",
+            source_path=path,
+            tracking_session_id=session_id,
+            source_session_id=None,
+            since_start=False,
+            no_raw=no_raw,
+        )
+        _print_import_result(result)
+
+    raise typer.Exit(completed.returncode)
+
+
+@copilot_app.command("env")
+def copilot_env(
+    shell: Annotated[str, typer.Argument()],
+    otel_file: Annotated[Path | None, typer.Option("--otel-file")] = None,
+) -> None:
+    path = (otel_file or new_copilot_otel_file_path()).expanduser()
+    quoted_path = shlex.quote(str(path))
+
+    if shell == "bash":
+        typer.echo("export COPILOT_OTEL_ENABLED=true")
+        typer.echo("export COPILOT_OTEL_EXPORTER_TYPE=file")
+        typer.echo(f"export COPILOT_OTEL_FILE_EXPORTER_PATH={quoted_path}")
+        typer.echo(f"export TOKTRAIL_COPILOT_FILE={quoted_path}")
+        return
+    if shell == "powershell":
+        typer.echo('$env:COPILOT_OTEL_ENABLED = "true"')
+        typer.echo('$env:COPILOT_OTEL_EXPORTER_TYPE = "file"')
+        typer.echo(f'$env:COPILOT_OTEL_FILE_EXPORTER_PATH = "{path}"')
+        typer.echo(f'$env:TOKTRAIL_COPILOT_FILE = "{path}"')
+        return
+
+    _exit_with_error("Unsupported shell. Use 'bash' or 'powershell'.")
+
+
+def cli_main() -> None:
+    app()
+
+
+def _run_harness_import(
+    ctx: typer.Context,
+    *,
+    harness_name: str,
+    source_path: Path | None,
+    tracking_session_id: int | None,
+    source_session_id: str | None,
+    since_start: bool,
+    no_raw: bool,
+) -> ImportExecutionResult:
+    harness = get_harness(harness_name)
+    conn = _open_toktrail_connection(ctx)
+    try:
+        resolved_source = harness.resolve_source_path(source_path)
+        if resolved_source is None or not resolved_source.exists():
+            _exit_with_error(
+                _missing_source_path_message(
+                    harness_name,
+                    resolved_source,
+                    explicit_source=source_path,
+                )
+            )
+
+        selected_session_id = tracking_session_id
+        if selected_session_id is None:
+            selected_session_id = get_active_tracking_session(conn)
+        if selected_session_id is None:
+            _exit_with_error("No active tracking session found.")
+
+        tracking_session = get_tracking_session(conn, selected_session_id)
+        if tracking_session is None:
+            _exit_with_error(f"Tracking session not found: {selected_session_id}")
+
+        scan = harness.scan(
+            resolved_source,
+            source_session_id=source_session_id,
+            include_raw_json=not no_raw,
+        )
+        since_ms = tracking_session.started_at_ms if since_start else None
+        filtered_events = [
+            event
+            for event in scan.events
+            if since_ms is None or event.created_ms >= since_ms
+        ]
+        insert_result = insert_usage_events(conn, selected_session_id, filtered_events)
+        rows_filtered = len(scan.events) - len(filtered_events)
+    finally:
+        conn.close()
+
+    rows_skipped = (
+        scan.rows_skipped
+        + rows_filtered
+        + len(filtered_events)
+        - insert_result.rows_inserted
+    )
+    return ImportExecutionResult(
+        harness=harness.display_name,
+        source_path=resolved_source,
+        tracking_session_id=selected_session_id,
+        rows_seen=scan.rows_seen,
+        rows_imported=insert_result.rows_inserted,
+        rows_skipped=rows_skipped,
+    )
+
+
+def _watch_harness(
+    ctx: typer.Context,
+    *,
+    harness_name: str,
+    source_path: Path | None,
+    tracking_session_id: int | None,
+    source_session_id: str | None,
+    interval: float,
+    since_start: bool,
+    no_raw: bool,
+) -> None:
+    harness = get_harness(harness_name)
     total_seen = 0
     total_imported = 0
     total_skipped = 0
     try:
         while True:
-            result = _run_pi_import(
+            result = _run_harness_import(
                 ctx,
-                tracking_session_id=session_id,
+                harness_name=harness_name,
+                source_path=source_path,
+                tracking_session_id=tracking_session_id,
                 source_session_id=source_session_id,
-                pi_path=pi_path,
                 since_start=since_start,
                 no_raw=no_raw,
             )
@@ -392,244 +745,405 @@ def watch_pi(
             time.sleep(interval)
     except KeyboardInterrupt:
         typer.echo("")
-        typer.echo("Stopped watching Pi.")
+        typer.echo(f"Stopped watching {harness.display_name}.")
         typer.echo(f"  rows seen:     {total_seen}")
         typer.echo(f"  rows imported: {total_imported}")
         typer.echo(f"  rows skipped:  {total_skipped}")
 
 
-@opencode_app.command("sessions")
-def opencode_sessions(
-    opencode_db: OpenCodeDbOption = None,
-) -> None:
-    source_path = resolve_opencode_db_path(opencode_db)
-    if not source_path.exists():
-        _exit_with_error(f"OpenCode database not found: {source_path}")
-
-    sessions_summary = list_opencode_sessions(source_path)
-    if not sessions_summary:
-        typer.echo("No importable OpenCode assistant messages found.")
-        return
-
-    for session in sessions_summary:
-        typer.echo(
-            f"{session.source_session_id}\tfirst={session.first_created_ms}\t"
-            f"last={session.last_created_ms}\tmessages={session.assistant_message_count}\t"
-            f"tokens={session.tokens.total}\tcost={_format_cost(session.cost_usd)}"
-        )
-
-
-@pi_app.command("sessions")
-def pi_sessions(
-    pi_path: PiPathOption = None,
-) -> None:
-    source_path = resolve_pi_sessions_path(pi_path)
-    if not source_path.exists():
-        _exit_with_error(f"Pi sessions path not found: {source_path}")
-
-    sessions_summary = list_pi_sessions(source_path)
-    if not sessions_summary:
-        typer.echo("No importable Pi assistant messages found.")
-        return
-
-    for session in sessions_summary:
-        typer.echo(
-            f"{session.source_session_id}\tfirst={session.first_created_ms}\t"
-            f"last={session.last_created_ms}\tmessages={session.assistant_message_count}\t"
-            f"tokens={session.tokens.total}\tcost={_format_cost(session.cost_usd)}"
-        )
-
-
-def cli_main() -> None:
-    app()
-
-
-def _run_opencode_import(
-    ctx: typer.Context,
+def _run_source_sessions_command(
+    harness_name: str,
     *,
-    tracking_session_id: int | None,
+    source_path: Path | None,
     source_session_id: str | None,
-    opencode_db: Path | None,
-    since_start: bool,
-    no_raw: bool,
-) -> ImportExecutionResult:
-    conn = _open_toktrail_connection(ctx)
-    try:
-        source_path = resolve_opencode_db_path(opencode_db)
-        if not source_path.exists():
-            _exit_with_error(f"OpenCode database not found: {source_path}")
+    last: bool,
+    breakdown: bool,
+    json_output: bool,
+    utc: bool,
+    limit: int | None,
+    sort: str,
+    columns: str | None,
+    rich_output: bool,
+) -> None:
+    if source_session_id is not None and last:
+        _exit_with_error("Use either a source session id or --last, not both.")
 
-        selected_session_id = tracking_session_id
-        if selected_session_id is None:
-            selected_session_id = get_active_tracking_session(conn)
-        if selected_session_id is None:
-            _exit_with_error("No active tracking session found.")
-
-        session = get_tracking_session(conn, selected_session_id)
-        if session is None:
-            _exit_with_error(f"Tracking session not found: {selected_session_id}")
-
-        scan = scan_opencode_sqlite(
-            source_path,
-            source_session_id=source_session_id,
-            include_raw_json=not no_raw,
-        )
-        since_ms = session.started_at_ms if since_start else None
-        filtered_events = [
-            event
-            for event in scan.events
-            if since_ms is None or event.created_ms >= since_ms
-        ]
-        insert_result = insert_usage_events(
-            conn,
-            selected_session_id,
-            filtered_events,
-        )
-        rows_filtered = len(scan.events) - len(filtered_events)
-    finally:
-        conn.close()
-
-    rows_skipped = (
-        scan.rows_skipped
-        + rows_filtered
-        + len(filtered_events)
-        - insert_result.rows_inserted
-    )
-    return ImportExecutionResult(
-        harness="OpenCode",
-        source_path=source_path,
-        tracking_session_id=selected_session_id,
-        rows_seen=scan.rows_seen,
-        rows_imported=insert_result.rows_inserted,
-        rows_skipped=rows_skipped,
-    )
-
-
-def _run_copilot_import(
-    ctx: typer.Context,
-    *,
-    tracking_session_id: int | None,
-    source_session_id: str | None,
-    copilot_file: Path | None,
-    since_start: bool,
-    no_raw: bool,
-) -> ImportExecutionResult:
-    conn = _open_toktrail_connection(ctx)
-    try:
-        source_path = resolve_copilot_file_path(copilot_file)
-        if source_path is None:
-            _exit_with_error(
-                "Copilot telemetry file not provided. "
-                "Use --copilot-file or TOKTRAIL_COPILOT_FILE."
+    harness = get_harness(harness_name)
+    resolved_source = harness.resolve_source_path(source_path)
+    if resolved_source is None or not resolved_source.exists():
+        _exit_with_error(
+            _missing_source_path_message(
+                harness_name,
+                resolved_source,
+                explicit_source=source_path,
             )
-        if not source_path.exists():
-            _exit_with_error(f"Copilot telemetry file not found: {source_path}")
-
-        selected_session_id = tracking_session_id
-        if selected_session_id is None:
-            selected_session_id = get_active_tracking_session(conn)
-        if selected_session_id is None:
-            _exit_with_error("No active tracking session found.")
-
-        session = get_tracking_session(conn, selected_session_id)
-        if session is None:
-            _exit_with_error(f"Tracking session not found: {selected_session_id}")
-
-        scan = scan_copilot_file(
-            source_path,
-            source_session_id=source_session_id,
-            include_raw_json=not no_raw,
         )
-        since_ms = session.started_at_ms if since_start else None
-        filtered_events = [
-            event
-            for event in scan.events
-            if since_ms is None or event.created_ms >= since_ms
-        ]
-        insert_result = insert_usage_events(
-            conn,
-            selected_session_id,
-            filtered_events,
-        )
-        rows_filtered = len(scan.events) - len(filtered_events)
-    finally:
-        conn.close()
 
-    rows_skipped = (
-        scan.rows_skipped
-        + rows_filtered
-        + len(filtered_events)
-        - insert_result.rows_inserted
+    summaries = _sorted_source_sessions(
+        harness.list_sessions(resolved_source),
+        sort=sort,
     )
-    return ImportExecutionResult(
-        harness="Copilot",
-        source_path=source_path,
-        tracking_session_id=selected_session_id,
-        rows_seen=scan.rows_seen,
-        rows_imported=insert_result.rows_inserted,
-        rows_skipped=rows_skipped,
+    if not summaries:
+        typer.echo(f"No importable {harness.display_name} assistant messages found.")
+        return
+
+    if source_session_id is None and not last:
+        limited = summaries[:limit] if limit is not None else summaries
+        _print_source_session_list(
+            limited,
+            json_output=json_output,
+            utc=utc,
+            columns=columns,
+            rich_output=rich_output,
+        )
+        return
+
+    selected = (
+        summaries[0]
+        if last
+        else _find_source_session_summary(summaries, source_session_id)
+    )
+    if selected is None:
+        _exit_with_error(
+            f"{harness.display_name} source session not found: {source_session_id}"
+        )
+
+    events = harness.scan(
+        resolved_source,
+        source_session_id=selected.source_session_id,
+        include_raw_json=False,
+    ).events
+    _print_source_session_detail(
+        harness.display_name,
+        selected,
+        events,
+        breakdown=breakdown,
+        json_output=json_output,
+        utc=utc,
+        rich_output=rich_output,
     )
 
 
-def _run_pi_import(
-    ctx: typer.Context,
+def _print_source_session_list(
+    summaries: list[SourceSessionSummary],
     *,
-    tracking_session_id: int | None,
+    json_output: bool,
+    utc: bool,
+    columns: str | None,
+    rich_output: bool,
+) -> None:
+    if json_output:
+        payload = [_source_session_summary_payload(summary) for summary in summaries]
+        typer.echo(json.dumps(payload, indent=2))
+        return
+
+    selected_columns = _normalize_source_session_columns(columns)
+    headers = {
+        "source_session_id": "source_session_id",
+        "first": "first",
+        "last": "last",
+        "msgs": "msgs",
+        "input": "input",
+        "output": "output",
+        "reasoning": "reasoning",
+        "cache_r": "cache_r",
+        "cache_w": "cache_w",
+        "total": "total",
+        "cost": "cost",
+        "providers": "providers",
+        "models": "models",
+        "source_paths": "source_paths",
+    }
+    rows = [
+        {
+            "source_session_id": summary.source_session_id,
+            "first": format_epoch_ms_compact(summary.first_created_ms, utc=utc),
+            "last": format_epoch_ms_compact(summary.last_created_ms, utc=utc),
+            "msgs": _format_int(summary.assistant_message_count),
+            "input": _format_int(summary.tokens.input),
+            "output": _format_int(summary.tokens.output),
+            "reasoning": _format_int(summary.tokens.reasoning),
+            "cache_r": _format_int(summary.tokens.cache_read),
+            "cache_w": _format_int(summary.tokens.cache_write),
+            "total": _format_int(summary.tokens.total),
+            "cost": _format_cost(summary.cost_usd),
+            "providers": ",".join(summary.providers),
+            "models": ",".join(summary.models),
+            "source_paths": ";".join(summary.source_paths),
+        }
+        for summary in summaries
+    ]
+    _print_table(rows, selected_columns, headers, rich_output=rich_output)
+
+
+def _print_source_session_detail(
+    harness_display_name: str,
+    summary: SourceSessionSummary,
+    events: list[UsageEvent],
+    *,
+    breakdown: bool,
+    json_output: bool,
+    utc: bool,
+    rich_output: bool,
+) -> None:
+    totals = summarize_event_totals(events)
+    by_model = summarize_events_by_model(events)
+    by_agent = summarize_events_by_agent(events)
+
+    if json_output:
+        typer.echo(
+            json.dumps(
+                {
+                    "harness": harness_display_name.lower(),
+                    "source_session_id": summary.source_session_id,
+                    "source_paths": list(summary.source_paths),
+                    "first_created_ms": summary.first_created_ms,
+                    "last_created_ms": summary.last_created_ms,
+                    "assistant_message_count": summary.assistant_message_count,
+                    "totals": totals.as_dict(),
+                    "by_model": [row.as_dict() for row in by_model],
+                    "by_agent": [row.as_dict() for row in by_agent],
+                },
+                indent=2,
+            )
+        )
+        return
+
+    typer.echo(f"{harness_display_name} source session {summary.source_session_id}")
+    typer.echo(
+        f"first:    {format_epoch_ms_compact(summary.first_created_ms, utc=utc)}"
+    )
+    typer.echo(
+        f"last:     {format_epoch_ms_compact(summary.last_created_ms, utc=utc)}"
+    )
+    typer.echo(f"messages: {summary.assistant_message_count}")
+    if summary.source_paths:
+        typer.echo(f"source:   {', '.join(summary.source_paths)}")
+    typer.echo(f"cost:     {_format_cost(totals.cost_usd)}")
+    typer.echo("")
+    typer.echo("Totals")
+    typer.echo(f"  input:       {_format_int(totals.tokens.input)}")
+    typer.echo(f"  output:      {_format_int(totals.tokens.output)}")
+    typer.echo(f"  reasoning:   {_format_int(totals.tokens.reasoning)}")
+    typer.echo(f"  cache read:  {_format_int(totals.tokens.cache_read)}")
+    typer.echo(f"  cache write: {_format_int(totals.tokens.cache_write)}")
+    typer.echo(f"  total:       {_format_int(totals.tokens.total)}")
+
+    if not breakdown:
+        return
+
+    typer.echo("")
+    typer.echo("By model")
+    _print_model_table(by_model, rich_output=rich_output)
+    if by_agent:
+        typer.echo("")
+        typer.echo("By agent")
+        for row in by_agent:
+            typer.echo(
+                f"  {row.agent:<12}"
+                f"{_format_int(row.total_tokens):>12} tokens   "
+                f"{_format_cost(row.cost_usd)}"
+            )
+
+
+def _source_session_summary_payload(
+    summary: SourceSessionSummary,
+) -> dict[str, object]:
+    return {
+        "harness": summary.harness,
+        "source_session_id": summary.source_session_id,
+        "first_created_ms": summary.first_created_ms,
+        "last_created_ms": summary.last_created_ms,
+        "assistant_message_count": summary.assistant_message_count,
+        "tokens": summary.tokens.as_dict(),
+        "cost_usd": summary.cost_usd,
+        "providers": list(summary.providers),
+        "models": list(summary.models),
+        "source_paths": list(summary.source_paths),
+    }
+
+
+def _sorted_source_sessions(
+    summaries: list[SourceSessionSummary],
+    *,
+    sort: str,
+) -> list[SourceSessionSummary]:
+    if sort == "last":
+        return sorted(
+            summaries,
+            key=lambda summary: (summary.last_created_ms, summary.source_session_id),
+            reverse=True,
+        )
+    if sort == "tokens":
+        return sorted(
+            summaries,
+            key=lambda summary: (
+                summary.tokens.total,
+                summary.last_created_ms,
+                summary.source_session_id,
+            ),
+            reverse=True,
+        )
+    if sort == "cost":
+        return sorted(
+            summaries,
+            key=lambda summary: (
+                summary.cost_usd,
+                summary.last_created_ms,
+                summary.source_session_id,
+            ),
+            reverse=True,
+        )
+    _exit_with_error("Unsupported sort. Use last, tokens, or cost.")
+
+
+def _find_source_session_summary(
+    summaries: list[SourceSessionSummary],
     source_session_id: str | None,
-    pi_path: Path | None,
-    since_start: bool,
-    no_raw: bool,
-) -> ImportExecutionResult:
-    conn = _open_toktrail_connection(ctx)
+) -> SourceSessionSummary | None:
+    for summary in summaries:
+        if summary.source_session_id == source_session_id:
+            return summary
+    return None
+
+
+def _normalize_source_session_columns(columns: str | None) -> list[str]:
+    default_columns = [
+        "source_session_id",
+        "first",
+        "last",
+        "msgs",
+        "input",
+        "output",
+        "reasoning",
+        "cache_r",
+        "cache_w",
+        "total",
+        "cost",
+    ]
+    if columns is None:
+        return default_columns
+
+    selected = [value.strip() for value in columns.split(",") if value.strip()]
+    allowed = set(default_columns + ["providers", "models", "source_paths"])
+    invalid = [value for value in selected if value not in allowed]
+    if invalid:
+        _exit_with_error(f"Unsupported columns: {', '.join(invalid)}")
+    return selected or default_columns
+
+
+def _render_table(
+    rows: list[dict[str, str]],
+    columns: list[str],
+    headers: dict[str, str],
+) -> str:
+    widths = {
+        column: max(
+            len(headers[column]),
+            *(len(row.get(column, "")) for row in rows),
+        )
+        for column in columns
+    }
+    lines = [
+        "  ".join(headers[column].ljust(widths[column]) for column in columns)
+    ]
+    for row in rows:
+        lines.append(
+            "  ".join(row.get(column, "").ljust(widths[column]) for column in columns)
+        )
+    return "\n".join(lines)
+
+
+def _print_table(
+    rows: list[dict[str, str]],
+    columns: list[str],
+    headers: dict[str, str],
+    *,
+    rich_output: bool,
+) -> None:
+    if not rich_output:
+        typer.echo(_render_table(rows, columns, headers))
+        return
+
     try:
-        source_path = resolve_pi_sessions_path(pi_path)
-        if not source_path.exists():
-            _exit_with_error(f"Pi sessions path not found: {source_path}")
+        from rich.console import Console
+        from rich.table import Table
+    except ImportError:
+        _exit_with_error("Rich output requires installing toktrail[rich].")
 
-        selected_session_id = tracking_session_id
-        if selected_session_id is None:
-            selected_session_id = get_active_tracking_session(conn)
-        if selected_session_id is None:
-            _exit_with_error("No active tracking session found.")
+    table = Table(show_header=True, header_style="bold")
+    for column in columns:
+        table.add_column(headers[column])
+    for row in rows:
+        table.add_row(*(row.get(column, "") for column in columns))
+    Console().print(table)
 
-        session = get_tracking_session(conn, selected_session_id)
-        if session is None:
-            _exit_with_error(f"Tracking session not found: {selected_session_id}")
 
-        scan = scan_pi_path(
-            source_path,
-            source_session_id=source_session_id,
-            include_raw_json=not no_raw,
-        )
-        since_ms = session.started_at_ms if since_start else None
-        filtered_events = [
-            event
-            for event in scan.events
-            if since_ms is None or event.created_ms >= since_ms
-        ]
-        insert_result = insert_usage_events(
-            conn,
-            selected_session_id,
-            filtered_events,
-        )
-        rows_filtered = len(scan.events) - len(filtered_events)
-    finally:
-        conn.close()
-
-    rows_skipped = (
-        scan.rows_skipped
-        + rows_filtered
-        + len(filtered_events)
-        - insert_result.rows_inserted
+def _print_model_table(
+    rows: list[ModelSummaryRow],
+    *,
+    rich_output: bool,
+) -> None:
+    headers = {
+        "provider_model": "provider/model",
+        "msgs": "msgs",
+        "input": "input",
+        "output": "output",
+        "reasoning": "reasoning",
+        "cache_r": "cache_r",
+        "cache_w": "cache_w",
+        "total": "total",
+        "cost": "cost",
+    }
+    payload_rows = [
+        {
+            "provider_model": f"{row.provider_id}/{row.model_id}",
+            "msgs": _format_int(row.message_count),
+            "input": _format_int(row.tokens.input),
+            "output": _format_int(row.tokens.output),
+            "reasoning": _format_int(row.tokens.reasoning),
+            "cache_r": _format_int(row.tokens.cache_read),
+            "cache_w": _format_int(row.tokens.cache_write),
+            "total": _format_int(row.total_tokens),
+            "cost": _format_cost(row.cost_usd),
+        }
+        for row in rows
+    ]
+    _print_table(
+        payload_rows,
+        [
+            "provider_model",
+            "msgs",
+            "input",
+            "output",
+            "reasoning",
+            "cache_r",
+            "cache_w",
+            "total",
+            "cost",
+        ],
+        headers,
+        rich_output=rich_output,
     )
-    return ImportExecutionResult(
-        harness="Pi",
-        source_path=source_path,
-        tracking_session_id=selected_session_id,
-        rows_seen=scan.rows_seen,
-        rows_imported=insert_result.rows_inserted,
-        rows_skipped=rows_skipped,
-    )
+
+
+def _missing_source_path_message(
+    harness_name: str,
+    resolved_source: Path | None,
+    *,
+    explicit_source: Path | None,
+) -> str:
+    if harness_name == "opencode":
+        return f"OpenCode database not found: {resolved_source}"
+    if harness_name == "pi":
+        return f"Pi sessions path not found: {resolved_source}"
+    if harness_name == "copilot" and (
+        explicit_source is not None
+        or (resolved_source is not None and resolved_source.suffix == ".jsonl")
+    ):
+        return f"Copilot telemetry file not found: {resolved_source}"
+    display_name = get_harness(harness_name).display_name
+    return f"{display_name} source path not found: {resolved_source}"
 
 
 def _print_import_result(

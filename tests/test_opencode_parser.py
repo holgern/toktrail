@@ -4,7 +4,11 @@ import json
 from copy import deepcopy
 
 from tests.helpers import VALID_ASSISTANT, create_opencode_db, insert_message
-from toktrail.adapters.opencode import parse_opencode_row, parse_opencode_sqlite
+from toktrail.adapters.opencode import (
+    list_opencode_sessions,
+    parse_opencode_row,
+    parse_opencode_sqlite,
+)
 
 
 def test_parse_valid_assistant_message(tmp_path) -> None:
@@ -156,3 +160,38 @@ def test_parse_returns_empty_list_for_missing_db(tmp_path) -> None:
     missing_db = tmp_path / "missing.db"
 
     assert parse_opencode_sqlite(missing_db) == []
+
+
+def test_list_opencode_sessions_aggregates_messages(tmp_path) -> None:
+    db_path = tmp_path / "opencode.db"
+    conn = create_opencode_db(db_path)
+    first = deepcopy(VALID_ASSISTANT)
+    second = deepcopy(VALID_ASSISTANT)
+    second["id"] = "msg_999"
+    second["tokens"] = {
+        "input": 1,
+        "output": 2,
+        "reasoning": 3,
+        "cache": {"read": 4, "write": 5},
+    }
+    insert_message(
+        conn,
+        row_id="row-1",
+        session_id="ses-1",
+        data=first,
+    )
+    insert_message(
+        conn,
+        row_id="row-2",
+        session_id="ses-1",
+        data=second,
+    )
+    conn.commit()
+    conn.close()
+
+    summaries = list_opencode_sessions(db_path)
+
+    assert len(summaries) == 1
+    assert summaries[0].source_session_id == "ses-1"
+    assert summaries[0].assistant_message_count == 2
+    assert summaries[0].tokens.total == 1865

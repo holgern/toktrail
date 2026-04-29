@@ -3,32 +3,18 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
+from toktrail.adapters.base import ScanResult, SourceSessionSummary
+from toktrail.adapters.summary import summarize_events_by_source_session
 from toktrail.models import TokenBreakdown, UsageEvent
 
 PI_HARNESS = "pi"
 
-
-@dataclass(frozen=True)
-class PiScanResult:
-    source_path: Path
-    files_seen: int
-    rows_seen: int
-    rows_skipped: int
-    events: list[UsageEvent]
-
-
-@dataclass(frozen=True)
-class PiSessionSummary:
-    source_session_id: str
-    first_created_ms: int
-    last_created_ms: int
-    assistant_message_count: int
-    tokens: TokenBreakdown
-    cost_usd: float
+PiScanResult = ScanResult
+PiSessionSummary = SourceSessionSummary
 
 
 def scan_pi_path(
@@ -173,39 +159,10 @@ def parse_pi_path(path: Path) -> list[UsageEvent]:
 
 def list_pi_sessions(source_path: Path) -> list[PiSessionSummary]:
     scan = scan_pi_path(source_path, include_raw_json=False)
-    grouped: dict[str, PiSessionSummary] = {}
-    for event in scan.events:
-        existing = grouped.get(event.source_session_id)
-        if existing is None:
-            grouped[event.source_session_id] = PiSessionSummary(
-                source_session_id=event.source_session_id,
-                first_created_ms=event.created_ms,
-                last_created_ms=event.created_ms,
-                assistant_message_count=1,
-                tokens=event.tokens,
-                cost_usd=event.cost_usd,
-            )
-            continue
-
-        grouped[event.source_session_id] = PiSessionSummary(
-            source_session_id=existing.source_session_id,
-            first_created_ms=min(existing.first_created_ms, event.created_ms),
-            last_created_ms=max(existing.last_created_ms, event.created_ms),
-            assistant_message_count=existing.assistant_message_count + 1,
-            tokens=TokenBreakdown(
-                input=existing.tokens.input + event.tokens.input,
-                output=existing.tokens.output + event.tokens.output,
-                reasoning=existing.tokens.reasoning + event.tokens.reasoning,
-                cache_read=existing.tokens.cache_read + event.tokens.cache_read,
-                cache_write=existing.tokens.cache_write + event.tokens.cache_write,
-            ),
-            cost_usd=existing.cost_usd + event.cost_usd,
-        )
-
-    return sorted(
-        grouped.values(),
-        key=lambda summary: (summary.last_created_ms, summary.source_session_id),
-        reverse=True,
+    return summarize_events_by_source_session(
+        PI_HARNESS,
+        scan.events,
+        source_paths_by_session=_pi_source_paths_by_session(source_path),
     )
 
 
@@ -274,6 +231,24 @@ def _parse_pi_entry_line(
         raw_json=line_json if include_raw_json else None,
     )
     return replace(event, fingerprint_hash=_make_fingerprint(event))
+
+
+def _pi_source_paths_by_session(source_path: Path) -> dict[str, list[Path]]:
+    resolved_path = source_path.expanduser()
+    if not resolved_path.exists():
+        return {}
+
+    file_paths = (
+        [resolved_path]
+        if resolved_path.is_file()
+        else sorted(resolved_path.rglob("*.jsonl"))
+    )
+    grouped: dict[str, list[Path]] = {}
+    for file_path in file_paths:
+        scan = scan_pi_file(file_path, include_raw_json=False)
+        for event in scan.events:
+            grouped.setdefault(event.source_session_id, []).append(file_path)
+    return grouped
 
 
 def _file_modified_timestamp_ms(path: Path) -> int:

@@ -16,7 +16,7 @@ The first implementation focuses on:
 - an OpenCode SQLite database, typically at
   `~/.local/share/opencode/opencode.db`, and/or
 - Pi session JSONL files, typically under `~/.pi/agent/sessions`, and/or
-- a GitHub Copilot CLI OTEL JSONL export file
+- GitHub Copilot CLI OTEL JSONL export files, typically under `~/.copilot/otel`
 
 toktrail reads supported source data in read-only mode and does not modify the
 source database or source JSONL files.
@@ -72,6 +72,7 @@ Show the current session totals:
 ```bash
 toktrail status
 toktrail status --json
+toktrail status --harness pi --source-session pi_ses_001 --json
 ```
 
 Stop the active tracking session:
@@ -95,6 +96,9 @@ toktrail start --name refactor-auth-flow
 toktrail stop
 toktrail stop 3
 toktrail sessions
+toktrail sessions pi
+toktrail sessions opencode
+toktrail sessions copilot
 ```
 
 Import or watch OpenCode usage:
@@ -133,23 +137,35 @@ toktrail import copilot --source-session conv-1 --copilot-file /path/to/copilot-
 toktrail import copilot --since-start --no-raw --copilot-file /path/to/copilot-otel.jsonl
 
 toktrail watch copilot --copilot-file /path/to/copilot-otel.jsonl --interval 2
+toktrail copilot run -- gh copilot suggest "explain git reflog"
+eval "$(toktrail copilot env bash)"
 ```
 
-If `TOKTRAIL_COPILOT_FILE` is set, `toktrail import copilot` and
-`toktrail watch copilot` can omit `--copilot-file`.
+If `TOKTRAIL_COPILOT_FILE` or `COPILOT_OTEL_FILE_EXPORTER_PATH` is set,
+`toktrail import copilot` and `toktrail watch copilot` can omit
+`--copilot-file`. If neither is set, toktrail also discovers the latest
+`~/.copilot/otel/*.jsonl` export when available.
 
-Inspect OpenCode source sessions without mutating toktrail state:
+Inspect raw source sessions without mutating toktrail state:
+
+```bash
+toktrail sessions opencode
+toktrail sessions opencode --opencode-db /path/to/opencode.db
+toktrail sessions pi
+toktrail sessions pi --pi-path ~/.pi/agent/sessions
+toktrail sessions pi --last --breakdown
+toktrail sessions pi --sort tokens --limit 5 --columns source_session_id,total --rich
+toktrail sessions pi pi_ses_001 --json
+toktrail sessions copilot
+toktrail sessions copilot --copilot-path ~/.copilot/otel
+```
+
+Legacy aliases remain available:
 
 ```bash
 toktrail opencode sessions
-toktrail opencode sessions --opencode-db /path/to/opencode.db
-```
-
-Inspect Pi source sessions without mutating toktrail state:
-
-```bash
 toktrail pi sessions
-toktrail pi sessions --pi-path ~/.pi/agent/sessions
+toktrail copilot sessions
 ```
 
 ## Storage and privacy
@@ -183,6 +199,8 @@ toktrail never prints raw OpenCode, Pi, or Copilot JSON in CLI output.
 - total input, output, reasoning, cache-read, and cache-write tokens
 - total cost in USD
 - grouped summaries by harness, model, and agent/mode
+- optional filtered views by harness, source session, provider, model, agent,
+  and created-at time range
 
 `toktrail status --json` returns the same information in a machine-readable JSON
 shape for automation.

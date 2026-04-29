@@ -5,21 +5,17 @@ import json
 import math
 import sqlite3
 from contextlib import closing
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from pathlib import Path
 from urllib.parse import quote
 
-from toktrail.models import OpenCodeSessionSummary, TokenBreakdown, UsageEvent
+from toktrail.adapters.base import ScanResult, SourceSessionSummary
+from toktrail.adapters.summary import summarize_events_by_source_session
+from toktrail.models import TokenBreakdown, UsageEvent
 
 OPENCODE_HARNESS = "opencode"
 
-
-@dataclass(frozen=True)
-class OpenCodeScanResult:
-    source_path: Path
-    rows_seen: int
-    rows_skipped: int
-    events: list[UsageEvent]
+OpenCodeScanResult = ScanResult
 
 
 def open_readonly_sqlite(path: Path) -> sqlite3.Connection:
@@ -98,40 +94,16 @@ def parse_opencode_sqlite(db_path: Path) -> list[UsageEvent]:
     return scan_opencode_sqlite(db_path).events
 
 
-def list_opencode_sessions(db_path: Path) -> list[OpenCodeSessionSummary]:
+def list_opencode_sessions(db_path: Path) -> list[SourceSessionSummary]:
     scan = scan_opencode_sqlite(db_path, include_raw_json=False)
-    grouped: dict[str, OpenCodeSessionSummary] = {}
-    for event in scan.events:
-        existing = grouped.get(event.source_session_id)
-        if existing is None:
-            grouped[event.source_session_id] = OpenCodeSessionSummary(
-                source_session_id=event.source_session_id,
-                first_created_ms=event.created_ms,
-                last_created_ms=event.created_ms,
-                assistant_message_count=1,
-                tokens=event.tokens,
-                cost_usd=event.cost_usd,
-            )
-            continue
-
-        grouped[event.source_session_id] = OpenCodeSessionSummary(
-            source_session_id=existing.source_session_id,
-            first_created_ms=min(existing.first_created_ms, event.created_ms),
-            last_created_ms=max(existing.last_created_ms, event.created_ms),
-            assistant_message_count=existing.assistant_message_count + 1,
-            tokens=TokenBreakdown(
-                input=existing.tokens.input + event.tokens.input,
-                output=existing.tokens.output + event.tokens.output,
-                reasoning=existing.tokens.reasoning + event.tokens.reasoning,
-                cache_read=existing.tokens.cache_read + event.tokens.cache_read,
-                cache_write=existing.tokens.cache_write + event.tokens.cache_write,
-            ),
-            cost_usd=existing.cost_usd + event.cost_usd,
-        )
-    return sorted(
-        grouped.values(),
-        key=lambda summary: (summary.last_created_ms, summary.source_session_id),
-        reverse=True,
+    source_paths = {
+        event.source_session_id: [scan.source_path]
+        for event in scan.events
+    }
+    return summarize_events_by_source_session(
+        OPENCODE_HARNESS,
+        scan.events,
+        source_paths_by_session=source_paths,
     )
 
 

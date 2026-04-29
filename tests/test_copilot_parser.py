@@ -1,11 +1,19 @@
+# ruff: noqa: E501
+
 from __future__ import annotations
 
 from pathlib import Path
 
-from toktrail.adapters.copilot import parse_copilot_file, scan_copilot_file
+from toktrail.adapters.copilot import (
+    list_copilot_sessions,
+    parse_copilot_file,
+    scan_copilot_file,
+    scan_copilot_path,
+)
 
 
 def create_test_file(path: Path, content: str) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
     return path
 
@@ -167,3 +175,42 @@ def test_parse_copilot_stores_no_raw_when_disabled(tmp_path) -> None:
 
     assert len(scan.events) == 1
     assert scan.events[0].raw_json is None
+
+
+def test_scan_copilot_path_reads_directory(tmp_path) -> None:
+    create_test_file(
+        tmp_path / "a.jsonl",
+        (
+            '{"type":"span","traceId":"trace-1","spanId":"span-1","name":"chat claude","endTime":[1775934264,0],"attributes":{"gen_ai.operation.name":"chat","gen_ai.response.model":"claude-sonnet-4","gen_ai.conversation.id":"conv-1","gen_ai.usage.input_tokens":10}}\n'
+        ),
+    )
+    create_test_file(
+        tmp_path / "nested" / "b.jsonl",
+        (
+            '{"type":"span","traceId":"trace-2","spanId":"span-2","name":"chat gpt-5","endTime":[1775934265,0],"attributes":{"gen_ai.operation.name":"chat","gen_ai.response.model":"gpt-5","gen_ai.conversation.id":"conv-2","gen_ai.usage.input_tokens":20}}\n'
+        ),
+    )
+
+    scan = scan_copilot_path(tmp_path)
+
+    assert scan.files_seen == 2
+    assert len(scan.events) == 2
+    assert {event.source_session_id for event in scan.events} == {"conv-1", "conv-2"}
+
+
+def test_list_copilot_sessions_aggregates_messages(tmp_path) -> None:
+    copilot_file = create_test_file(
+        tmp_path / "copilot.jsonl",
+        (
+            '{"type":"span","traceId":"trace-1","spanId":"span-1","name":"chat claude","endTime":[1775934264,0],"attributes":{"gen_ai.operation.name":"chat","gen_ai.response.model":"claude-sonnet-4","gen_ai.conversation.id":"conv-1","gen_ai.usage.input_tokens":10}}\n'
+            '{"type":"span","traceId":"trace-2","spanId":"span-2","name":"chat claude","endTime":[1775934265,0],"attributes":{"gen_ai.operation.name":"chat","gen_ai.response.model":"claude-sonnet-4","gen_ai.conversation.id":"conv-1","gen_ai.usage.input_tokens":20}}\n'
+        ),
+    )
+
+    summaries = list_copilot_sessions(copilot_file)
+
+    assert len(summaries) == 1
+    assert summaries[0].source_session_id == "conv-1"
+    assert summaries[0].assistant_message_count == 2
+    assert summaries[0].tokens.total == 30
+    assert summaries[0].source_paths == (str(copilot_file),)

@@ -3,22 +3,18 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+from toktrail.adapters.base import ScanResult, SourceSessionSummary
+from toktrail.adapters.summary import summarize_events_by_source_session
 from toktrail.models import TokenBreakdown, UsageEvent
 from toktrail.provider_identity import inferred_provider_from_model
 
 COPILOT_HARNESS = "copilot"
 
-
-@dataclass(frozen=True)
-class CopilotScanResult:
-    source_path: Path
-    rows_seen: int
-    rows_skipped: int
-    events: list[UsageEvent]
+CopilotScanResult = ScanResult
 
 
 def scan_copilot_file(
@@ -31,6 +27,7 @@ def scan_copilot_file(
     if not resolved_path.exists():
         return CopilotScanResult(
             source_path=resolved_path,
+            files_seen=0,
             rows_seen=0,
             rows_skipped=0,
             events=[],
@@ -68,6 +65,7 @@ def scan_copilot_file(
     except OSError:
         return CopilotScanResult(
             source_path=resolved_path,
+            files_seen=0,
             rows_seen=0,
             rows_skipped=0,
             events=[],
@@ -75,6 +73,53 @@ def scan_copilot_file(
 
     return CopilotScanResult(
         source_path=resolved_path,
+        files_seen=1,
+        rows_seen=rows_seen,
+        rows_skipped=rows_skipped,
+        events=events,
+    )
+
+
+def scan_copilot_path(
+    path: Path,
+    *,
+    source_session_id: str | None = None,
+    include_raw_json: bool = True,
+) -> CopilotScanResult:
+    resolved_path = path.expanduser()
+    if not resolved_path.exists():
+        return CopilotScanResult(
+            source_path=resolved_path,
+            files_seen=0,
+            rows_seen=0,
+            rows_skipped=0,
+            events=[],
+        )
+
+    if resolved_path.is_file():
+        return scan_copilot_file(
+            resolved_path,
+            source_session_id=source_session_id,
+            include_raw_json=include_raw_json,
+        )
+
+    file_paths = sorted(resolved_path.rglob("*.jsonl"))
+    rows_seen = 0
+    rows_skipped = 0
+    events: list[UsageEvent] = []
+    for file_path in file_paths:
+        scan = scan_copilot_file(
+            file_path,
+            source_session_id=source_session_id,
+            include_raw_json=include_raw_json,
+        )
+        rows_seen += scan.rows_seen
+        rows_skipped += scan.rows_skipped
+        events.extend(scan.events)
+
+    return CopilotScanResult(
+        source_path=resolved_path,
+        files_seen=len(file_paths),
         rows_seen=rows_seen,
         rows_skipped=rows_skipped,
         events=events,
@@ -83,6 +128,15 @@ def scan_copilot_file(
 
 def parse_copilot_file(path: Path) -> list[UsageEvent]:
     return scan_copilot_file(path).events
+
+
+def list_copilot_sessions(source_path: Path) -> list[SourceSessionSummary]:
+    scan = scan_copilot_path(source_path, include_raw_json=False)
+    return summarize_events_by_source_session(
+        COPILOT_HARNESS,
+        scan.events,
+        source_paths_by_session=_copilot_source_paths_by_session(source_path),
+    )
 
 
 def _parse_copilot_line(
@@ -270,3 +324,21 @@ def _make_fingerprint(event: UsageEvent) -> str:
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _copilot_source_paths_by_session(source_path: Path) -> dict[str, list[Path]]:
+    resolved_path = source_path.expanduser()
+    if not resolved_path.exists():
+        return {}
+
+    file_paths = (
+        [resolved_path]
+        if resolved_path.is_file()
+        else sorted(resolved_path.rglob("*.jsonl"))
+    )
+    grouped: dict[str, list[Path]] = {}
+    for file_path in file_paths:
+        scan = scan_copilot_file(file_path, include_raw_json=False)
+        for event in scan.events:
+            grouped.setdefault(event.source_session_id, []).append(file_path)
+    return grouped

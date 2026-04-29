@@ -8,8 +8,10 @@ from toktrail.db import (
     insert_usage_events,
     migrate,
     summarize_tracking_session,
+    summarize_usage,
 )
 from toktrail.models import TokenBreakdown, UsageEvent
+from toktrail.reporting import UsageReportFilter
 
 
 def make_usage_event(
@@ -18,6 +20,10 @@ def make_usage_event(
     source_session_id: str = "ses-1",
     cost_usd: float = 0.25,
     tokens: TokenBreakdown | None = None,
+    harness: str = "opencode",
+    provider_id: str = "anthropic",
+    model_id: str = "claude-sonnet-4",
+    agent: str | None = "build",
 ) -> UsageEvent:
     token_breakdown = tokens or TokenBreakdown(
         input=10,
@@ -27,16 +33,16 @@ def make_usage_event(
         cache_write=3,
     )
     return UsageEvent(
-        harness="opencode",
+        harness=harness,
         source_session_id=source_session_id,
         source_row_id=f"row-{dedup_suffix}",
         source_message_id=f"msg-{dedup_suffix}",
         source_dedup_key=f"msg-{dedup_suffix}",
-        global_dedup_key=f"opencode:msg-{dedup_suffix}",
+        global_dedup_key=f"{harness}:msg-{dedup_suffix}",
         fingerprint_hash=f"fingerprint-{dedup_suffix}",
-        provider_id="anthropic",
-        model_id="claude-sonnet-4",
-        agent="build",
+        provider_id=provider_id,
+        model_id=model_id,
+        agent=agent,
         created_ms=1700000000000 + int(dedup_suffix[-1]) * 100,
         completed_ms=1700000000100 + int(dedup_suffix[-1]) * 100,
         tokens=token_breakdown,
@@ -126,3 +132,72 @@ def test_insert_usage_events_is_idempotent_and_aggregates_correctly(tmp_path) ->
     assert report.by_harness[0].total_tokens == 63
     assert report.by_model[0].model_id == "claude-sonnet-4"
     assert report.by_agent[0].agent == "build"
+
+
+def test_summarize_usage_applies_filters_and_echoes_them(tmp_path) -> None:
+    conn = connect(tmp_path / "toktrail.db")
+    migrate(conn)
+    session_id = create_tracking_session(conn, "test")
+
+    insert_usage_events(
+        conn,
+        session_id,
+        [
+            make_usage_event(
+                dedup_suffix="1",
+                harness="pi",
+                source_session_id="pi-1",
+                cost_usd=0.1,
+                tokens=TokenBreakdown(input=100, output=5),
+                provider_id="anthropic",
+                model_id="claude-sonnet-4",
+                agent="plan",
+            ),
+            make_usage_event(
+                dedup_suffix="2",
+                harness="pi",
+                source_session_id="pi-2",
+                cost_usd=0.2,
+                tokens=TokenBreakdown(input=50, cache_read=10),
+                provider_id="anthropic",
+                model_id="claude-sonnet-4",
+                agent=None,
+            ),
+            make_usage_event(
+                dedup_suffix="3",
+                harness="copilot",
+                source_session_id="conv-1",
+                cost_usd=0.0,
+                tokens=TokenBreakdown(input=7, output=9),
+                provider_id="github-copilot",
+                model_id="gpt-5",
+                agent=None,
+            ),
+        ],
+    )
+
+    report = summarize_usage(
+        conn,
+        UsageReportFilter(
+            tracking_session_id=session_id,
+            harness="pi",
+            source_session_id="pi-1",
+            provider_id="anthropic",
+            model_id="claude-sonnet-4",
+            agent="plan",
+        ),
+    )
+
+    assert report.filters.as_dict() == {
+        "harness": "pi",
+        "source_session_id": "pi-1",
+        "provider_id": "anthropic",
+        "model_id": "claude-sonnet-4",
+        "agent": "plan",
+    }
+    assert report.totals.tokens.input == 100
+    assert report.totals.tokens.output == 5
+    assert report.totals.tokens.total == 105
+    assert report.by_harness[0].harness == "pi"
+    assert report.by_model[0].model_id == "claude-sonnet-4"
+    assert report.by_agent[0].agent == "plan"
