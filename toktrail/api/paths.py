@@ -26,6 +26,9 @@ from toktrail.paths import (
     default_toktrail_db_path as _default_toktrail_db_path,
 )
 from toktrail.paths import (
+    default_vibe_logs_path as _default_vibe_logs_path,
+)
+from toktrail.paths import (
     resolve_amp_threads_path,
     resolve_claude_projects_path,
     resolve_codex_sessions_path,
@@ -34,6 +37,7 @@ from toktrail.paths import (
     resolve_goose_sessions_path,
     resolve_opencode_db_path,
     resolve_pi_sessions_path,
+    resolve_vibe_logs_path,
 )
 from toktrail.paths import (
     resolve_toktrail_config_path as _resolve_toktrail_config_path,
@@ -88,6 +92,10 @@ def default_droid_sessions_path() -> Path:
     return _default_droid_sessions_path()
 
 
+def default_vibe_logs_path() -> Path:
+    return _default_vibe_logs_path()
+
+
 def resolve_source_path(
     harness: str,
     source_path: Path | None = None,
@@ -109,6 +117,8 @@ def resolve_source_path(
         return resolve_droid_sessions_path(source_path)
     if normalized == "claude":
         return resolve_claude_projects_path(source_path)
+    if normalized == "vibe":
+        return resolve_vibe_logs_path(source_path)
     msg = f"Unsupported harness: {harness}"
     raise StateDatabaseError(msg)
 
@@ -122,6 +132,7 @@ __all__ = [
     "default_source_path",
     "default_toktrail_config_path",
     "default_toktrail_db_path",
+    "default_vibe_logs_path",
     "resolve_source_path",
     "resolve_toktrail_config_path",
     "resolve_toktrail_db_path",

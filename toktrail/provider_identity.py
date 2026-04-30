@@ -27,7 +27,7 @@ def inferred_provider_from_model(model_id: str) -> str | None:
         return "google"
     if model.startswith("llama") or "meta" in model:
         return "meta"
-    if model.startswith("mistral") or model.startswith("codestral"):
+    if model.startswith("mistral") or model.startswith("codestral") or model.startswith("devstral"):
         return "mistral"
     if model.startswith("deepseek"):
         return "deepseek"

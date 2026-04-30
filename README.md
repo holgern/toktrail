@@ -1,12 +1,12 @@
 # toktrail
 
-`toktrail` is a Python CLI for tracking OpenCode, Pi, Codex, Goose, Droid, Amp,
+`toktrail` is a Python CLI for tracking OpenCode, Pi, Codex, Goose, Droid, Amp, Vibe,
 and GitHub Copilot CLI token usage inside a local toktrail SQLite database.
 
 The first implementation focuses on:
 
 - OpenCode SQLite, Pi JSONL sessions, Codex JSONL sessions, Goose SQLite
-  sessions, Droid settings JSON sessions, Amp thread JSON sessions, and GitHub
+  sessions, Droid settings JSON sessions, Amp thread JSON sessions, Vibe session logs, and GitHub
   Copilot CLI OTEL JSONL as supported source harnesses
 - local SQLite for both the OpenCode source database and toktrail state
 - reporting totals by tracking session, harness, model, and agent/mode
@@ -22,6 +22,7 @@ The first implementation focuses on:
   `~/.local/share/goose/sessions/sessions.db`, and/or
 - Droid settings JSON sessions, typically under `~/.factory/sessions`, and/or
 - Amp thread JSON sessions, typically under `~/.local/share/amp/threads`, and/or
+- Vibe session logs, typically under `~/.vibe/logs/session`, and/or
 - Claude Code project transcripts, typically under `~/.claude/projects`, and/or
 - GitHub Copilot CLI OTEL JSONL export files, typically under `~/.copilot/otel`
 
@@ -65,7 +66,7 @@ today_usage = usage_report(db_path, period="today", timezone="UTC")
 
 See [`API.md`](API.md) for the stable import boundary, public models, workflow
 API, canonical errors, and privacy defaults. Runnable manual-run examples for
-OpenCode, Pi, Copilot, Codex, Goose, Droid, and Amp are documented in
+OpenCode, Pi, Copilot, Codex, Goose, Droid, Amp, and Vibe are documented in
 [`docs/stable_api_examples.md`](docs/stable_api_examples.md).
 
 ## Quickstart

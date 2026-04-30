@@ -53,6 +53,7 @@ from toktrail.api.paths import (
     default_amp_threads_path,
     default_codex_sessions_path,
     default_droid_sessions_path,
+    default_vibe_logs_path,
     default_source_path,
     default_toktrail_config_path,
     default_toktrail_db_path,
@@ -107,10 +108,10 @@ Public functions never print, never parse CLI arguments, never call `sys.exit`
 or `typer.Exit`, and return dataclasses or plain values.
 
 Supported harness names across the public API are `opencode`, `pi`, `copilot`,
-`codex`, `goose`, `droid`, and `amp`.
+`codex`, `goose`, `droid`, `amp`, and `vibe`.
 
 Runnable examples for manually measuring OpenCode, Pi, Copilot, Codex, Goose,
-Droid, and Amp runs are documented in
+Droid, Amp, and Vibe runs are documented in
 [`docs/stable_api_examples.md`](docs/stable_api_examples.md).
 
 ## Models

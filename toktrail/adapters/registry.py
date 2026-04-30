@@ -14,6 +14,7 @@ from toktrail.adapters.droid import list_droid_sessions, scan_droid_path
 from toktrail.adapters.goose import list_goose_sessions, scan_goose_sqlite
 from toktrail.adapters.opencode import list_opencode_sessions, scan_opencode_sqlite
 from toktrail.adapters.pi import list_pi_sessions, scan_pi_path
+from toktrail.adapters.vibe import list_vibe_sessions, scan_vibe_path
 from toktrail.paths import (
     COPILOT_FILE_ENV,
     COPILOT_OTEL_DIR_ENV,
@@ -24,6 +25,7 @@ from toktrail.paths import (
     TOKTRAIL_DROID_SESSIONS_ENV,
     TOKTRAIL_GOOSE_SESSIONS_ENV,
     TOKTRAIL_PI_SESSIONS_ENV,
+    TOKTRAIL_VIBE_LOGS_ENV,
     resolve_amp_threads_path,
     resolve_claude_projects_path,
     resolve_codex_sessions_path,
@@ -32,6 +34,7 @@ from toktrail.paths import (
     resolve_goose_sessions_path,
     resolve_opencode_db_path,
     resolve_pi_sessions_path,
+    resolve_vibe_logs_path,
 )
 
 
@@ -180,6 +183,18 @@ HARNESS_REGISTRY: dict[str, HarnessDefinition] = {
         scan=scan_claude_path,
         list_sessions=list_claude_sessions,
         supports_watch=True,
+    ),
+    "vibe": HarnessDefinition(
+        name="vibe",
+        display_name="Vibe",
+        default_roots=(PathTemplate((".vibe", "logs", "session")),),
+        env_roots=(EnvRoot(TOKTRAIL_VIBE_LOGS_ENV),),
+        patterns=("meta.json",),
+        source_kind="directory",
+        resolve_source_path=resolve_vibe_logs_path,
+        scan=scan_vibe_path,
+        list_sessions=list_vibe_sessions,
+        supports_watch=False,
     ),
 }
 

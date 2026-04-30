@@ -55,6 +55,7 @@ _SUPPORTED_HARNESSES = {
     "droid",
     "amp",
     "claude",
+    "vibe",
 }
 _SEPARATOR_RE = re.compile(r"[/_\s]+")
 _INVALID_IDENTITY_CHARS_RE = re.compile(r"[^a-z0-9.-]+")
@@ -64,7 +65,7 @@ DEFAULT_CONFIG_TEXT = """\
 config_version = 1
 
 [imports]
-harnesses = ["opencode", "pi", "copilot", "codex", "goose", "droid", "amp", "claude"]
+harnesses = ["opencode", "pi", "copilot", "codex", "goose", "droid", "amp", "claude", "vibe"]
 missing_source = "warn"
 include_raw_json = false
 
@@ -77,6 +78,7 @@ goose = "~/.local/share/goose/sessions/sessions.db"
 droid = "~/.factory/sessions"
 amp = "~/.local/share/amp/threads"
 claude = "~/.claude/projects"
+vibe = "~/.vibe/logs/session"
 
 [costing]
 default_actual_mode = "source"
@@ -114,13 +116,17 @@ mode = "source"
 [[actual_cost]]
 harness = "claude"
 mode = "zero"
+
+[[actual_cost]]
+harness = "vibe"
+mode = "source"
 """
 
 COPILOT_TEMPLATE_TEXT = """\
 config_version = 1
 
 [imports]
-harnesses = ["opencode", "pi", "copilot", "codex", "goose", "droid", "amp", "claude"]
+harnesses = ["opencode", "pi", "copilot", "codex", "goose", "droid", "amp", "claude", "vibe"]
 missing_source = "warn"
 include_raw_json = false
 
@@ -133,6 +139,7 @@ goose = "~/.local/share/goose/sessions/sessions.db"
 droid = "~/.factory/sessions"
 amp = "~/.local/share/amp/threads"
 claude = "~/.claude/projects"
+vibe = "~/.vibe/logs/session"
 
 [costing]
 default_actual_mode = "source"
@@ -171,6 +178,10 @@ mode = "source"
 [[actual_cost]]
 harness = "claude"
 mode = "zero"
+
+[[actual_cost]]
+harness = "vibe"
+mode = "source"
 # OpenAI
 
 [[pricing.virtual]]
@@ -491,7 +502,9 @@ class ImportConfig:
         "codex",
         "goose",
         "droid",
+        "amp",
         "claude",
+        "vibe",
     )
     sources: dict[str, Path | list[Path]] | None = None
     missing_source: ImportMissingSourceMode = "warn"
@@ -578,6 +591,12 @@ def default_costing_config() -> CostingConfig:
                 provider=None,
                 model=None,
                 mode="zero",
+            ),
+            ActualCostRule(
+                harness="vibe",
+                provider=None,
+                model=None,
+                mode="source",
             ),
         )
     )

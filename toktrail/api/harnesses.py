@@ -14,6 +14,7 @@ from toktrail.paths import (
     TOKTRAIL_DROID_SESSIONS_ENV,
     TOKTRAIL_GOOSE_SESSIONS_ENV,
     TOKTRAIL_PI_SESSIONS_ENV,
+    TOKTRAIL_VIBE_LOGS_ENV,
     default_amp_threads_path,
     default_claude_projects_path,
     default_codex_sessions_path,
@@ -22,6 +23,7 @@ from toktrail.paths import (
     default_goose_sessions_db_path,
     default_opencode_db_path,
     default_pi_sessions_path,
+    default_vibe_logs_path,
 )
 
 _HARNESSES: tuple[HarnessDefinition, ...] = (
@@ -99,6 +101,15 @@ _HARNESSES: tuple[HarnessDefinition, ...] = (
         supports_environment=False,
         default_source_path=default_claude_projects_path(),
         source_path_env_vars=(TOKTRAIL_CLAUDE_PROJECTS_ENV,),
+        source_path_kind="path",
+    ),
+    HarnessDefinition(
+        name="vibe",
+        display_name="Vibe",
+        supports_watch=False,
+        supports_environment=False,
+        default_source_path=default_vibe_logs_path(),
+        source_path_env_vars=(TOKTRAIL_VIBE_LOGS_ENV,),
         source_path_kind="path",
     ),
 )

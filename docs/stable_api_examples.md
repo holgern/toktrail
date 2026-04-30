@@ -23,6 +23,7 @@ run coding agent without importing toktrail internals.
 - Goose: `goose`
 - Droid: `droid`
 - Amp: `amp`
+- Vibe: `vibe`
 
 ## Run examples
 
@@ -34,6 +35,7 @@ python examples/manual_run_codex.py
 python examples/manual_run_goose.py
 python examples/manual_run_droid.py
 python examples/manual_run_amp.py
+python examples/manual_run_vibe.py
 ```
 
 ## Goose API example
@@ -78,6 +80,20 @@ result = import_usage(Path(".toktrail/toktrail.db"), "amp", source_path=source_p
 sessions = list_source_sessions("amp", source_path=source_path, limit=5)
 ```
 
+## Vibe API example
+
+```python
+from pathlib import Path
+
+from toktrail.api.imports import import_usage
+from toktrail.api.paths import default_vibe_logs_path
+from toktrail.api.sources import list_source_sessions
+
+source_path = default_vibe_logs_path()
+result = import_usage(Path(".toktrail/toktrail.db"), "vibe", source_path=source_path)
+sessions = list_source_sessions("vibe", source_path=source_path, limit=5)
+```
+
 ## Per-harness notes
 
 OpenCode usually reads from `~/.local/share/opencode/opencode.db`. Start
@@ -109,6 +125,9 @@ Droid usually writes cumulative settings JSON files under
 `~/.factory/sessions`. Start Droid in this repository, paste the printed prompt,
 wait for the answer, exit Droid, then press Enter in the Python script. Use
 `--source /path/to/factory/sessions` to override the source path.
+
+Vibe writes cumulative session metadata under ~/.vibe/logs/session/<session-dir>/meta.json.
+Start Vibe in this repository, paste the printed prompt, wait for the answer, exit Vibe, then press Enter in the Python script. Use --source /path/to/.vibe/logs/session to override the source path.
 
 ## Detailed output
 
