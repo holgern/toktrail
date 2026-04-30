@@ -46,7 +46,7 @@ def fingerprint_for_path(path: Path) -> str:
             chunk = f.read(65536)
             content_hash = hashlib.sha256(chunk).hexdigest()[:16]
         return f"{stat.st_size}:{stat.st_mtime_ns}:{content_hash}"
-    except (OSError, IOError):
+    except OSError:
         return ""
 
 

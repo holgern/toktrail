@@ -15,6 +15,7 @@ TOKTRAIL_CODEX_SESSIONS_ENV = "TOKTRAIL_CODEX_SESSIONS"
 TOKTRAIL_GOOSE_SESSIONS_ENV = "TOKTRAIL_GOOSE_SESSIONS"
 TOKTRAIL_DROID_SESSIONS_ENV = "TOKTRAIL_DROID_SESSIONS"
 GOOSE_PATH_ROOT_ENV = "GOOSE_PATH_ROOT"
+TOKTRAIL_CLAUDE_PROJECTS_ENV = "TOKTRAIL_CLAUDE_PROJECTS"
 
 
 def default_toktrail_db_path() -> Path:
@@ -206,3 +207,16 @@ def resolve_droid_sessions_path(cli_value: Path | None = None) -> Path:
     if env_value:
         return Path(env_value).expanduser()
     return default_droid_sessions_path()
+
+
+def default_claude_projects_path() -> Path:
+    return Path.home() / ".claude" / "projects"
+
+
+def resolve_claude_projects_path(cli_value: Path | None = None) -> Path:
+    if cli_value is not None:
+        return cli_value.expanduser()
+    env_value = os.environ.get(TOKTRAIL_CLAUDE_PROJECTS_ENV)
+    if env_value:
+        return Path(env_value).expanduser()
+    return default_claude_projects_path()

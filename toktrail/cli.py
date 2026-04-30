@@ -245,15 +245,29 @@ AmpPathOption = Annotated[
         help="Override Amp threads file or directory.",
     ),
 ]
+ClaudePathOption = Annotated[
+    Path | None,
+    typer.Option(
+        "--claude-path",
+        "--path",
+        help="Override Claude Code projects file or directory.",
+    ),
+]
 SinceStartOption = Annotated[bool, typer.Option("--since-start")]
 NoRawOption = Annotated[bool, typer.Option("--no-raw")]
 IntervalOption = Annotated[float, typer.Option("--interval", min=0.1)]
 CopilotRunArgs = Annotated[list[str], typer.Argument(help="Command to run after --.")]
 SourcePathOption = Annotated[Path | None, typer.Option("--source")]
 RawOption = Annotated[bool | None, typer.Option("--raw/--no-raw")]
-DryRunOption = Annotated[bool, typer.Option("--dry-run", help="Simulate import without persisting changes.")]
-RequiredHarnessOption = Annotated[str, typer.Option("--harness", help="Name of the harness to import from.")]
-RequiredSourceOption = Annotated[Path, typer.Option("--source", help="Path to source data.")]
+DryRunOption = Annotated[
+    bool, typer.Option("--dry-run", help="Simulate import without persisting changes.")
+]
+RequiredHarnessOption = Annotated[
+    str, typer.Option("--harness", help="Name of the harness to import from.")
+]
+RequiredSourceOption = Annotated[
+    Path, typer.Option("--source", help="Path to source data.")
+]
 
 
 @app.callback()
@@ -895,14 +909,14 @@ def import_usage(
     json_output: JsonOption = False,
 ) -> None:
     """Import usage from external harnesses.
-    
+
     Can operate in two modes:
     - Explicit: with --harness and --source parameters
     - Config-based: from configuration file (when neither parameter is provided)
     """
     if ctx.invoked_subcommand is not None:
         return
-    
+
     # If both harness and source are provided, use explicit import mode
     if harness is not None and source is not None:
         try:
@@ -918,9 +932,10 @@ def import_usage(
             )
         except (OSError, ValueError, ToktrailError) as exc:
             _exit_with_error(str(exc))
-        
+
         if json_output:
             from dataclasses import asdict
+
             output = asdict(result)
             # Convert Path to string for JSON serialization and normalize harness name
             if "source_path" in output:
@@ -931,11 +946,11 @@ def import_usage(
                 output["dry_run"] = True
             typer.echo(json.dumps([output], indent=2))
             return
-        
+
         _print_import_result(result)
         if dry_run:
             typer.echo("\n[dry-run: changes were not persisted]")
-    
+
     # Otherwise, use config-based import mode
     elif harness is None and source is None:
         try:
@@ -950,14 +965,16 @@ def import_usage(
             )
         except (OSError, ValueError, ToktrailError) as exc:
             _exit_with_error(str(exc))
-        
+
         if json_output:
             typer.echo(json.dumps([result.as_dict() for result in results], indent=2))
             return
         _print_configured_import_results(results)
-    
+
     else:
-        _exit_with_error("Either provide both --harness and --source, or neither for config-based import")
+        _exit_with_error(
+            "Either provide both --harness and --source, or neither for config-based import"
+        )
 
 
 @watch_app.command("opencode")
@@ -1062,6 +1079,28 @@ def watch_amp(
         ctx,
         harness_name="amp",
         source_path=amp_path,
+        tracking_session_id=session_id,
+        source_session_id=source_session_id,
+        interval=interval,
+        since_start=since_start,
+        no_raw=no_raw,
+    )
+
+
+@watch_app.command("claude")
+def watch_claude(
+    ctx: typer.Context,
+    session_id: SessionOption = None,
+    source_session_id: SourceSessionOption = None,
+    claude_path: ClaudePathOption = None,
+    interval: IntervalOption = 2.0,
+    since_start: SinceStartOption = False,
+    no_raw: NoRawOption = False,
+) -> None:
+    _watch_harness(
+        ctx,
+        harness_name="claude",
+        source_path=claude_path,
         tracking_session_id=session_id,
         source_session_id=source_session_id,
         interval=interval,
@@ -1280,6 +1319,36 @@ def sessions_amp(
     )
 
 
+@sessions_app.command("claude")
+def sessions_claude(
+    ctx: typer.Context,
+    source_session_id: SourceSessionArgument = None,
+    claude_path: ClaudePathOption = None,
+    last: LastOption = False,
+    breakdown: BreakdownOption = False,
+    json_output: JsonOption = False,
+    utc: UtcOption = False,
+    limit: LimitOption = None,
+    sort: SortOption = "last",
+    columns: ColumnsOption = None,
+    rich_output: RichOption = False,
+) -> None:
+    _run_source_sessions_command(
+        ctx,
+        "claude",
+        source_path=claude_path,
+        source_session_id=source_session_id,
+        last=last,
+        breakdown=breakdown,
+        json_output=json_output,
+        utc=utc,
+        limit=limit,
+        sort=sort,
+        columns=columns,
+        rich_output=rich_output,
+    )
+
+
 @copilot_app.command(
     "run",
     context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
@@ -1467,7 +1536,7 @@ def _run_harness_import_with_dry_run(
     dry_run: bool,
 ) -> ImportExecutionResult:
     """Run harness import with optional dry-run mode.
-    
+
     In dry-run mode, changes are rolled back before connection closes.
     Can operate with or without an active tracking session.
     """
@@ -1477,7 +1546,7 @@ def _run_harness_import_with_dry_run(
         # Begin explicit transaction for dry-run
         if dry_run:
             conn.execute("BEGIN")
-        
+
         resolved_source = harness.resolve_source_path(source_path)
         if resolved_source is None or not resolved_source.exists():
             _exit_with_error(
@@ -1491,7 +1560,7 @@ def _run_harness_import_with_dry_run(
         selected_session_id = tracking_session_id
         if selected_session_id is None:
             selected_session_id = get_active_tracking_session(conn)
-        
+
         # If no session is provided and no active session exists, it's OK
         # Just scan without filtering by session start time
         tracking_session = None
@@ -1505,27 +1574,31 @@ def _run_harness_import_with_dry_run(
             source_session_id=source_session_id,
             include_raw_json=not no_raw,
         )
-        
+
         # Only filter by since_start if we have a tracking session
         since_ms = None
         if tracking_session is not None and since_start:
             since_ms = tracking_session.started_at_ms
-        
+
         filtered_events = [
             event
             for event in scan.events
             if since_ms is None or event.created_ms >= since_ms
         ]
-        
+
         # Only insert if we have a tracking session
         if selected_session_id is not None:
-            insert_result = insert_usage_events(conn, selected_session_id, filtered_events)
+            insert_result = insert_usage_events(
+                conn, selected_session_id, filtered_events
+            )
         else:
             # No session - don't insert, but record what we would have inserted
-            insert_result = type('obj', (object,), {'rows_inserted': len(filtered_events)})()
-        
+            insert_result = type(
+                "obj", (object,), {"rows_inserted": len(filtered_events)}
+            )()
+
         rows_filtered = len(scan.events) - len(filtered_events)
-        
+
         # Rollback if dry-run
         if dry_run:
             conn.execute("ROLLBACK")

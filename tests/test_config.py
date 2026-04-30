@@ -27,6 +27,7 @@ def test_load_costing_config_missing_file_returns_default_config(tmp_path) -> No
         "goose",
         "droid",
         "amp",
+        "claude",
     ]
     assert config.virtual_prices == ()
     assert config.actual_prices == ()
@@ -49,6 +50,7 @@ def test_load_costing_config_parses_minimal_config(tmp_path) -> None:
         "zero",
         "zero",
         "source",
+        "zero",
     ]
 
 
@@ -66,6 +68,7 @@ def test_load_toktrail_config_parses_import_settings(tmp_path) -> None:
         "goose",
         "droid",
         "amp",
+        "claude",
     )
     assert config.imports.missing_source == "warn"
     assert config.imports.include_raw_json is False
@@ -74,6 +77,7 @@ def test_load_toktrail_config_parses_import_settings(tmp_path) -> None:
     assert config.imports.sources["goose"].name == "sessions.db"
     assert config.imports.sources["droid"].name == "sessions"
     assert config.imports.sources["amp"].name == "threads"
+    assert config.imports.sources["claude"].name == "projects"
 
 
 def test_load_costing_config_parses_copilot_template(tmp_path) -> None:

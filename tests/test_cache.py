@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
-
-import pytest
 
 from toktrail.cache import CacheEntry, CacheKey, fingerprint_for_path, is_cache_valid
 from toktrail.models import TokenBreakdown, UsageEvent

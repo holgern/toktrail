@@ -8,6 +8,9 @@ from toktrail.paths import (
     default_amp_threads_path as _default_amp_threads_path,
 )
 from toktrail.paths import (
+    default_claude_projects_path as _default_claude_projects_path,
+)
+from toktrail.paths import (
     default_codex_sessions_path as _default_codex_sessions_path,
 )
 from toktrail.paths import (
@@ -24,6 +27,7 @@ from toktrail.paths import (
 )
 from toktrail.paths import (
     resolve_amp_threads_path,
+    resolve_claude_projects_path,
     resolve_codex_sessions_path,
     resolve_copilot_source_path,
     resolve_droid_sessions_path,
@@ -68,6 +72,10 @@ def default_amp_threads_path() -> Path:
     return _default_amp_threads_path()
 
 
+def default_claude_projects_path() -> Path:
+    return _default_claude_projects_path()
+
+
 def default_codex_sessions_path() -> Path:
     return _default_codex_sessions_path()
 
@@ -99,12 +107,15 @@ def resolve_source_path(
         return resolve_goose_sessions_path(source_path)
     if normalized == "droid":
         return resolve_droid_sessions_path(source_path)
+    if normalized == "claude":
+        return resolve_claude_projects_path(source_path)
     msg = f"Unsupported harness: {harness}"
     raise StateDatabaseError(msg)
 
 
 __all__ = [
     "default_amp_threads_path",
+    "default_claude_projects_path",
     "default_codex_sessions_path",
     "default_droid_sessions_path",
     "default_goose_sessions_db_path",

@@ -7,6 +7,7 @@ from typing import Literal
 
 from toktrail.adapters.amp import list_amp_sessions, scan_amp_path
 from toktrail.adapters.base import ScanResult, SourceSessionSummary
+from toktrail.adapters.claude import list_claude_sessions, scan_claude_path
 from toktrail.adapters.codex import list_codex_sessions, scan_codex_path
 from toktrail.adapters.copilot import list_copilot_sessions, scan_copilot_path
 from toktrail.adapters.droid import list_droid_sessions, scan_droid_path
@@ -18,11 +19,13 @@ from toktrail.paths import (
     COPILOT_OTEL_DIR_ENV,
     GOOSE_PATH_ROOT_ENV,
     TOKTRAIL_AMP_THREADS_ENV,
+    TOKTRAIL_CLAUDE_PROJECTS_ENV,
     TOKTRAIL_CODEX_SESSIONS_ENV,
     TOKTRAIL_DROID_SESSIONS_ENV,
     TOKTRAIL_GOOSE_SESSIONS_ENV,
     TOKTRAIL_PI_SESSIONS_ENV,
     resolve_amp_threads_path,
+    resolve_claude_projects_path,
     resolve_codex_sessions_path,
     resolve_copilot_source_path,
     resolve_droid_sessions_path,
@@ -135,8 +138,12 @@ HARNESS_REGISTRY: dict[str, HarnessDefinition] = {
         display_name="Goose",
         default_roots=(
             PathTemplate((".local", "share", "goose", "sessions", "sessions.db")),
-            PathTemplate(("Library", "Application Support", "goose", "sessions", "sessions.db")),
-            PathTemplate((".local", "share", "Block", "goose", "sessions", "sessions.db")),
+            PathTemplate(
+                ("Library", "Application Support", "goose", "sessions", "sessions.db")
+            ),
+            PathTemplate(
+                (".local", "share", "Block", "goose", "sessions", "sessions.db")
+            ),
         ),
         env_roots=(
             EnvRoot(TOKTRAIL_GOOSE_SESSIONS_ENV),
@@ -159,6 +166,19 @@ HARNESS_REGISTRY: dict[str, HarnessDefinition] = {
         resolve_source_path=resolve_droid_sessions_path,
         scan=scan_droid_path,
         list_sessions=list_droid_sessions,
+        supports_watch=True,
+    ),
+    "claude": HarnessDefinition(
+        name="claude",
+        display_name="Claude Code",
+        default_roots=(PathTemplate((".claude", "projects")),),
+        env_roots=(EnvRoot(TOKTRAIL_CLAUDE_PROJECTS_ENV),),
+        patterns=("*.jsonl", "*.json"),
+        ignored_patterns=("*.meta.json",),
+        source_kind="mixed",
+        resolve_source_path=resolve_claude_projects_path,
+        scan=scan_claude_path,
+        list_sessions=list_claude_sessions,
         supports_watch=True,
     ),
 }

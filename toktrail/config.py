@@ -54,6 +54,7 @@ _SUPPORTED_HARNESSES = {
     "goose",
     "droid",
     "amp",
+    "claude",
 }
 _SEPARATOR_RE = re.compile(r"[/_\s]+")
 _INVALID_IDENTITY_CHARS_RE = re.compile(r"[^a-z0-9.-]+")
@@ -63,7 +64,7 @@ DEFAULT_CONFIG_TEXT = """\
 config_version = 1
 
 [imports]
-harnesses = ["opencode", "pi", "copilot", "codex", "goose", "droid", "amp"]
+harnesses = ["opencode", "pi", "copilot", "codex", "goose", "droid", "amp", "claude"]
 missing_source = "warn"
 include_raw_json = false
 
@@ -75,6 +76,7 @@ codex = "~/.codex/sessions"
 goose = "~/.local/share/goose/sessions/sessions.db"
 droid = "~/.factory/sessions"
 amp = "~/.local/share/amp/threads"
+claude = "~/.claude/projects"
 
 [costing]
 default_actual_mode = "source"
@@ -108,13 +110,17 @@ mode = "zero"
 [[actual_cost]]
 harness = "amp"
 mode = "source"
+
+[[actual_cost]]
+harness = "claude"
+mode = "zero"
 """
 
 COPILOT_TEMPLATE_TEXT = """\
 config_version = 1
 
 [imports]
-harnesses = ["opencode", "pi", "copilot", "codex", "goose", "droid", "amp"]
+harnesses = ["opencode", "pi", "copilot", "codex", "goose", "droid", "amp", "claude"]
 missing_source = "warn"
 include_raw_json = false
 
@@ -126,6 +132,7 @@ codex = "~/.codex/sessions"
 goose = "~/.local/share/goose/sessions/sessions.db"
 droid = "~/.factory/sessions"
 amp = "~/.local/share/amp/threads"
+claude = "~/.claude/projects"
 
 [costing]
 default_actual_mode = "source"
@@ -161,6 +168,9 @@ mode = "zero"
 harness = "amp"
 mode = "source"
 
+[[actual_cost]]
+harness = "claude"
+mode = "zero"
 # OpenAI
 
 [[pricing.virtual]]
@@ -481,7 +491,7 @@ class ImportConfig:
         "codex",
         "goose",
         "droid",
-        "amp",
+        "claude",
     )
     sources: dict[str, Path | list[Path]] | None = None
     missing_source: ImportMissingSourceMode = "warn"
@@ -562,6 +572,12 @@ def default_costing_config() -> CostingConfig:
                 provider=None,
                 model=None,
                 mode="source",
+            ),
+            ActualCostRule(
+                harness="claude",
+                provider=None,
+                model=None,
+                mode="zero",
             ),
         )
     )
@@ -791,7 +807,9 @@ def _parse_import_harnesses(value: object, *, context: str) -> tuple[str, ...]:
     return tuple(harnesses)
 
 
-def _parse_import_sources(value: object, *, context: str) -> dict[str, Path | list[Path]]:
+def _parse_import_sources(
+    value: object, *, context: str
+) -> dict[str, Path | list[Path]]:
     table = _parse_optional_table(value, context=context)
     sources: dict[str, Path | list[Path]] = {}
     for raw_harness, raw_path in table.items():

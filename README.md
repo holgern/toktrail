@@ -22,6 +22,7 @@ The first implementation focuses on:
   `~/.local/share/goose/sessions/sessions.db`, and/or
 - Droid settings JSON sessions, typically under `~/.factory/sessions`, and/or
 - Amp thread JSON sessions, typically under `~/.local/share/amp/threads`, and/or
+- Claude Code project transcripts, typically under `~/.claude/projects`, and/or
 - GitHub Copilot CLI OTEL JSONL export files, typically under `~/.copilot/otel`
 
 toktrail reads supported source data in read-only mode and does not modify the
@@ -88,6 +89,7 @@ toktrail config init
 toktrail import
 toktrail import --harness codex --source ~/.codex/sessions
 toktrail import --harness amp --source ~/.local/share/amp/threads
+toktrail import --harness claude --source ~/.claude/projects
 toktrail import --dry-run
 toktrail import --no-session
 ```
@@ -154,7 +156,7 @@ source paths from `config.toml`:
 
 ```toml
 [imports]
-harnesses = ["opencode", "pi", "copilot", "codex", "goose", "droid", "amp"]
+harnesses = ["opencode", "pi", "copilot", "codex", "goose", "droid", "amp", "claude"]
 missing_source = "warn"
 include_raw_json = false
 
@@ -166,6 +168,7 @@ codex = ["~/.codex/sessions", "~/.codex/archived_sessions"]
 goose = "~/.local/share/goose/sessions/sessions.db"
 droid = "~/.factory/sessions"
 amp = "~/.local/share/amp/threads"
+claude = "~/.claude/projects"
 ```
 
 `imports.sources.<harness>` accepts either a single path string or a list of
@@ -258,6 +261,7 @@ toktrail watch --harness opencode --interval 2
 toktrail watch --harness pi --interval 2
 toktrail watch --harness codex --interval 2
 toktrail watch --harness amp --interval 2
+toktrail watch --harness claude --interval 2
 
 toktrail env --harness copilot --shell bash
 toktrail env --harness copilot --shell zsh
@@ -268,6 +272,7 @@ toktrail env --harness copilot --json
 
 toktrail source-sessions --harness pi
 toktrail source-sessions --harness codex --last --breakdown
+toktrail source-sessions --harness claude --last --breakdown
 toktrail source-session show --harness pi pi_ses_001 --breakdown
 toktrail models
 toktrail models --group-by harness,provider,model
