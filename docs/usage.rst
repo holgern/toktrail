@@ -16,9 +16,6 @@ The preferred CLI workflow is:
    toktrail status
    toktrail usage today
    toktrail sessions
-   toktrail session show <tracking-session-id>
-   toktrail source-sessions --harness <name>
-   toktrail source-session show --harness <name> <source-session-id>
    toktrail stop
 
 Use ``toktrail import`` for normal operation. It reads enabled harnesses and
@@ -27,7 +24,7 @@ source paths from ``config.toml``:
 .. code-block:: toml
 
    [imports]
-   harnesses = ["opencode", "pi", "copilot", "codex", "goose", "droid", "amp"]
+   harnesses = ["opencode", "pi", "copilot", "codex", "goose", "droid", "amp", "claude", "vibe"]
    missing_source = "warn"
    include_raw_json = false
 
@@ -56,15 +53,15 @@ Core commands
    toktrail usage today
    toktrail usage last-week --utc --json
    toktrail sessions
-   toktrail session show 3
-   toktrail source-sessions --harness codex
-   toktrail source-session show --harness goose goose-session-id --breakdown
+   toktrail sessions opencode
+   toktrail sessions pi
+   toktrail sessions codex
+   toktrail sessions goose
    toktrail import --harness goose --source ~/.local/share/goose/sessions/sessions.db
    toktrail import --harness droid --source ~/.factory/sessions
    toktrail import --harness amp --source ~/.local/share/amp/threads
-   toktrail models --group-by provider,model
-   toktrail pricing check
+   toktrail pricing list
+   toktrail pricing list --missing-only
 
-For source-session inspection, use ``toktrail source-sessions --harness`` and
-``toktrail source-session show --harness`` to inspect raw harness sessions
-without mutating toktrail state.
+For harness-session inspection, use ``toktrail sessions <harness>`` to inspect
+raw harness sessions without mutating toktrail state.

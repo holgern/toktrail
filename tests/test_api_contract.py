@@ -203,3 +203,44 @@ def test_public_harness_metadata_and_paths_include_codex_goose_and_droid(
         tmp_path / "explicit-amp"
     )
     assert resolve_source_path("amp") == amp_env_path
+
+
+def test_harness_watch_metadata_aligns_with_cli_registration() -> None:
+    """Verify that harness registry watch support matches CLI-registered watch commands.
+
+    This test prevents drift between:
+    - harness_registry metadata (supports_watch flags)
+    - CLI-registered watch commands
+    - Public API harness definitions
+
+    Watch commands registered in CLI: opencode, copilot, pi, codex, amp, claude
+    Harnesses marked supports_watch=True in registry: must match CLI
+    Harnesses marked supports_watch=False: must NOT have CLI watch commands
+    """
+    from toktrail.adapters.registry import HARNESS_REGISTRY
+
+    # Known watch harnesses from CLI registration (grep @watch_app.command in cli.py)
+    cli_watch_harnesses = {"opencode", "copilot", "pi", "codex", "amp", "claude"}
+
+    # Verify registry metadata matches CLI registration
+    for harness_name, definition in HARNESS_REGISTRY.items():
+        if definition.supports_watch:
+            assert harness_name in cli_watch_harnesses, (
+                f"Harness {harness_name} marked supports_watch=True "
+                "but no CLI watch command registered"
+            )
+        else:
+            assert harness_name not in cli_watch_harnesses, (
+                f"Harness {harness_name} marked supports_watch=False "
+                "but CLI watch command exists"
+            )
+
+    # Verify all CLI watch commands have supports_watch=True
+    for watch_harness in cli_watch_harnesses:
+        assert watch_harness in HARNESS_REGISTRY, (
+            f"CLI watch command for {watch_harness} but not in registry"
+        )
+        assert HARNESS_REGISTRY[watch_harness].supports_watch, (
+            f"CLI watch command for {watch_harness} "
+            "but registry has supports_watch=False"
+        )

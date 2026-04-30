@@ -143,12 +143,6 @@ toktrail import
 toktrail status
 toktrail usage today
 toktrail sessions
-toktrail session show <tracking-session-id>
-toktrail source-sessions --harness <name>
-toktrail source-session show --harness <name> <source-session-id>
-toktrail models
-toktrail pricing list --missing-only
-toktrail pricing check
 toktrail stop
 ```
 
@@ -157,7 +151,7 @@ source paths from `config.toml`:
 
 ```toml
 [imports]
-harnesses = ["opencode", "pi", "copilot", "codex", "goose", "droid", "amp", "claude"]
+harnesses = ["opencode", "pi", "copilot", "codex", "goose", "droid", "amp", "claude", "vibe"]
 missing_source = "warn"
 include_raw_json = false
 
@@ -192,9 +186,8 @@ toktrail start --name refactor-auth-flow
 toktrail stop
 toktrail stop 3
 toktrail sessions
-toktrail session show 3
-toktrail source-sessions --harness pi
-toktrail source-session show --harness pi pi_ses_001 --breakdown
+toktrail sessions pi
+toktrail sessions pi pi_ses_001
 ```
 
 Discover configured source paths before importing:
@@ -209,7 +202,6 @@ toktrail sources --json
 Inspect and manage pricing config and used model pricing:
 
 ```bash
-toktrail config path
 toktrail config init
 toktrail config init --template copilot
 toktrail config show
@@ -220,7 +212,6 @@ toktrail config prices --model gpt-5-mini --json
 toktrail pricing list
 toktrail pricing list --used-only
 toktrail pricing list --missing-only
-toktrail pricing check
 toktrail config validate
 toktrail --config /path/to/config.toml status --json
 ```
@@ -238,14 +229,13 @@ toktrail import --harness amp --source ~/.local/share/amp/threads
 toktrail import --dry-run
 toktrail import --session 3
 toktrail import --no-session
-toktrail import --raw
 toktrail import --no-raw
 ```
 
 The plain `toktrail import` command reads enabled harnesses and source paths from
 `[imports]` and `[imports.sources]` in `config.toml`.
 
-## Advanced: generic import, watch, environment, and source-session flows
+## Advanced: generic import, watch, environment, and harness-session flows
 
 Use the generic command surface for every harness:
 
@@ -257,27 +247,29 @@ toktrail import --harness codex --source ~/.codex/sessions
 toktrail import --harness goose --source ~/.local/share/goose/sessions/sessions.db
 toktrail import --harness droid --source ~/.factory/sessions
 toktrail import --harness amp --source ~/.local/share/amp/threads
+toktrail import --harness claude --source ~/.claude/projects
+toktrail import --harness vibe --source ~/.vibe/logs/session
 
-toktrail watch --harness opencode --interval 2
-toktrail watch --harness pi --interval 2
-toktrail watch --harness codex --interval 2
-toktrail watch --harness amp --interval 2
-toktrail watch --harness claude --interval 2
+toktrail watch opencode
+toktrail watch pi
+toktrail watch codex
+toktrail watch amp
+toktrail watch claude
 
-toktrail env --harness copilot --shell bash
-toktrail env --harness copilot --shell zsh
-toktrail env --harness copilot --shell fish
-toktrail env --harness copilot --shell nu
-toktrail env --harness copilot --shell powershell
-toktrail env --harness copilot --json
+toktrail copilot env bash
+toktrail copilot env zsh
+toktrail copilot env fish
+toktrail copilot env nu
+toktrail copilot env powershell
 
-toktrail source-sessions --harness pi
-toktrail source-sessions --harness codex --last --breakdown
-toktrail source-sessions --harness claude --last --breakdown
-toktrail source-session show --harness pi pi_ses_001 --breakdown
-toktrail models
-toktrail models --group-by harness,provider,model
-toktrail pricing check
+toktrail sessions pi
+toktrail sessions codex
+toktrail sessions claude
+toktrail sessions pi pi_ses_001
+toktrail sessions goose goose_session_id
+
+toktrail pricing list
+toktrail pricing list --missing-only
 ```
 
 Copilot source discovery honors `TOKTRAIL_COPILOT_FILE`,
@@ -366,12 +358,11 @@ Example workflow:
 
 ```bash
 toktrail config init --template copilot
-toktrail env --harness copilot --shell bash
+toktrail copilot env bash
 toktrail import --harness copilot --source ~/.copilot/otel/copilot-otel-20260429-090000.jsonl
 toktrail status --price-state unpriced --sort tokens --limit 20
 toktrail pricing list --missing-only
-toktrail pricing check
-toktrail source-sessions --harness copilot --sort savings --columns source_session_id,actual,virtual,savings
+toktrail sessions copilot
 ```
 
 Virtual and pricing-based actual costs are computed at report time, not during

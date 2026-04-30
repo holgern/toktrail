@@ -90,19 +90,19 @@ class SessionTotals:
     costs: CostTotals
 
     @property
-    def source_cost_usd(self) -> float:
+    def source_cost_usd(self) -> Decimal:
         return self.costs.source_cost_usd
 
     @property
-    def actual_cost_usd(self) -> float:
+    def actual_cost_usd(self) -> Decimal:
         return self.costs.actual_cost_usd
 
     @property
-    def virtual_cost_usd(self) -> float:
+    def virtual_cost_usd(self) -> Decimal:
         return self.costs.virtual_cost_usd
 
     @property
-    def savings_usd(self) -> float:
+    def savings_usd(self) -> Decimal:
         return self.costs.savings_usd
 
     @property
@@ -129,19 +129,19 @@ class HarnessSummaryRow:
     costs: CostTotals
 
     @property
-    def source_cost_usd(self) -> float:
+    def source_cost_usd(self) -> Decimal:
         return self.costs.source_cost_usd
 
     @property
-    def actual_cost_usd(self) -> float:
+    def actual_cost_usd(self) -> Decimal:
         return self.costs.actual_cost_usd
 
     @property
-    def virtual_cost_usd(self) -> float:
+    def virtual_cost_usd(self) -> Decimal:
         return self.costs.virtual_cost_usd
 
     @property
-    def savings_usd(self) -> float:
+    def savings_usd(self) -> Decimal:
         return self.costs.savings_usd
 
     @property
@@ -171,19 +171,19 @@ class ModelSummaryRow:
         return self.tokens.total
 
     @property
-    def source_cost_usd(self) -> float:
+    def source_cost_usd(self) -> Decimal:
         return self.costs.source_cost_usd
 
     @property
-    def actual_cost_usd(self) -> float:
+    def actual_cost_usd(self) -> Decimal:
         return self.costs.actual_cost_usd
 
     @property
-    def virtual_cost_usd(self) -> float:
+    def virtual_cost_usd(self) -> Decimal:
         return self.costs.virtual_cost_usd
 
     @property
-    def savings_usd(self) -> float:
+    def savings_usd(self) -> Decimal:
         return self.costs.savings_usd
 
     @property
@@ -235,19 +235,19 @@ class AgentSummaryRow:
     costs: CostTotals
 
     @property
-    def source_cost_usd(self) -> float:
+    def source_cost_usd(self) -> Decimal:
         return self.costs.source_cost_usd
 
     @property
-    def actual_cost_usd(self) -> float:
+    def actual_cost_usd(self) -> Decimal:
         return self.costs.actual_cost_usd
 
     @property
-    def virtual_cost_usd(self) -> float:
+    def virtual_cost_usd(self) -> Decimal:
         return self.costs.virtual_cost_usd
 
     @property
-    def savings_usd(self) -> float:
+    def savings_usd(self) -> Decimal:
         return self.costs.savings_usd
 
     @property

@@ -235,7 +235,10 @@ def setup_pricing_status_fixture(tmp_path: Path) -> tuple[CliRunner, Path, Path]
             str(state_db),
             "--config",
             str(config_path),
-            "import", "--harness", "opencode", "--source",
+            "import",
+            "--harness",
+            "opencode",
+            "--source",
             str(source_db),
         ],
     )
@@ -305,7 +308,15 @@ def test_cli_init_start_import_status_stop(tmp_path) -> None:
     for args in (
         ["--db", str(state_db), "init"],
         ["--db", str(state_db), "start", "--name", "test-session"],
-        ["--db", str(state_db), "import", "--harness", "opencode", "--source", str(source_db)],
+        [
+            "--db",
+            str(state_db),
+            "import",
+            "--harness",
+            "opencode",
+            "--source",
+            str(source_db),
+        ],
         ["--db", str(state_db), "sessions"],
         ["--db", str(state_db), "stop"],
     ):
@@ -352,7 +363,10 @@ def test_cli_import_missing_opencode_db_fails(tmp_path) -> None:
         [
             "--db",
             str(state_db),
-            "import", "--harness", "opencode", "--source",
+            "import",
+            "--harness",
+            "opencode",
+            "--source",
             str(tmp_path / "missing.db"),
         ],
     )
@@ -485,7 +499,10 @@ def test_cli_import_copilot_status(tmp_path) -> None:
         [
             "--db",
             str(state_db),
-            "import", "--harness", "copilot", "--source",
+            "import",
+            "--harness",
+            "copilot",
+            "--source",
             str(copilot_file),
         ],
     )
@@ -514,7 +531,10 @@ def test_cli_import_codex_status(tmp_path) -> None:
         [
             "--db",
             str(state_db),
-            "import", "--harness", "codex", "--source",
+            "import",
+            "--harness",
+            "codex",
+            "--source",
             str(codex_file),
         ],
     )
@@ -545,7 +565,10 @@ def test_cli_import_goose_status(tmp_path) -> None:
         [
             "--db",
             str(state_db),
-            "import", "--harness", "goose", "--source",
+            "import",
+            "--harness",
+            "goose",
+            "--source",
             str(goose_db),
         ],
     )
@@ -574,7 +597,15 @@ def test_cli_import_droid_status(tmp_path) -> None:
     runner.invoke(app, ["--db", str(state_db), "start", "--name", "droid"])
     result = runner.invoke(
         app,
-        ["--db", str(state_db), "import", "--harness", "droid", "--source", str(source_path)],
+        [
+            "--db",
+            str(state_db),
+            "import",
+            "--harness",
+            "droid",
+            "--source",
+            str(source_path),
+        ],
     )
 
     assert result.exit_code == 0, result.output
@@ -602,7 +633,15 @@ def test_cli_import_amp_status(tmp_path) -> None:
     runner.invoke(app, ["--db", str(state_db), "start", "--name", "amp"])
     result = runner.invoke(
         app,
-        ["--db", str(state_db), "import", "--harness", "amp", "--source", str(source_path)],
+        [
+            "--db",
+            str(state_db),
+            "import",
+            "--harness",
+            "amp",
+            "--source",
+            str(source_path),
+        ],
     )
 
     assert result.exit_code == 0, result.output
@@ -664,7 +703,15 @@ def test_cli_status_supports_thinking_filter_and_collapse(tmp_path) -> None:
     runner.invoke(app, ["--db", str(state_db), "start", "--name", "test-session"])
     runner.invoke(
         app,
-        ["--db", str(state_db), "import", "--harness", "opencode", "--source", str(source_db)],
+        [
+            "--db",
+            str(state_db),
+            "import",
+            "--harness",
+            "opencode",
+            "--source",
+            str(source_db),
+        ],
     )
 
     filtered_split = runner.invoke(
@@ -700,10 +747,12 @@ def test_cli_status_supports_thinking_filter_and_collapse(tmp_path) -> None:
         (row["thinking_level"], row["message_count"])
         for row in filtered_split_payload["by_model"]
     ] == [("high", 1)]
-    assert sorted([
-        (row["thinking_level"], row["message_count"])
-        for row in split_thinking_payload["by_model"]
-    ]) == [("high", 1), ("low", 1)]
+    assert sorted(
+        [
+            (row["thinking_level"], row["message_count"])
+            for row in split_thinking_payload["by_model"]
+        ]
+    ) == [("high", 1), ("low", 1)]
     assert [
         (row["thinking_level"], row["message_count"])
         for row in collapsed_payload["by_model"]
@@ -960,6 +1009,115 @@ include_raw_json = false
     assert payload[0]["rows_imported"] == 1
 
 
+def test_cli_import_with_no_session_inserts_unscoped_rows(tmp_path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    source_db = tmp_path / "opencode.db"
+    create_source_db(source_db)
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+
+    result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "import",
+            "--no-session",
+            "--harness",
+            "opencode",
+            "--source",
+            str(source_db),
+            "--json",
+        ],
+    )
+    payload = json.loads(result.output)
+
+    assert result.exit_code == 0, result.output
+    assert payload[0]["tracking_session_id"] is None
+    assert payload[0]["rows_imported"] == 1
+
+
+def test_cli_import_with_no_session_is_idempotent(tmp_path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    source_db = tmp_path / "opencode.db"
+    create_source_db(source_db)
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+
+    # First import
+    result1 = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "import",
+            "--no-session",
+            "--harness",
+            "opencode",
+            "--source",
+            str(source_db),
+            "--json",
+        ],
+    )
+    payload1 = json.loads(result1.output)
+    assert payload1[0]["rows_imported"] == 1
+
+    # Second import should skip duplicate
+    result2 = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "import",
+            "--no-session",
+            "--harness",
+            "opencode",
+            "--source",
+            str(source_db),
+            "--json",
+        ],
+    )
+    payload2 = json.loads(result2.output)
+    assert payload2[0]["rows_imported"] == 0
+    assert payload2[0]["rows_skipped"] == 1
+
+
+def test_cli_import_with_no_session_dry_run_does_not_persist(tmp_path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    source_db = tmp_path / "opencode.db"
+    create_source_db(source_db)
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+
+    # Dry-run import (without --json to see the message)
+    result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "import",
+            "--no-session",
+            "--harness",
+            "opencode",
+            "--source",
+            str(source_db),
+            "--dry-run",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "[dry-run: changes were not persisted]" in result.output
+
+    # Verify no rows were actually inserted
+    conn = sqlite3.connect(state_db)
+    count = conn.execute("SELECT COUNT(*) FROM usage_events").fetchone()[0]
+    conn.close()
+    assert count == 0
+
+
 def test_cli_import_missing_copilot_file_fails(tmp_path) -> None:
     runner = CliRunner()
     state_db = tmp_path / "toktrail.db"
@@ -971,7 +1129,10 @@ def test_cli_import_missing_copilot_file_fails(tmp_path) -> None:
         [
             "--db",
             str(state_db),
-            "import", "--harness", "copilot", "--source",
+            "import",
+            "--harness",
+            "copilot",
+            "--source",
             str(tmp_path / "missing.jsonl"),
         ],
     )
@@ -988,7 +1149,18 @@ def test_cli_import_codex_without_path_or_env_fails(tmp_path, monkeypatch) -> No
 
     runner.invoke(app, ["--db", str(state_db), "init"])
     runner.invoke(app, ["--db", str(state_db), "start", "--name", "test-session"])
-    result = runner.invoke(app, ["--db", str(state_db), "import", "--harness", "codex", "--source", str(tmp_path / "missing_sessions")])
+    result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "import",
+            "--harness",
+            "codex",
+            "--source",
+            str(tmp_path / "missing_sessions"),
+        ],
+    )
 
     assert result.exit_code == 1
     assert "Codex source path not found" in result.output
@@ -1006,7 +1178,19 @@ def test_cli_import_copilot_without_file_or_env_fails(tmp_path) -> None:
 
     runner.invoke(app, ["--db", str(state_db), "init"])
     runner.invoke(app, ["--db", str(state_db), "start", "--name", "test-session"])
-    result = runner.invoke(app, ["--db", str(state_db), "import", "--harness", "copilot", "--source", str(tmp_path / "missing.jsonl")], env=env)
+    result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "import",
+            "--harness",
+            "copilot",
+            "--source",
+            str(tmp_path / "missing.jsonl"),
+        ],
+        env=env,
+    )
 
     assert result.exit_code == 1
     assert "Copilot telemetry file not found" in result.output
@@ -1057,7 +1241,10 @@ def test_cli_import_pi_status(tmp_path) -> None:
         [
             "--db",
             str(state_db),
-            "import", "--harness", "pi", "--source",
+            "import",
+            "--harness",
+            "pi",
+            "--source",
             str(session_file),
         ],
     )
@@ -1094,11 +1281,27 @@ def test_cli_status_filters_by_harness_and_source_session(tmp_path) -> None:
     runner.invoke(app, ["--db", str(state_db), "start", "--name", "test-session"])
     runner.invoke(
         app,
-        ["--db", str(state_db), "import", "--harness", "opencode", "--source", str(source_db)],
+        [
+            "--db",
+            str(state_db),
+            "import",
+            "--harness",
+            "opencode",
+            "--source",
+            str(source_db),
+        ],
     )
     runner.invoke(
         app,
-        ["--db", str(state_db), "import", "--harness", "pi", "--source", str(session_file)],
+        [
+            "--db",
+            str(state_db),
+            "import",
+            "--harness",
+            "pi",
+            "--source",
+            str(session_file),
+        ],
     )
 
     result = runner.invoke(
@@ -1296,7 +1499,10 @@ def test_cli_status_with_template_config_computes_copilot_virtual_cost(
         [
             "--db",
             str(state_db),
-            "import", "--harness", "copilot", "--source",
+            "import",
+            "--harness",
+            "copilot",
+            "--source",
             str(copilot_file),
         ],
     )
@@ -1332,7 +1538,15 @@ def test_cli_status_human_output_contains_actual_virtual_and_savings(tmp_path) -
     runner.invoke(app, ["--db", str(state_db), "start", "--name", "test-session"])
     runner.invoke(
         app,
-        ["--db", str(state_db), "import", "--harness", "opencode", "--source", str(source_db)],
+        [
+            "--db",
+            str(state_db),
+            "import",
+            "--harness",
+            "opencode",
+            "--source",
+            str(source_db),
+        ],
     )
 
     result = runner.invoke(app, ["--db", str(state_db), "status", "1"])
@@ -2039,7 +2253,18 @@ def test_cli_import_pi_without_path_or_env_fails(tmp_path, monkeypatch) -> None:
 
     runner.invoke(app, ["--db", str(state_db), "init"])
     runner.invoke(app, ["--db", str(state_db), "start", "--name", "test-session"])
-    result = runner.invoke(app, ["--db", str(state_db), "import", "--harness", "pi", "--source", str(tmp_path / "missing_sessions")])
+    result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "import",
+            "--harness",
+            "pi",
+            "--source",
+            str(tmp_path / "missing_sessions"),
+        ],
+    )
 
     assert result.exit_code == 1
     assert "Pi sessions path not found" in result.output

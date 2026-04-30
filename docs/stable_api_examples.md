@@ -23,6 +23,7 @@ run coding agent without importing toktrail internals.
 - Goose: `goose`
 - Droid: `droid`
 - Amp: `amp`
+- Claude: `claude`
 - Vibe: `vibe`
 
 ## Run examples
@@ -35,6 +36,7 @@ python examples/manual_run_codex.py
 python examples/manual_run_goose.py
 python examples/manual_run_droid.py
 python examples/manual_run_amp.py
+python examples/manual_run_claude.py
 python examples/manual_run_vibe.py
 ```
 
@@ -78,6 +80,20 @@ from toktrail.api.sources import list_source_sessions
 source_path = default_amp_threads_path()
 result = import_usage(Path(".toktrail/toktrail.db"), "amp", source_path=source_path)
 sessions = list_source_sessions("amp", source_path=source_path, limit=5)
+```
+
+## Claude API example
+
+```python
+from pathlib import Path
+
+from toktrail.api.imports import import_usage
+from toktrail.api.paths import default_claude_projects_path
+from toktrail.api.sources import list_source_sessions
+
+source_path = default_claude_projects_path()
+result = import_usage(Path(".toktrail/toktrail.db"), "claude", source_path=source_path)
+sessions = list_source_sessions("claude", source_path=source_path, limit=5)
 ```
 
 ## Vibe API example

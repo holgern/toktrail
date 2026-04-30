@@ -170,6 +170,8 @@ def _event(
         created_ms=created_ms,
         completed_ms=None,
         tokens=tokens,
-        source_cost_usd=Decimal(str(source_cost_usd)) if not isinstance(source_cost_usd, Decimal) else source_cost_usd,
+        source_cost_usd=Decimal(str(source_cost_usd))
+        if not isinstance(source_cost_usd, Decimal)
+        else source_cost_usd,
         raw_json=None,
     )

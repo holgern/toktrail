@@ -7,6 +7,7 @@ import sqlite3
 import subprocess
 import time
 from dataclasses import dataclass
+from decimal import Decimal
 from pathlib import Path
 from typing import Annotated, NoReturn
 
@@ -111,7 +112,7 @@ _VALID_PRICE_SORTS = {
 class ImportExecutionResult:
     harness: str
     source_path: Path
-    tracking_session_id: int
+    tracking_session_id: int | None
     rows_seen: int
     rows_imported: int
     rows_skipped: int
@@ -263,6 +264,9 @@ VibePathOption = Annotated[
 ]
 SinceStartOption = Annotated[bool, typer.Option("--since-start")]
 NoRawOption = Annotated[bool, typer.Option("--no-raw")]
+NoSessionOption = Annotated[
+    bool, typer.Option("--no-session", help="Import without a tracking session.")
+]
 IntervalOption = Annotated[float, typer.Option("--interval", min=0.1)]
 CopilotRunArgs = Annotated[list[str], typer.Argument(help="Command to run after --.")]
 SourcePathOption = Annotated[Path | None, typer.Option("--source")]
@@ -913,6 +917,7 @@ def import_usage(
     source_session_id: SourceSessionOption = None,
     since_start: SinceStartOption = False,
     no_raw: NoRawOption = False,
+    no_session: NoSessionOption = False,
     dry_run: DryRunOption = False,
     json_output: JsonOption = False,
 ) -> None:
@@ -936,6 +941,7 @@ def import_usage(
                 source_session_id=source_session_id,
                 since_start=since_start,
                 no_raw=no_raw,
+                no_session=no_session,
                 dry_run=dry_run,
             )
         except (OSError, ValueError, ToktrailError) as exc:
@@ -981,7 +987,8 @@ def import_usage(
 
     else:
         _exit_with_error(
-            "Either provide both --harness and --source, or neither for config-based import"
+            "Either provide both --harness and --source, "
+            "or neither for config-based import"
         )
 
 
@@ -1571,6 +1578,7 @@ def _run_harness_import_with_dry_run(
     source_session_id: str | None,
     since_start: bool,
     no_raw: bool,
+    no_session: bool,
     dry_run: bool,
 ) -> ImportExecutionResult:
     """Run harness import with optional dry-run mode.
@@ -1581,10 +1589,6 @@ def _run_harness_import_with_dry_run(
     harness = get_harness(harness_name)
     conn = _open_toktrail_connection(ctx)
     try:
-        # Begin explicit transaction for dry-run
-        if dry_run:
-            conn.execute("BEGIN")
-
         resolved_source = harness.resolve_source_path(source_path)
         if resolved_source is None or not resolved_source.exists():
             _exit_with_error(
@@ -1596,7 +1600,7 @@ def _run_harness_import_with_dry_run(
             )
 
         selected_session_id = tracking_session_id
-        if selected_session_id is None:
+        if selected_session_id is None and not no_session:
             selected_session_id = get_active_tracking_session(conn)
 
         # If no session is provided and no active session exists, it's OK
@@ -1624,22 +1628,22 @@ def _run_harness_import_with_dry_run(
             if since_ms is None or event.created_ms >= since_ms
         ]
 
-        # Only insert if we have a tracking session
-        if selected_session_id is not None:
+        # Insert events if not in dry-run mode
+        # Works with or without a tracking session (selected_session_id can be None)
+        if not dry_run:
             insert_result = insert_usage_events(
                 conn, selected_session_id, filtered_events
             )
         else:
-            # No session - don't insert, but record what we would have inserted
-            insert_result = type(
-                "obj", (object,), {"rows_inserted": len(filtered_events)}
-            )()
+            # For dry-run, report what we would have inserted
+            data = {
+                "rows_inserted": len(filtered_events),
+                "rows_linked": 0,
+                "rows_skipped": 0,
+            }
+            insert_result = type("obj", (object,), data)()
 
         rows_filtered = len(scan.events) - len(filtered_events)
-
-        # Rollback if dry-run
-        if dry_run:
-            conn.execute("ROLLBACK")
     finally:
         conn.close()
 
@@ -2794,8 +2798,8 @@ def _format_int(value: int) -> str:
     return f"{value:,}"
 
 
-def _format_cost(value: float) -> str:
-    return f"${value:.2f}"
+def _format_cost(value: Decimal | float) -> str:
+    return f"${float(value):.2f}"
 
 
 def _format_price(value: float | None, *, fallback: str | None = None) -> str:

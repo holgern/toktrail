@@ -108,10 +108,10 @@ Public functions never print, never parse CLI arguments, never call `sys.exit`
 or `typer.Exit`, and return dataclasses or plain values.
 
 Supported harness names across the public API are `opencode`, `pi`, `copilot`,
-`codex`, `goose`, `droid`, `amp`, and `vibe`.
+`codex`, `goose`, `droid`, `amp`, `claude`, and `vibe`.
 
 Runnable examples for manually measuring OpenCode, Pi, Copilot, Codex, Goose,
-Droid, Amp, and Vibe runs are documented in
+Droid, Amp, Claude, and Vibe runs are documented in
 [`docs/stable_api_examples.md`](docs/stable_api_examples.md).
 
 ## Models

@@ -18,7 +18,7 @@ python_files = "test_*.py"
 
 [project]
 name = "toktrail"
-description = "token tracker of a single session"
+description = "Track harness token usage in local SQLite sessions. Import billable token events from OpenCode, Pi, GitHub Copilot CLI, Codex, Goose, Droid, Amp, Claude, and Vibe. Report token and cost breakdowns by harness, model, and agent."
 authors = [{name = "Holger Nahrstaedt"}]
 requires-python = ">=3.10"
 readme = "README.md"
