@@ -1,27 +1,28 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from decimal import Decimal
 
 from toktrail.models import TokenBreakdown, TrackingSession
 
 
 @dataclass(frozen=True)
 class CostTotals:
-    source_cost_usd: float = 0.0
-    actual_cost_usd: float = 0.0
-    virtual_cost_usd: float = 0.0
+    source_cost_usd: Decimal = Decimal(0)
+    actual_cost_usd: Decimal = Decimal(0)
+    virtual_cost_usd: Decimal = Decimal(0)
     unpriced_count: int = 0
 
     @property
-    def savings_usd(self) -> float:
+    def savings_usd(self) -> Decimal:
         return self.virtual_cost_usd - self.actual_cost_usd
 
     def add(
         self,
         *,
-        source_cost_usd: float = 0.0,
-        actual_cost_usd: float = 0.0,
-        virtual_cost_usd: float = 0.0,
+        source_cost_usd: Decimal = Decimal(0),
+        actual_cost_usd: Decimal = Decimal(0),
+        virtual_cost_usd: Decimal = Decimal(0),
         unpriced_count: int = 0,
     ) -> CostTotals:
         return CostTotals(
@@ -31,12 +32,12 @@ class CostTotals:
             unpriced_count=self.unpriced_count + unpriced_count,
         )
 
-    def as_dict(self) -> dict[str, float | int]:
+    def as_dict(self) -> dict[str, str | int]:
         return {
-            "source_cost_usd": self.source_cost_usd,
-            "actual_cost_usd": self.actual_cost_usd,
-            "virtual_cost_usd": self.virtual_cost_usd,
-            "savings_usd": self.savings_usd,
+            "source_cost_usd": str(self.source_cost_usd),
+            "actual_cost_usd": str(self.actual_cost_usd),
+            "virtual_cost_usd": str(self.virtual_cost_usd),
+            "savings_usd": str(self.savings_usd),
             "unpriced_count": self.unpriced_count,
         }
 
@@ -52,7 +53,7 @@ class UsageReportFilter:
     agent: str | None = None
     since_ms: int | None = None
     until_ms: int | None = None
-    split_thinking: bool = True
+    split_thinking: bool = False
 
     def as_dict(
         self,
@@ -78,8 +79,8 @@ class UsageReportFilter:
             values["since_ms"] = self.since_ms
         if self.until_ms is not None:
             values["until_ms"] = self.until_ms
-        if not self.split_thinking:
-            values["split_thinking"] = False
+        if self.split_thinking:
+            values["split_thinking"] = True
         return values
 
 

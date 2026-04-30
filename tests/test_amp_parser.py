@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from datetime import datetime
+from decimal import Decimal
 from pathlib import Path
 
 from toktrail.adapters.amp import list_amp_sessions, parse_amp_file, scan_amp_path
@@ -245,7 +246,7 @@ def test_parse_amp_prefers_message_timestamp_when_ledger_timestamp_missing(
     event = parse_amp_file(path)[0]
 
     assert event.created_ms == created_ms + 7000
-    assert event.cost_usd == 0.5
+    assert event.source_cost_usd == Decimal("0.5")
 
 
 def test_parse_amp_uses_file_mtime_when_thread_created_missing(tmp_path: Path) -> None:
@@ -316,7 +317,7 @@ def test_parse_amp_clamps_negative_usage(tmp_path: Path) -> None:
     event = parse_amp_file(path)[0]
 
     assert event.tokens == TokenBreakdown(output=10, cache_write=3)
-    assert event.cost_usd == 0.0
+    assert event.source_cost_usd == Decimal("0.0")
 
 
 def test_parse_amp_keeps_cache_only_message(tmp_path: Path) -> None:

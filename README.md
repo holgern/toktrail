@@ -88,6 +88,7 @@ toktrail config init
 toktrail import
 toktrail import --harness codex --source ~/.codex/sessions
 toktrail import --harness amp --source ~/.local/share/amp/threads
+toktrail import --dry-run
 toktrail import --no-session
 ```
 
@@ -95,7 +96,7 @@ For local acceptance and testing, the repository includes a sample OpenCode
 source database at `tests/fixtures/opencode.db`:
 
 ```bash
-toktrail import opencode --opencode-db tests/fixtures/opencode.db
+toktrail import --harness opencode --source tests/fixtures/opencode.db
 ```
 
 Show the current session totals:
@@ -104,7 +105,7 @@ Show the current session totals:
 toktrail status
 toktrail status --json
 toktrail status --thinking high --json
-toktrail status --collapse-thinking
+toktrail status --split-thinking
 toktrail status --price-state unpriced --sort tokens --limit 20
 toktrail --config ~/.config/toktrail/config.toml status --json
 toktrail status --harness pi --source-session pi_ses_001 --json
@@ -133,14 +134,18 @@ The canonical CLI flow is:
 ```bash
 toktrail init
 toktrail config init
-toktrail start --name <name>
 toktrail sources
+toktrail start --name <name>
 toktrail import
 toktrail status
 toktrail usage today
 toktrail sessions
-toktrail sessions <harness>
+toktrail session show <tracking-session-id>
+toktrail source-sessions --harness <name>
+toktrail source-session show --harness <name> <source-session-id>
+toktrail models
 toktrail pricing list --missing-only
+toktrail pricing check
 toktrail stop
 ```
 
@@ -154,18 +159,19 @@ missing_source = "warn"
 include_raw_json = false
 
 [imports.sources]
-opencode = "~/.local/share/opencode/opencode.db"
-pi = "~/.pi/agent/sessions"
+opencode = ["~/.local/share/opencode/opencode.db", "~/.local/share/opencode/opencode-stable.db"]
+pi = ["~/.pi/agent/sessions", "~/.omp/agent/sessions"]
 copilot = "~/.copilot/otel"
-codex = "~/.codex/sessions"
+codex = ["~/.codex/sessions", "~/.codex/archived_sessions"]
 goose = "~/.local/share/goose/sessions/sessions.db"
 droid = "~/.factory/sessions"
 amp = "~/.local/share/amp/threads"
 ```
 
-Use `toktrail import --harness <name> --source <path>` for one-off imports.
-Harness-specific subcommands such as `toktrail import codex` remain available
-for compatibility, but they are not the preferred documented workflow.
+`imports.sources.<harness>` accepts either a single path string or a list of
+paths. Use `toktrail import --harness <name> --source <path>` for one-off
+imports. The pre-release contract does not preserve harness-specific
+`import`, `watch`, `sessions`, or `env` compatibility subcommands.
 
 ## Commands
 
@@ -182,13 +188,9 @@ toktrail start --name refactor-auth-flow
 toktrail stop
 toktrail stop 3
 toktrail sessions
-toktrail sessions pi
-toktrail sessions opencode
-toktrail sessions codex
-toktrail sessions copilot
-toktrail sessions goose
-toktrail sessions droid
-toktrail sessions amp
+toktrail session show 3
+toktrail source-sessions --harness pi
+toktrail source-session show --harness pi pi_ses_001 --breakdown
 ```
 
 Discover configured source paths before importing:
@@ -214,6 +216,7 @@ toktrail config prices --model gpt-5-mini --json
 toktrail pricing list
 toktrail pricing list --used-only
 toktrail pricing list --missing-only
+toktrail pricing check
 toktrail config validate
 toktrail --config /path/to/config.toml status --json
 ```
@@ -228,6 +231,7 @@ toktrail import --harness codex --source ~/.codex/sessions
 toktrail import --harness goose --source ~/.local/share/goose/sessions/sessions.db
 toktrail import --harness droid --source ~/.factory/sessions
 toktrail import --harness amp --source ~/.local/share/amp/threads
+toktrail import --dry-run
 toktrail import --session 3
 toktrail import --no-session
 toktrail import --raw
@@ -235,169 +239,46 @@ toktrail import --no-raw
 ```
 
 The plain `toktrail import` command reads enabled harnesses and source paths from
-`[imports]` and `[imports.sources]` in `config.toml`. Legacy
-`toktrail import opencode|pi|copilot|codex|goose|droid|amp` subcommands still
-work for compatibility.
+`[imports]` and `[imports.sources]` in `config.toml`.
 
-## Advanced: harness-specific import and watch
+## Advanced: generic import, watch, environment, and source-session flows
 
-Import or watch OpenCode usage:
+Use the generic command surface for every harness:
 
 ```bash
-toktrail import opencode
-toktrail import opencode --session 3
-toktrail import opencode --source-session ses_456
-toktrail import opencode --since-start
-toktrail import opencode --no-raw
-toktrail import opencode --opencode-db /path/to/opencode.db
+toktrail import --harness opencode --source /path/to/opencode.db
+toktrail import --harness pi --source ~/.pi/agent/sessions
+toktrail import --harness copilot --source ~/.copilot/otel
+toktrail import --harness codex --source ~/.codex/sessions
+toktrail import --harness goose --source ~/.local/share/goose/sessions/sessions.db
+toktrail import --harness droid --source ~/.factory/sessions
+toktrail import --harness amp --source ~/.local/share/amp/threads
 
-toktrail watch opencode --interval 2
-toktrail watch opencode --session 3 --source-session ses_456
+toktrail watch --harness opencode --interval 2
+toktrail watch --harness pi --interval 2
+toktrail watch --harness codex --interval 2
+toktrail watch --harness amp --interval 2
+
+toktrail env --harness copilot --shell bash
+toktrail env --harness copilot --shell zsh
+toktrail env --harness copilot --shell fish
+toktrail env --harness copilot --shell nu
+toktrail env --harness copilot --shell powershell
+toktrail env --harness copilot --json
+
+toktrail source-sessions --harness pi
+toktrail source-sessions --harness codex --last --breakdown
+toktrail source-session show --harness pi pi_ses_001 --breakdown
+toktrail models
+toktrail models --group-by harness,provider,model
+toktrail pricing check
 ```
 
-Import or watch Pi usage:
-
-```bash
-toktrail import pi
-toktrail import pi --pi-path ~/.pi/agent/sessions
-toktrail import pi --pi-path ~/.pi/agent/sessions/<encoded-cwd>/session.jsonl
-toktrail import pi --source-session pi_ses_001
-toktrail import pi --since-start
-toktrail import pi --no-raw
-
-toktrail watch pi --interval 2
-toktrail watch pi --pi-path ~/.pi/agent/sessions
-```
-
-Import or watch Codex usage:
-
-```bash
-toktrail import codex
-toktrail import codex --codex-path ~/.codex/sessions
-toktrail import codex --codex-path ~/.codex/sessions/2026/04/29/session-001.jsonl
-toktrail import codex --source-session session-001
-toktrail import codex --since-start
-toktrail import codex --no-raw
-
-toktrail watch codex --interval 2
-toktrail watch codex --codex-path ~/.codex/sessions
-```
-
-Import or watch GitHub Copilot CLI OTEL JSONL usage:
-
-```bash
-toktrail import copilot --copilot-file /path/to/copilot-otel.jsonl
-toktrail import copilot --source-session conv-1 --copilot-file /path/to/copilot-otel.jsonl
-toktrail import copilot --since-start --no-raw --copilot-file /path/to/copilot-otel.jsonl
-
-toktrail watch copilot --copilot-file /path/to/copilot-otel.jsonl --interval 2
-toktrail copilot run -- gh copilot suggest "explain git reflog"
-eval "$(toktrail copilot env bash)"
-eval "$(toktrail copilot env zsh)"
-toktrail copilot env fish | source
-```
-
-Supported `toktrail copilot env` shells are `bash`, `zsh`, `fish`,
-`nu`/`nushell`, and `powershell`/`pwsh`. Pass `--json` to output a JSON object
-instead of shell code.
-
-For Nushell:
-
-```nu
-toktrail copilot env nu | save -f /tmp/toktrail-copilot-env.nu
-source-env /tmp/toktrail-copilot-env.nu
-```
-
-Or use `--json` for direct consumption:
-
-```nu
-toktrail copilot env nu --json | from json | load-env
-```
-
-For PowerShell:
-
-```powershell
-toktrail copilot env powershell | Invoke-Expression
-```
-
-If `TOKTRAIL_COPILOT_FILE` or `COPILOT_OTEL_FILE_EXPORTER_PATH` is set,
-`toktrail import copilot` and `toktrail watch copilot` can omit
-`--copilot-file`. If neither is set, toktrail also discovers the latest
-`~/.copilot/otel/*.jsonl` export when available.
-
-Import Goose SQLite session usage:
-
-```bash
-toktrail import goose
-toktrail import goose --goose-db ~/.local/share/goose/sessions/sessions.db
-toktrail import goose --goose-path /path/to/sessions.db
-toktrail import goose --source-session goose-session-id
-toktrail import goose --since-start
-toktrail import goose --no-raw
-```
-
-If `TOKTRAIL_GOOSE_SESSIONS` is set, `toktrail import goose` can omit
-`--goose-db`. If `GOOSE_PATH_ROOT` is set, toktrail checks
-`$GOOSE_PATH_ROOT/data/sessions/sessions.db`.
-
-Import Droid settings JSON session usage:
-
-```bash
-toktrail import droid
-toktrail import droid --droid-path ~/.factory/sessions
-toktrail import droid --droid-path ~/.factory/sessions/<session-id>.settings.json
-toktrail import droid --source-session droid-session-id
-toktrail import droid --since-start
-toktrail import droid --no-raw
-```
-
-If `TOKTRAIL_DROID_SESSIONS` is set, `toktrail import droid` can omit
-`--droid-path`. Droid settings files are cumulative snapshots, so toktrail does
-not expose `watch droid`.
-
-Import or watch Amp thread JSON usage:
-
-```bash
-toktrail import amp
-toktrail import amp --amp-path ~/.local/share/amp/threads
-toktrail import amp --amp-path ~/.local/share/amp/threads/<thread-id>.json
-toktrail import amp --source-session thread-id
-toktrail import amp --since-start
-toktrail import amp --no-raw
-
-toktrail watch amp --interval 2
-toktrail watch amp --amp-path ~/.local/share/amp/threads
-```
-
-If `TOKTRAIL_AMP_THREADS` is set, `toktrail import amp` can omit `--amp-path`.
-
-Inspect raw source sessions without mutating toktrail state:
-
-```bash
-toktrail sessions opencode
-toktrail sessions opencode --opencode-db /path/to/opencode.db
-toktrail sessions pi
-toktrail sessions pi --pi-path ~/.pi/agent/sessions
-toktrail sessions pi --last --breakdown
-toktrail sessions pi --sort tokens --limit 5 --columns source_session_id,total,actual,virtual,savings --rich
-toktrail sessions pi pi_ses_001 --json
-toktrail sessions codex
-toktrail sessions codex --codex-path ~/.codex/sessions
-toktrail sessions codex --last --breakdown
-toktrail sessions codex --sort tokens --limit 5 --columns source_session_id,total,actual,virtual,savings
-toktrail sessions goose
-toktrail sessions goose --goose-db ~/.local/share/goose/sessions/sessions.db
-toktrail sessions goose --last --breakdown
-toktrail sessions droid
-toktrail sessions droid --droid-path ~/.factory/sessions
-toktrail sessions droid --last --breakdown
-toktrail sessions amp
-toktrail sessions amp --amp-path ~/.local/share/amp/threads
-toktrail sessions amp --last --breakdown
-toktrail sessions copilot
-toktrail sessions copilot --copilot-path ~/.copilot/otel
-toktrail --config ~/.config/toktrail/config.toml sessions copilot --sort virtual --limit 5
-```
+Copilot source discovery honors `TOKTRAIL_COPILOT_FILE`,
+`COPILOT_OTEL_FILE_EXPORTER_PATH`, and `TOKTRAIL_COPILOT_OTEL_DIR`. Codex
+discovery honors both `TOKTRAIL_CODEX_SESSIONS` and `CODEX_HOME`, including
+archived sessions. Goose discovery honors `TOKTRAIL_GOOSE_SESSIONS` and
+`GOOSE_PATH_ROOT`.
 
 ## Storage and privacy
 
@@ -432,10 +313,10 @@ The `TOKTRAIL_CONFIG` environment variable or global `--config` option can
 override the pricing config path. Missing config files are safe: toktrail falls
 back to built-in defaults and still reports source and actual costs.
 
-Usage imports store normalized usage metadata locally and store raw source JSON
-by default for local debugging and reprocessing. Pi and Codex imports store raw
-JSONL entry lines by default. Use `--no-raw` with import or watch commands to
-suppress raw JSON storage.
+Usage imports store normalized usage metadata locally. Raw source JSON is
+disabled by default and remains opt-in local debugging data only. Use `--raw`
+to store raw source payloads for a run, or `--no-raw` to make that choice
+explicit in automation.
 
 toktrail never prints raw OpenCode, Pi, Codex, Goose, Droid, Amp, or Copilot JSON in
 CLI output.
@@ -451,7 +332,8 @@ CLI output.
 - savings (`virtual - actual`) plus unpriced model-group counts
 - exact unconfigured harness/provider/model diagnostics when pricing is missing
 - grouped summaries by harness, model, and agent/mode
-- thinking-level metadata on model rows when the source exposes it
+- collapsed thinking-level metadata by default, with `--split-thinking` to
+  expand model rows when needed
 - optional filtered views by harness, source session, provider, model, agent,
   created-at time range, price state, minimum message/token thresholds, sort,
   and grouped-row limits
@@ -478,11 +360,12 @@ Example workflow:
 
 ```bash
 toktrail config init --template copilot
-toktrail import copilot --copilot-file ~/.copilot/otel/copilot-otel-20260429-090000.jsonl
+toktrail env --harness copilot --shell bash
+toktrail import --harness copilot --source ~/.copilot/otel/copilot-otel-20260429-090000.jsonl
 toktrail status --price-state unpriced --sort tokens --limit 20
 toktrail pricing list --missing-only
-toktrail config prices --query gpt-5 --json
-toktrail sessions copilot --sort savings --columns source_session_id,actual,virtual,savings
+toktrail pricing check
+toktrail source-sessions --harness copilot --sort savings --columns source_session_id,actual,virtual,savings
 ```
 
 Virtual and pricing-based actual costs are computed at report time, not during

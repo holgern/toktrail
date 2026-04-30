@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from decimal import Decimal
 from pathlib import Path
 
 from toktrail.adapters.droid import (
@@ -99,7 +100,7 @@ def test_parse_droid_settings_structure(tmp_path: Path) -> None:
     )
     assert event.created_ms == 1735214400000
     assert event.completed_ms is None
-    assert event.cost_usd == 0.0
+    assert event.source_cost_usd == Decimal("0.0")
     assert event.raw_json is not None
 
 

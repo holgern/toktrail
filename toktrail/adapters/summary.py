@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
+from decimal import Decimal
 from pathlib import Path
 
 from toktrail.adapters.base import SourceSessionSummary
@@ -294,7 +295,7 @@ class _CostAtomBucket:
     agent: str
     message_count: int = 0
     tokens: TokenBreakdown = field(default_factory=TokenBreakdown)
-    source_cost_usd: float = 0.0
+    source_cost_usd: Decimal = field(default_factory=lambda: Decimal(0))
 
     def add(self, event: UsageEvent) -> None:
         self.message_count += 1

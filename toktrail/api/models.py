@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from decimal import Decimal
 from pathlib import Path
 
 from toktrail.errors import AmbiguousSourceSessionError, SourcePathError
@@ -12,8 +13,8 @@ def _require_non_negative_int(name: str, value: int) -> None:
         raise ValueError(msg)
 
 
-def _require_non_negative_float(name: str, value: float) -> None:
-    if value < 0:
+def _require_non_negative_decimal(name: str, value: Decimal) -> None:
+    if value < Decimal(0):
         msg = f"{name} must be non-negative, got {value!r}"
         raise ValueError(msg)
 
@@ -60,27 +61,27 @@ class TokenBreakdown:
 
 @dataclass(frozen=True)
 class CostTotals:
-    source_cost_usd: float = 0.0
-    actual_cost_usd: float = 0.0
-    virtual_cost_usd: float = 0.0
+    source_cost_usd: Decimal = Decimal(0)
+    actual_cost_usd: Decimal = Decimal(0)
+    virtual_cost_usd: Decimal = Decimal(0)
     unpriced_count: int = 0
 
     def __post_init__(self) -> None:
-        _require_non_negative_float("source_cost_usd", self.source_cost_usd)
-        _require_non_negative_float("actual_cost_usd", self.actual_cost_usd)
-        _require_non_negative_float("virtual_cost_usd", self.virtual_cost_usd)
+        _require_non_negative_decimal("source_cost_usd", self.source_cost_usd)
+        _require_non_negative_decimal("actual_cost_usd", self.actual_cost_usd)
+        _require_non_negative_decimal("virtual_cost_usd", self.virtual_cost_usd)
         _require_non_negative_int("unpriced_count", self.unpriced_count)
 
     @property
-    def savings_usd(self) -> float:
+    def savings_usd(self) -> Decimal:
         return self.virtual_cost_usd - self.actual_cost_usd
 
-    def as_dict(self) -> dict[str, float | int]:
+    def as_dict(self) -> dict[str, str | int]:
         return {
-            "source_cost_usd": self.source_cost_usd,
-            "actual_cost_usd": self.actual_cost_usd,
-            "virtual_cost_usd": self.virtual_cost_usd,
-            "savings_usd": self.savings_usd,
+            "source_cost_usd": str(self.source_cost_usd),
+            "actual_cost_usd": str(self.actual_cost_usd),
+            "virtual_cost_usd": str(self.virtual_cost_usd),
+            "savings_usd": str(self.savings_usd),
             "unpriced_count": self.unpriced_count,
         }
 
@@ -130,11 +131,11 @@ class UsageEvent:
     created_ms: int
     completed_ms: int | None
     tokens: TokenBreakdown
-    source_cost_usd: float = 0.0
+    source_cost_usd: Decimal = field(default_factory=lambda: Decimal(0))
     raw_json: str | None = None
 
     def __post_init__(self) -> None:
-        _require_non_negative_float("source_cost_usd", self.source_cost_usd)
+        _require_non_negative_decimal("source_cost_usd", self.source_cost_usd)
 
     def as_dict(self, *, include_raw_json: bool = False) -> dict[str, object]:
         payload: dict[str, object] = {

@@ -1,5 +1,117 @@
+"""Stable public toktrail API."""
 from __future__ import annotations
 
-"""Stable public toktrail API."""
+from toktrail.api.config import (
+    config_exists,
+    config_summary,
+    default_toktrail_config_path,
+    init_config,
+    render_config_template,
+    resolve_toktrail_config_path,
+)
+from toktrail.api.environment import prepare_environment
+from toktrail.api.harnesses import (
+    get_harness_definition,
+    is_supported_harness,
+    normalize_harness_name,
+    supported_harnesses,
+)
+from toktrail.api.imports import import_configured_usage, import_usage
+from toktrail.api.models import (
+    AgentSummaryRow,
+    CostTotals,
+    FinalizedManualRun,
+    HarnessDefinition,
+    HarnessEnvironment,
+    HarnessSummaryRow,
+    ImportUsageResult,
+    ModelSummaryRow,
+    PreparedManualRun,
+    ScanUsageResult,
+    SessionTotals,
+    SourceSessionDiff,
+    SourceSessionSnapshot,
+    SourceSessionSummary,
+    TokenBreakdown,
+    TrackingSession,
+    TrackingSessionReport,
+    UnconfiguredModelRow,
+    UsageEvent,
+)
+from toktrail.api.paths import (
+    default_source_path,
+    default_toktrail_db_path,
+    resolve_source_path,
+    resolve_toktrail_db_path,
+)
+from toktrail.api.reports import session_report, usage_report
+from toktrail.api.sessions import (
+    get_active_session,
+    get_session,
+    init_state,
+    list_sessions,
+    require_active_session,
+    start_session,
+    stop_session,
+)
+from toktrail.api.sources import (
+    capture_source_snapshot,
+    diff_source_snapshots,
+    list_source_sessions,
+    scan_usage,
+)
+from toktrail.api.workflow import finalize_manual_run, prepare_manual_run
 
-__all__: list[str] = []
+__all__ = [
+    "AgentSummaryRow",
+    "CostTotals",
+    "FinalizedManualRun",
+    "HarnessDefinition",
+    "HarnessEnvironment",
+    "HarnessSummaryRow",
+    "ImportUsageResult",
+    "ModelSummaryRow",
+    "PreparedManualRun",
+    "ScanUsageResult",
+    "SessionTotals",
+    "SourceSessionDiff",
+    "SourceSessionSnapshot",
+    "SourceSessionSummary",
+    "TokenBreakdown",
+    "TrackingSession",
+    "TrackingSessionReport",
+    "UnconfiguredModelRow",
+    "UsageEvent",
+    "capture_source_snapshot",
+    "config_exists",
+    "config_summary",
+    "default_source_path",
+    "default_toktrail_config_path",
+    "default_toktrail_db_path",
+    "diff_source_snapshots",
+    "finalize_manual_run",
+    "get_active_session",
+    "get_harness_definition",
+    "get_session",
+    "import_configured_usage",
+    "import_usage",
+    "init_config",
+    "init_state",
+    "is_supported_harness",
+    "list_sessions",
+    "list_source_sessions",
+    "normalize_harness_name",
+    "prepare_environment",
+    "prepare_manual_run",
+    "render_config_template",
+    "require_active_session",
+    "resolve_source_path",
+    "resolve_toktrail_config_path",
+    "resolve_toktrail_db_path",
+    "scan_usage",
+    "session_report",
+    "start_session",
+    "stop_session",
+    "supported_harnesses",
+    "usage_report",
+]

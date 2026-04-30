@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from decimal import Decimal
+
 from toktrail.config import ActualCostRule, CostingConfig, Price
 from toktrail.db import (
     connect,
@@ -38,7 +40,7 @@ def make_usage_event(
     *,
     dedup_suffix: str,
     source_session_id: str = "ses-1",
-    cost_usd: float = 0.25,
+    source_cost_usd: float | Decimal = 0.25,
     tokens: TokenBreakdown | None = None,
     harness: str = "opencode",
     provider_id: str = "anthropic",
@@ -68,7 +70,7 @@ def make_usage_event(
         created_ms=1700000000000 + int(dedup_suffix[-1]) * 100,
         completed_ms=1700000000100 + int(dedup_suffix[-1]) * 100,
         tokens=token_breakdown,
-        cost_usd=cost_usd,
+        source_cost_usd=Decimal(str(source_cost_usd)) if not isinstance(source_cost_usd, Decimal) else source_cost_usd,
         raw_json="{}",
     )
 
@@ -93,7 +95,7 @@ def test_migrate_creates_tables_and_is_idempotent(tmp_path) -> None:
         "usage_events",
         "tracking_session_events",
     } <= table_names
-    assert user_version == 2
+    assert user_version == 3
 
 
 def test_create_tracking_session_and_end_session(tmp_path) -> None:
@@ -130,10 +132,10 @@ def test_insert_usage_events_is_idempotent_and_aggregates_correctly(tmp_path) ->
     migrate(conn)
     session_id = create_tracking_session(conn, "test")
 
-    first = make_usage_event(dedup_suffix="1", cost_usd=0.25)
+    first = make_usage_event(dedup_suffix="1", source_cost_usd=0.25)
     second = make_usage_event(
         dedup_suffix="2",
-        cost_usd=0.50,
+        source_cost_usd=0.50,
         tokens=TokenBreakdown(
             input=20,
             output=10,
@@ -155,19 +157,19 @@ def test_insert_usage_events_is_idempotent_and_aggregates_correctly(tmp_path) ->
     assert report.totals.tokens.cache_read == 6
     assert report.totals.tokens.cache_write == 9
     assert report.totals.tokens.total == 63
-    assert report.totals.source_cost_usd == 0.75
+    assert report.totals.source_cost_usd == Decimal("0.75")
     assert report.totals.actual_cost_usd == 0.75
     assert report.totals.virtual_cost_usd == 0.0
     assert report.totals.savings_usd == -0.75
     assert report.totals.unpriced_count == 1
     assert report.by_harness[0].total_tokens == 63
-    assert report.by_harness[0].source_cost_usd == 0.75
+    assert report.by_harness[0].source_cost_usd == Decimal("0.75")
     assert report.by_harness[0].actual_cost_usd == 0.75
     assert report.by_model[0].model_id == "claude-sonnet-4"
-    assert report.by_model[0].source_cost_usd == 0.75
+    assert report.by_model[0].source_cost_usd == Decimal("0.75")
     assert report.by_model[0].actual_cost_usd == 0.75
     assert report.by_agent[0].agent == "build"
-    assert report.by_agent[0].source_cost_usd == 0.75
+    assert report.by_agent[0].source_cost_usd == Decimal("0.75")
     assert report.by_agent[0].actual_cost_usd == 0.75
 
 
@@ -184,7 +186,7 @@ def test_summarize_usage_applies_filters_and_echoes_them(tmp_path) -> None:
                 dedup_suffix="1",
                 harness="pi",
                 source_session_id="pi-1",
-                cost_usd=0.1,
+                source_cost_usd=0.1,
                 tokens=TokenBreakdown(input=100, output=5),
                 provider_id="anthropic",
                 model_id="claude-sonnet-4",
@@ -195,7 +197,7 @@ def test_summarize_usage_applies_filters_and_echoes_them(tmp_path) -> None:
                 dedup_suffix="2",
                 harness="pi",
                 source_session_id="pi-2",
-                cost_usd=0.2,
+                source_cost_usd=0.2,
                 tokens=TokenBreakdown(input=50, cache_read=10),
                 provider_id="anthropic",
                 model_id="claude-sonnet-4",
@@ -206,7 +208,7 @@ def test_summarize_usage_applies_filters_and_echoes_them(tmp_path) -> None:
                 dedup_suffix="3",
                 harness="copilot",
                 source_session_id="conv-1",
-                cost_usd=0.0,
+                source_cost_usd=0.0,
                 tokens=TokenBreakdown(input=7, output=9),
                 provider_id="github-copilot",
                 model_id="gpt-5",
@@ -225,6 +227,7 @@ def test_summarize_usage_applies_filters_and_echoes_them(tmp_path) -> None:
             model_id="claude-sonnet-4",
             thinking_level="high",
             agent="plan",
+            split_thinking=True,
         ),
     )
 
@@ -235,31 +238,32 @@ def test_summarize_usage_applies_filters_and_echoes_them(tmp_path) -> None:
         "model_id": "claude-sonnet-4",
         "thinking_level": "high",
         "agent": "plan",
+        "split_thinking": True,
     }
     assert report.totals.tokens.input == 100
     assert report.totals.tokens.output == 5
     assert report.totals.tokens.total == 105
-    assert report.totals.source_cost_usd == 0.1
+    assert report.totals.source_cost_usd == Decimal("0.1")
     assert report.totals.actual_cost_usd == 0.0
     assert report.totals.virtual_cost_usd == 0.0
     assert report.totals.unpriced_count == 1
     assert report.by_harness[0].harness == "pi"
-    assert report.by_harness[0].source_cost_usd == 0.1
+    assert report.by_harness[0].source_cost_usd == Decimal("0.1")
     assert report.by_harness[0].actual_cost_usd == 0.0
     assert report.by_model[0].model_id == "claude-sonnet-4"
     assert report.by_model[0].thinking_level == "high"
-    assert report.by_model[0].source_cost_usd == 0.1
+    assert report.by_model[0].source_cost_usd == Decimal("0.1")
     assert report.by_model[0].actual_cost_usd == 0.0
     assert report.by_agent[0].agent == "plan"
-    assert report.by_agent[0].source_cost_usd == 0.1
+    assert report.by_agent[0].source_cost_usd == Decimal("0.1")
     assert report.by_agent[0].actual_cost_usd == 0.0
 
 
 def test_summarize_usage_supports_unscoped_period_ranges(tmp_path) -> None:
     conn = connect(tmp_path / "toktrail.db")
     migrate(conn)
-    first = make_usage_event(dedup_suffix="1", cost_usd=0.1)
-    second = make_usage_event(dedup_suffix="2", cost_usd=0.2)
+    first = make_usage_event(dedup_suffix="1", source_cost_usd=0.1)
+    second = make_usage_event(dedup_suffix="2", source_cost_usd=0.2)
 
     insert_usage_events(conn, None, [first, second])
     report = summarize_usage(
@@ -290,7 +294,7 @@ def test_summarize_usage_can_split_and_collapse_thinking_levels(tmp_path) -> Non
                 model_id="gpt-5.4",
                 thinking_level="high",
                 tokens=TokenBreakdown(input=10, output=5),
-                cost_usd=0.0,
+                source_cost_usd=0.0,
             ),
             make_usage_event(
                 dedup_suffix="2",
@@ -298,18 +302,18 @@ def test_summarize_usage_can_split_and_collapse_thinking_levels(tmp_path) -> Non
                 model_id="gpt-5.4",
                 thinking_level="low",
                 tokens=TokenBreakdown(input=20, output=7),
-                cost_usd=0.0,
+                source_cost_usd=0.0,
             ),
         ],
     )
 
     split_report = summarize_usage(
         conn,
-        UsageReportFilter(tracking_session_id=session_id),
+        UsageReportFilter(tracking_session_id=session_id, split_thinking=True),
     )
     collapsed_report = summarize_usage(
         conn,
-        UsageReportFilter(tracking_session_id=session_id, split_thinking=False),
+        UsageReportFilter(tracking_session_id=session_id),
     )
 
     assert [
@@ -336,7 +340,7 @@ def test_session_report_uses_tracking_session_events_for_membership(
     conn = connect(tmp_path / "toktrail.db")
     migrate(conn)
     first_session_id = create_tracking_session(conn, "first")
-    event = make_usage_event(dedup_suffix="1", cost_usd=0.0)
+    event = make_usage_event(dedup_suffix="1", source_cost_usd=0.0)
 
     first_insert = insert_usage_events(conn, first_session_id, [event])
     end_tracking_session(conn, first_session_id)
@@ -367,14 +371,14 @@ def test_summarize_usage_exposes_unconfigured_models(tmp_path) -> None:
                 model_id="gpt-5.4",
                 thinking_level="high",
                 tokens=TokenBreakdown(input=100, output=20, cache_read=50),
-                cost_usd=0.0,
+                source_cost_usd=0.0,
             )
         ],
     )
 
     report = summarize_usage(
         conn,
-        UsageReportFilter(tracking_session_id=session_id),
+        UsageReportFilter(tracking_session_id=session_id, split_thinking=True),
         costing_config=CostingConfig(
             default_actual_mode="zero",
             default_virtual_mode="pricing",
@@ -415,7 +419,7 @@ def test_summarize_usage_unconfigured_models_distinguish_harness_actual_rules(
                 provider_id="openai-codex",
                 model_id="gpt-5.4",
                 tokens=TokenBreakdown(input=40, output=10),
-                cost_usd=0.0,
+                source_cost_usd=0.0,
             ),
             make_usage_event(
                 dedup_suffix="2",
@@ -423,7 +427,7 @@ def test_summarize_usage_unconfigured_models_distinguish_harness_actual_rules(
                 provider_id="openai-codex",
                 model_id="gpt-5.4",
                 tokens=TokenBreakdown(input=20, output=5),
-                cost_usd=0.0,
+                source_cost_usd=0.0,
             ),
         ],
     )
@@ -469,7 +473,7 @@ def test_summarize_usage_unconfigured_models_collapse_thinking_when_requested(
                 model_id="gpt-5.4",
                 thinking_level="high",
                 tokens=TokenBreakdown(input=10, output=5),
-                cost_usd=0.0,
+                source_cost_usd=0.0,
             ),
             make_usage_event(
                 dedup_suffix="2",
@@ -478,14 +482,14 @@ def test_summarize_usage_unconfigured_models_collapse_thinking_when_requested(
                 model_id="gpt-5.4",
                 thinking_level="low",
                 tokens=TokenBreakdown(input=20, output=7),
-                cost_usd=0.0,
+                source_cost_usd=0.0,
             ),
         ],
     )
 
     split_report = summarize_usage(
         conn,
-        UsageReportFilter(tracking_session_id=session_id),
+        UsageReportFilter(tracking_session_id=session_id, split_thinking=True),
         costing_config=CostingConfig(
             default_actual_mode="zero",
             default_virtual_mode="pricing",
@@ -493,7 +497,7 @@ def test_summarize_usage_unconfigured_models_collapse_thinking_when_requested(
     )
     collapsed_report = summarize_usage(
         conn,
-        UsageReportFilter(tracking_session_id=session_id, split_thinking=False),
+        UsageReportFilter(tracking_session_id=session_id),
         costing_config=CostingConfig(
             default_actual_mode="zero",
             default_virtual_mode="pricing",

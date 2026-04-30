@@ -84,12 +84,14 @@ Examples:
 
 - a Typer CLI named `toktrail`
 - local SQLite state under `~/.local/state/toktrail/toktrail.db` by default
-- imports from OpenCode SQLite, Pi JSONL sessions, and GitHub Copilot CLI OTEL JSONL
+- imports from OpenCode SQLite, Pi JSONL sessions, GitHub Copilot CLI OTEL JSONL,
+  Codex JSONL sessions, Goose SQLite sessions, Droid settings JSON sessions,
+  and Amp thread JSON sessions
 - watch commands that repeatedly import new usage
-- source-session inspection commands
+- source discovery plus source-session inspection commands
 - normalized token breakdowns for input, output, reasoning, cache-read, and cache-write tokens
 - summaries by tracking session, harness, model, and agent/mode
-- optional raw source JSON storage for local reprocessing and debugging
+- opt-in raw source JSON storage for local reprocessing and debugging
 
 Canonical workflow:
 
@@ -110,14 +112,25 @@ Use the owning layer before editing.
 - `toktrail/paths.py` — default paths and environment-variable overrides
 - `toktrail/provider_identity.py` — conservative provider inference from model IDs
 - `toktrail/adapters/base.py` — adapter protocol
+- `toktrail/adapters/registry.py` — harness registry and source-discovery metadata
 - `toktrail/adapters/opencode.py` — OpenCode SQLite scanning, parsing, session summaries
 - `toktrail/adapters/pi.py` — Pi JSONL path/file scanning, parsing, session summaries
 - `toktrail/adapters/copilot.py` — Copilot OTEL JSONL scanning and parsing
+- `toktrail/adapters/codex.py` — Codex JSONL scanning and parsing
+- `toktrail/adapters/goose.py` — Goose SQLite scanning and parsing
+- `toktrail/adapters/droid.py` — Droid settings/session scanning and parsing
+- `toktrail/adapters/amp.py` — Amp thread scanning and parsing
+- `toktrail/scanner.py` — source discovery, source fingerprints, and scanner warnings
 - `tests/test_cli.py` — CLI behavior and end-to-end import/status contracts
 - `tests/test_db.py` — SQLite state and aggregation contracts
 - `tests/test_opencode_parser.py` — OpenCode parser contracts
 - `tests/test_pi_parser.py` — Pi parser contracts
 - `tests/test_copilot_parser.py` — Copilot parser contracts
+- `tests/test_codex_parser.py` — Codex parser contracts
+- `tests/test_goose_parser.py` — Goose parser contracts
+- `tests/test_droid_parser.py` — Droid parser contracts
+- `tests/test_amp_parser.py` — Amp parser contracts
+- `tests/test_scanner.py` — source discovery and fingerprinting contracts
 - `tests/test_provider_identity.py` — provider inference contracts
 - `README.md` — user-facing command and behavior documentation
 - `pyproject.toml` — packaging, entrypoint, pytest, ruff, mypy configuration
@@ -131,6 +144,10 @@ Supported harnesses are:
 - `opencode` — reads OpenCode SQLite `message` rows
 - `pi` — reads Pi session JSONL files under a sessions directory or a single JSONL file
 - `copilot` — reads GitHub Copilot CLI OTEL JSONL chat spans
+- `codex` — reads Codex session JSONL files
+- `goose` — reads Goose `sessions.db` SQLite rows
+- `droid` — reads Droid `*.settings.json` session files
+- `amp` — reads Amp `T-*.json` thread files
 
 Each harness adapter must convert source rows/spans/messages into `UsageEvent` objects with the same semantics.
 
@@ -164,7 +181,8 @@ When adding a harness:
 6. add parser tests, CLI tests, and DB/report tests when the harness affects aggregation
 7. update README command examples
 
-The repository already has three harnesses. Favor a small registry or strategy table over a fourth round of copy-pasted CLI functions.
+The repository already has seven harnesses. Favor a shared registry plus source
+scanner over another round of harness-specific CLI branches.
 
 ## 5. Token Accounting Contracts
 
@@ -257,46 +275,48 @@ Preserve these command families unless a task explicitly changes grammar:
 
 ```text
 toktrail init
+toktrail config init
+toktrail sources
 toktrail start
 toktrail stop
 toktrail status
+toktrail usage
 toktrail sessions
-toktrail import opencode
-toktrail import pi
-toktrail import copilot
-toktrail watch opencode
-toktrail watch pi
-toktrail watch copilot
-toktrail opencode sessions
-toktrail pi sessions
+toktrail session show
+toktrail source-sessions
+toktrail source-session show
+toktrail import
+toktrail watch
+toktrail env
+toktrail models
+toktrail pricing list
+toktrail pricing check
 ```
 
 Global `--db` is the state database override. Environment variables may also resolve paths.
 
-### 7.2 Desired session-inspection direction
+### 7.2 Source-session grammar
 
-The current source-session inspection grammar is harness-first for OpenCode and Pi:
-
-```text
-toktrail opencode sessions
-toktrail pi sessions
-```
-
-The preferred future grammar is session-first and complete across harnesses:
+The canonical source-session inspection grammar is session-first and complete
+across harnesses:
 
 ```text
-toktrail sessions opencode
-toktrail sessions pi
-toktrail sessions copilot
+toktrail source-sessions --harness opencode
+toktrail source-sessions --harness pi
+toktrail source-sessions --harness copilot
+toktrail source-sessions --harness codex
+toktrail source-sessions --harness goose
+toktrail source-sessions --harness droid
+toktrail source-sessions --harness amp
+toktrail source-session show --harness pi <source-session-id>
 ```
 
 When implementing this:
 
-- keep existing harness-first commands as compatibility aliases unless the user explicitly asks for a breaking cleanup
-- add Copilot source-session inspection rather than leaving it missing
+- do not preserve harness-first compatibility aliases unless the user explicitly asks for them
 - avoid duplicating per-harness rendering logic
 - ensure human output includes readable timestamps, not raw epoch milliseconds only
-- add CLI tests for both old and new spellings during the transition
+- add CLI tests for the canonical spellings
 - update README examples in the same change
 
 ### 7.3 Active tracking session defaulting
@@ -345,6 +365,28 @@ When touching JSON:
 
 If adding JSON to additional commands, make the shape explicit and test it.
 
+### 7.6 Thinking default
+
+Preserve the product-facing default that thinking levels stay collapsed unless
+the user explicitly asks to split them out:
+
+- default reports collapse thinking levels
+- use `--split-thinking` to expand grouped rows
+- keep `--thinking <level>` filtering
+
+### 7.7 Environment and model commands
+
+Preserve the generic command grammar:
+
+```text
+toktrail env --harness copilot --shell bash
+toktrail env --harness copilot --json
+toktrail models
+toktrail models --group-by provider,model
+toktrail models --split-thinking
+toktrail pricing check
+```
+
 ## 8. Reporting Contracts
 
 `toktrail status` must answer:
@@ -374,16 +416,20 @@ Preserve default path behavior:
 
 - toktrail state: `~/.local/state/toktrail/toktrail.db`, or `$XDG_STATE_HOME/toktrail/toktrail.db`
 - state override: `TOKTRAIL_DB` or global `--db`
-- OpenCode default source: `~/.local/share/opencode/opencode.db`
-- Pi default source: `~/.pi/agent/sessions`, with `TOKTRAIL_PI_SESSIONS` override
-- Copilot source: explicit `--copilot-file` or `TOKTRAIL_COPILOT_FILE`
+- OpenCode default sources: `~/.local/share/opencode/opencode*.db`
+- Pi default sources: `~/.pi/agent/sessions` plus `~/.omp/agent/sessions`, with `TOKTRAIL_PI_SESSIONS` override
+- Copilot sources: `TOKTRAIL_COPILOT_FILE`, `COPILOT_OTEL_FILE_EXPORTER_PATH`, `TOKTRAIL_COPILOT_OTEL_DIR`, or `~/.copilot/otel`
+- Codex default sources: `~/.codex/sessions` plus `~/.codex/archived_sessions`, with `TOKTRAIL_CODEX_SESSIONS` and `CODEX_HOME` support
+- Goose sources: `TOKTRAIL_GOOSE_SESSIONS`, `GOOSE_PATH_ROOT`, Linux/macOS defaults, and Block legacy path
+- Droid default source: `~/.factory/sessions`
+- Amp default source: `~/.local/share/amp/threads`
 
 Privacy rules:
 
 - never modify source harness data
 - never print raw OpenCode, Pi, or Copilot JSON by default
-- keep raw JSON local to SQLite only when enabled
-- make `--no-raw` work for every import/watch path
+- keep raw JSON local to SQLite only when explicitly enabled
+- preserve `--raw` and `--no-raw` behavior for every import/watch path
 - do not add telemetry, network sync, or external pricing lookups unless explicitly requested
 
 ## 10. Docs and Packaging Rules
@@ -414,6 +460,11 @@ Prefer the closest tests:
 - OpenCode parser change -> `tests/test_opencode_parser.py`
 - Pi parser change -> `tests/test_pi_parser.py`
 - Copilot parser change -> `tests/test_copilot_parser.py`
+- Codex parser change -> `tests/test_codex_parser.py`
+- Goose parser change -> `tests/test_goose_parser.py`
+- Droid parser change -> `tests/test_droid_parser.py`
+- Amp parser change -> `tests/test_amp_parser.py`
+- source discovery/scanner change -> `tests/test_scanner.py`, `tests/test_paths.py`, `tests/test_api_sources.py`, `tests/test_api_imports.py`
 - DB schema/import/aggregation change -> `tests/test_db.py`
 - CLI command or output change -> `tests/test_cli.py`
 - provider inference change -> `tests/test_provider_identity.py`
@@ -427,7 +478,11 @@ Include error paths when relevant:
 - missing tracking session from `--session`
 - missing OpenCode database
 - missing Pi sessions path
-- missing Copilot file and missing `TOKTRAIL_COPILOT_FILE`
+- missing Copilot file and missing OTEL environment paths
+- missing Codex sessions roots
+- missing Goose session database
+- missing Droid sessions path
+- missing Amp threads path
 - malformed JSON/JSONL rows
 - non-assistant or non-chat source records
 - missing usage or model data
@@ -452,6 +507,11 @@ python -m pip install -e ".[dev]"
 pytest tests/test_opencode_parser.py
 pytest tests/test_pi_parser.py
 pytest tests/test_copilot_parser.py
+pytest tests/test_codex_parser.py
+pytest tests/test_goose_parser.py
+pytest tests/test_droid_parser.py
+pytest tests/test_amp_parser.py
+pytest tests/test_scanner.py
 pytest tests/test_db.py
 pytest tests/test_cli.py
 pytest tests/test_provider_identity.py

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from copy import deepcopy
+from decimal import Decimal
 
 from tests.helpers import VALID_ASSISTANT, create_opencode_db, insert_message
 from toktrail.adapters.opencode import (
@@ -35,7 +36,7 @@ def test_parse_valid_assistant_message(tmp_path) -> None:
     assert event.model_id == "claude-sonnet-4"
     assert event.agent == "build"
     assert event.tokens.total == 1850
-    assert event.cost_usd == 0.05
+    assert event.source_cost_usd == Decimal("0.05")
 
 
 def test_parse_skips_non_importable_rows(tmp_path) -> None:
@@ -79,7 +80,7 @@ def test_parse_defaults_and_clamps_values() -> None:
 
     assert event is not None
     assert event.provider_id == "unknown"
-    assert event.cost_usd == 0.0
+    assert event.source_cost_usd == Decimal("0.0")
     assert event.tokens.input == 0
     assert event.tokens.output == 2
     assert event.tokens.reasoning == 0

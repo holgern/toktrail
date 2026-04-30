@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 from pathlib import Path
 
+import toktrail.api as public_api
 from toktrail.api.harnesses import supported_harnesses
 from toktrail.api.models import CostTotals, TokenBreakdown, UsageEvent
 from toktrail.api.paths import (
@@ -41,6 +42,67 @@ def test_public_models_star_export_includes_documented_models() -> None:
     assert "FinalizedManualRun" in namespace
 
 
+def test_root_api_exports_documented_models_and_functions() -> None:
+    required = {
+        "AgentSummaryRow",
+        "CostTotals",
+        "FinalizedManualRun",
+        "HarnessDefinition",
+        "HarnessEnvironment",
+        "HarnessSummaryRow",
+        "ImportUsageResult",
+        "ModelSummaryRow",
+        "PreparedManualRun",
+        "ScanUsageResult",
+        "SessionTotals",
+        "SourceSessionDiff",
+        "SourceSessionSnapshot",
+        "SourceSessionSummary",
+        "TokenBreakdown",
+        "TrackingSession",
+        "TrackingSessionReport",
+        "UnconfiguredModelRow",
+        "UsageEvent",
+        "capture_source_snapshot",
+        "config_exists",
+        "config_summary",
+        "default_source_path",
+        "default_toktrail_config_path",
+        "default_toktrail_db_path",
+        "diff_source_snapshots",
+        "finalize_manual_run",
+        "get_active_session",
+        "get_harness_definition",
+        "get_session",
+        "import_configured_usage",
+        "import_usage",
+        "init_config",
+        "init_state",
+        "is_supported_harness",
+        "list_sessions",
+        "list_source_sessions",
+        "normalize_harness_name",
+        "prepare_environment",
+        "prepare_manual_run",
+        "render_config_template",
+        "require_active_session",
+        "resolve_source_path",
+        "resolve_toktrail_config_path",
+        "resolve_toktrail_db_path",
+        "scan_usage",
+        "session_report",
+        "start_session",
+        "stop_session",
+        "supported_harnesses",
+        "usage_report",
+    }
+
+    assert required.issubset(set(public_api.__all__))
+    assert "db" not in public_api.__all__
+    assert "adapters" not in public_api.__all__
+    assert "config" not in public_api.__all__
+
+
 def test_solvecost_style_imports_use_only_public_modules() -> None:
     namespace: dict[str, object] = {}
     exec(
@@ -49,14 +111,11 @@ def test_solvecost_style_imports_use_only_public_modules() -> None:
                 "from pathlib import Path",
                 "from toktrail.errors import ToktrailError",
                 (
-                    "from toktrail.api.workflow import "
-                    "finalize_manual_run, prepare_manual_run"
+                    "from toktrail.api import capture_source_snapshot, "
+                    "finalize_manual_run, import_usage, init_state, "
+                    "prepare_environment, prepare_manual_run, session_report, "
+                    "TokenBreakdown, UsageEvent"
                 ),
-                "from toktrail.api.reports import session_report",
-                "from toktrail.api.imports import import_usage",
-                "from toktrail.api.sources import capture_source_snapshot",
-                "from toktrail.api.sessions import init_state",
-                "from toktrail.api.environment import prepare_environment",
                 "assert ToktrailError.__name__ == 'ToktrailError'",
                 "assert callable(finalize_manual_run)",
                 "assert callable(prepare_manual_run)",
@@ -65,6 +124,8 @@ def test_solvecost_style_imports_use_only_public_modules() -> None:
                 "assert callable(capture_source_snapshot)",
                 "assert callable(init_state)",
                 "assert callable(prepare_environment)",
+                "assert TokenBreakdown.__name__ == 'TokenBreakdown'",
+                "assert UsageEvent.__name__ == 'UsageEvent'",
                 "path = Path('.')",
             ]
         ),

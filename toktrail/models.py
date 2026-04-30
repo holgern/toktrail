@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import Decimal
 
 from toktrail.config import normalize_identity
 
@@ -65,12 +66,8 @@ class UsageEvent:
     created_ms: int
     completed_ms: int | None
     tokens: TokenBreakdown
-    cost_usd: float
+    source_cost_usd: Decimal
     raw_json: str | None
-
-    @property
-    def source_cost_usd(self) -> float:
-        return self.cost_usd
 
 
 @dataclass(frozen=True)
@@ -88,8 +85,4 @@ class OpenCodeSessionSummary:
     last_created_ms: int
     assistant_message_count: int
     tokens: TokenBreakdown
-    cost_usd: float
-
-    @property
-    def source_cost_usd(self) -> float:
-        return self.cost_usd
+    source_cost_usd: Decimal

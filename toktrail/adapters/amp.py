@@ -5,6 +5,7 @@ import json
 import math
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 
 from toktrail.adapters.base import ScanResult, SourceSessionSummary
@@ -14,6 +15,7 @@ from toktrail.models import TokenBreakdown, UsageEvent
 from toktrail.provider_identity import inferred_provider_from_model
 
 AMP_HARNESS = "amp"
+AMP_PARSER_VERSION = 1
 
 AmpScanResult = ScanResult
 AmpSessionSummary = SourceSessionSummary
@@ -29,7 +31,7 @@ class _AmpUsageRecord:
     message_id: int | None
     ledger_to_message_id: int | None
     tokens: TokenBreakdown
-    cost_usd: float
+    source_cost_usd: Decimal
     raw_json: str | None
 
     def matches_message_usage(self, other: _AmpUsageRecord) -> bool:
@@ -270,7 +272,7 @@ def _parse_amp_ledger_records(
                 message_id=None,
                 ledger_to_message_id=_as_positive_int(event.get("toMessageId")),
                 tokens=tokens,
-                cost_usd=_as_non_negative_float(event.get("credits")),
+                source_cost_usd=_as_non_negative_decimal(event.get("credits")),
                 raw_json=raw_json,
             )
         )
@@ -337,7 +339,7 @@ def _parse_amp_message_records(
                 message_id=message_id,
                 ledger_to_message_id=None,
                 tokens=tokens,
-                cost_usd=_as_non_negative_float(usage.get("credits")),
+                source_cost_usd=_as_non_negative_decimal(usage.get("credits")),
                 raw_json=raw_json,
             )
         )
@@ -375,14 +377,14 @@ def _merge_amp_records(
         if ledger_record.has_explicit_timestamp
         else message_record.created_ms
     )
-    cost_usd = ledger_record.cost_usd
-    if cost_usd == 0 and message_record.cost_usd > 0:
-        cost_usd = message_record.cost_usd
+    source_cost_usd = ledger_record.source_cost_usd
+    if source_cost_usd == 0 and message_record.source_cost_usd > 0:
+        source_cost_usd = message_record.source_cost_usd
     return replace(
         ledger_record,
         created_ms=created_ms,
         message_id=message_record.message_id,
-        cost_usd=cost_usd,
+        source_cost_usd=source_cost_usd,
     )
 
 
@@ -408,7 +410,7 @@ def _record_to_event(
         created_ms=record.created_ms,
         completed_ms=None,
         tokens=record.tokens,
-        cost_usd=record.cost_usd,
+        source_cost_usd=record.source_cost_usd,
         raw_json=record.raw_json,
     )
     return replace(event, fingerprint_hash=_make_fingerprint(event))
@@ -520,6 +522,13 @@ def _as_non_negative_float(value: object) -> float:
     return float(numeric)
 
 
+def _as_non_negative_decimal(value: object) -> Decimal:
+    numeric = _number_value(value)
+    if numeric is None or numeric < 0:
+        return Decimal(0)
+    return Decimal(str(numeric))
+
+
 def _number_value(value: object) -> float | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
@@ -556,7 +565,7 @@ def _make_fingerprint(event: UsageEvent) -> str:
         "reasoning": event.tokens.reasoning,
         "cache_read": event.tokens.cache_read,
         "cache_write": event.tokens.cache_write,
-        "cost_usd": event.cost_usd,
+        "source_cost_usd": str(event.source_cost_usd),
     }
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")

@@ -5,6 +5,7 @@ import json
 import math
 from dataclasses import replace
 from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 
 from toktrail.adapters.base import ScanResult, SourceSessionSummary
@@ -13,6 +14,7 @@ from toktrail.config import CostingConfig
 from toktrail.models import TokenBreakdown, UsageEvent, normalize_thinking_level
 
 PI_HARNESS = "pi"
+PI_PARSER_VERSION = 1
 
 PiScanResult = ScanResult
 PiSessionSummary = SourceSessionSummary
@@ -235,7 +237,7 @@ def _parse_pi_entry_line(
         created_ms=created_ms,
         completed_ms=None,
         tokens=token_breakdown,
-        cost_usd=0.0,
+        source_cost_usd=Decimal(0),
         raw_json=line_json if include_raw_json else None,
     )
     return replace(event, fingerprint_hash=_make_fingerprint(event))
@@ -319,7 +321,7 @@ def _make_fingerprint(event: UsageEvent) -> str:
         "reasoning": event.tokens.reasoning,
         "cache_read": event.tokens.cache_read,
         "cache_write": event.tokens.cache_write,
-        "cost_usd": event.cost_usd,
+        "source_cost_usd": str(event.source_cost_usd),
         "agent": event.agent,
         "thinking_level": event.thinking_level,
     }

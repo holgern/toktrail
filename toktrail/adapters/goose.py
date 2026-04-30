@@ -7,6 +7,7 @@ import sqlite3
 from contextlib import closing
 from dataclasses import replace
 from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 from urllib.parse import quote
 
@@ -17,6 +18,7 @@ from toktrail.models import TokenBreakdown, UsageEvent
 from toktrail.provider_identity import inferred_provider_from_model
 
 GOOSE_HARNESS = "goose"
+GOOSE_PARSER_VERSION = 1
 
 GooseScanResult = ScanResult
 
@@ -198,7 +200,7 @@ def _parse_goose_row(
         created_ms=_parse_created_at_ms(created_at),
         completed_ms=None,
         tokens=tokens,
-        cost_usd=0.0,
+        source_cost_usd=Decimal(0),
         raw_json=raw_json,
     )
     return replace(event, fingerprint_hash=_make_fingerprint(event))

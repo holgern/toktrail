@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass, field
+from decimal import Decimal
 from pathlib import Path
 from time import time
 
@@ -19,7 +20,7 @@ from toktrail.reporting import (
     UsageReportFilter,
 )
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 @dataclass(frozen=True)
@@ -56,6 +57,8 @@ def migrate(conn: sqlite3.Connection) -> None:
         _create_schema_v2(conn)
     elif current_version == 1:
         _migrate_v1_to_v2(conn)
+    elif current_version == 2:
+        _migrate_v2_to_v3(conn)
     if current_version != SCHEMA_VERSION:
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         conn.commit()
@@ -117,7 +120,7 @@ def _create_schema_v2(conn: sqlite3.Connection) -> None:
             reasoning_tokens INTEGER NOT NULL DEFAULT 0,
             cache_read_tokens INTEGER NOT NULL DEFAULT 0,
             cache_write_tokens INTEGER NOT NULL DEFAULT 0,
-            cost_usd REAL NOT NULL DEFAULT 0.0,
+            source_cost_usd REAL NOT NULL DEFAULT 0.0,
             raw_json TEXT,
             imported_at_ms INTEGER NOT NULL,
             UNIQUE(harness, global_dedup_key)
@@ -178,6 +181,14 @@ def _migrate_v1_to_v2(conn: sqlite3.Connection) -> None:
         SELECT tracking_session_id, id, imported_at_ms
         FROM usage_events
         WHERE tracking_session_id IS NOT NULL;
+        """
+    )
+
+
+def _migrate_v2_to_v3(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        """
+        ALTER TABLE usage_events RENAME COLUMN cost_usd TO source_cost_usd;
         """
     )
 
@@ -403,7 +414,7 @@ def insert_usage_events(
                     reasoning_tokens,
                     cache_read_tokens,
                     cache_write_tokens,
-                    cost_usd,
+                    source_cost_usd,
                     raw_json,
                     imported_at_ms
                 )
@@ -433,7 +444,7 @@ def insert_usage_events(
                     event.tokens.reasoning,
                     event.tokens.cache_read,
                     event.tokens.cache_write,
-                    event.cost_usd,
+                    float(event.source_cost_usd),
                     event.raw_json,
                     imported_at_ms,
                 ),
@@ -532,7 +543,7 @@ def summarize_usage(
             COALESCE(SUM(ue.reasoning_tokens), 0) AS reasoning_tokens,
             COALESCE(SUM(ue.cache_read_tokens), 0) AS cache_read_tokens,
             COALESCE(SUM(ue.cache_write_tokens), 0) AS cache_write_tokens,
-            COALESCE(SUM(ue.cost_usd), 0.0) AS source_cost_usd
+            COALESCE(SUM(ue.source_cost_usd), 0.0) AS source_cost_usd
         """
         + source_clause
         + where_clause
@@ -565,7 +576,7 @@ def summarize_usage(
             agent=str(row["agent"]),
             message_count=_required_int(row["message_count"]),
             tokens=_row_tokens(row),
-            source_cost_usd=_required_float(row["source_cost_usd"]),
+            source_cost_usd=_required_decimal(row["source_cost_usd"]),
         )
         resolution = resolve_price_resolution(
             harness=atom.harness,
@@ -793,6 +804,18 @@ def _required_float(value: object) -> float:
         msg = f"Expected numeric value, got {value!r}"
         raise TypeError(msg)
     return float(value)
+
+
+def _required_decimal(value: object) -> Decimal:
+    if value is None or isinstance(value, bool):
+        msg = f"Expected numeric value, got {value!r}"
+        raise TypeError(msg)
+    if isinstance(value, (int, float)):
+        return Decimal(str(value))
+    if isinstance(value, Decimal):
+        return value
+    msg = f"Expected numeric value, got {value!r}"
+    raise TypeError(msg)
 
 
 @dataclass

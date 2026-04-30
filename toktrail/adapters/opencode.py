@@ -6,6 +6,7 @@ import math
 import sqlite3
 from contextlib import closing
 from dataclasses import replace
+from decimal import Decimal
 from pathlib import Path
 from urllib.parse import quote
 
@@ -15,6 +16,7 @@ from toktrail.config import CostingConfig
 from toktrail.models import TokenBreakdown, UsageEvent, normalize_thinking_level
 
 OPENCODE_HARNESS = "opencode"
+OPENCODE_PARSER_VERSION = 1
 
 OpenCodeScanResult = ScanResult
 
@@ -176,7 +178,7 @@ def _parse_opencode_row(
         cache_read=_as_non_negative_int(_nested_cache_value(tokens_value, "read")),
         cache_write=_as_non_negative_int(_nested_cache_value(tokens_value, "write")),
     )
-    cost_usd = _as_non_negative_float(payload.get("cost"))
+    cost_usd = _as_non_negative_decimal(payload.get("cost"))
     source_dedup_key = source_message_id or row_id
     event = UsageEvent(
         harness=OPENCODE_HARNESS,
@@ -193,7 +195,7 @@ def _parse_opencode_row(
         created_ms=created_ms,
         completed_ms=completed_ms,
         tokens=token_breakdown,
-        cost_usd=cost_usd,
+        source_cost_usd=cost_usd,
         raw_json=data_json if include_raw_json else None,
     )
     return replace(event, fingerprint_hash=_make_fingerprint(event))
@@ -263,6 +265,18 @@ def _as_non_negative_float(value: object, default: float = 0.0) -> float:
     return max(float(value), 0.0)
 
 
+def _as_non_negative_decimal(value: object) -> Decimal:
+    if isinstance(value, bool) or not isinstance(value, (int, float, Decimal)):
+        return Decimal(0)
+    try:
+        f = float(value)
+        if not math.isfinite(f):
+            return Decimal(0)
+        return max(Decimal(str(value)), Decimal(0))
+    except (ValueError, TypeError):
+        return Decimal(0)
+
+
 def _timestamp_ms(value: object) -> int | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
@@ -282,7 +296,7 @@ def _make_fingerprint(event: UsageEvent) -> str:
         "reasoning": event.tokens.reasoning,
         "cache_read": event.tokens.cache_read,
         "cache_write": event.tokens.cache_write,
-        "cost_usd": event.cost_usd,
+        "source_cost_usd": str(event.source_cost_usd),
         "thinking_level": event.thinking_level,
         "agent": event.agent,
     }

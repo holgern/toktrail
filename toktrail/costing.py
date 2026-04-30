@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from decimal import Decimal
 
 from toktrail.config import ActualCostMode, CostingConfig, Price, normalize_identity
 from toktrail.models import TokenBreakdown
@@ -10,13 +11,13 @@ from toktrail.provider_identity import inferred_provider_from_model
 
 @dataclass(frozen=True)
 class CostBreakdown:
-    source_cost_usd: float
-    actual_cost_usd: float
-    virtual_cost_usd: float
+    source_cost_usd: Decimal
+    actual_cost_usd: Decimal
+    virtual_cost_usd: Decimal
     unpriced_count: int = 0
 
     @property
-    def savings_usd(self) -> float:
+    def savings_usd(self) -> Decimal:
         return self.virtual_cost_usd - self.actual_cost_usd
 
 
@@ -47,7 +48,7 @@ class UsageCostAtom:
     agent: str
     message_count: int
     tokens: TokenBreakdown
-    source_cost_usd: float
+    source_cost_usd: Decimal
 
     def compute_costs(self, config: CostingConfig) -> CostBreakdown:
         return compute_costs(
@@ -65,7 +66,7 @@ def normalize_price_key(value: str) -> str:
     return normalize_identity(value)
 
 
-def cost_from_price(tokens: TokenBreakdown, price: Price) -> float:
+def cost_from_price(tokens: TokenBreakdown, price: Price) -> Decimal:
     cached_input_price = (
         price.cached_input_usd_per_1m
         if price.cached_input_usd_per_1m is not None
@@ -82,11 +83,11 @@ def cost_from_price(tokens: TokenBreakdown, price: Price) -> float:
         else price.output_usd_per_1m
     )
     return (
-        tokens.input * price.input_usd_per_1m / 1_000_000
-        + tokens.cache_read * cached_input_price / 1_000_000
-        + tokens.cache_write * cache_write_price / 1_000_000
-        + tokens.output * price.output_usd_per_1m / 1_000_000
-        + tokens.reasoning * reasoning_price / 1_000_000
+        Decimal(tokens.input) * Decimal(str(price.input_usd_per_1m)) / Decimal(1_000_000)
+        + Decimal(tokens.cache_read) * Decimal(str(cached_input_price)) / Decimal(1_000_000)
+        + Decimal(tokens.cache_write) * Decimal(str(cache_write_price)) / Decimal(1_000_000)
+        + Decimal(tokens.output) * Decimal(str(price.output_usd_per_1m)) / Decimal(1_000_000)
+        + Decimal(tokens.reasoning) * Decimal(str(reasoning_price)) / Decimal(1_000_000)
     )
 
 
@@ -162,7 +163,7 @@ def compute_costs(
     provider_id: str,
     model_id: str,
     tokens: TokenBreakdown,
-    source_cost_usd: float,
+    source_cost_usd: Decimal,
     message_count: int,
     config: CostingConfig,
 ) -> CostBreakdown:
@@ -173,13 +174,13 @@ def compute_costs(
         config=config,
     )
     actual_cost_usd = source_cost_usd
-    virtual_cost_usd = 0.0
+    virtual_cost_usd = Decimal(0)
 
     if resolution.actual_mode == "zero":
-        actual_cost_usd = 0.0
+        actual_cost_usd = Decimal(0)
     elif resolution.actual_mode == "pricing":
         if resolution.actual_price is None:
-            actual_cost_usd = 0.0
+            actual_cost_usd = Decimal(0)
         else:
             actual_cost_usd = cost_from_price(tokens, resolution.actual_price)
 

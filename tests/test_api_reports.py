@@ -35,7 +35,7 @@ def test_session_report_uses_active_session_by_default(tmp_path) -> None:
 
     assert report.session is not None
     assert payload["totals"]["input"] == 1000
-    assert payload["totals"]["source_cost_usd"] == 0.05
+    assert payload["totals"]["source_cost_usd"] == "0.05"
     assert payload["totals"]["message_count"] == 1
     assert payload["unconfigured_models"] == [
         {
@@ -133,11 +133,21 @@ def test_session_report_supports_thinking_filter_and_collapse(tmp_path) -> None:
     session = start_session(state_db, name="thinking")
     import_usage(state_db, "opencode", session_id=session.id, source_path=source_db)
 
-    filtered = session_report(state_db, session.id, thinking_level="high")
-    collapsed = session_report(state_db, session.id, split_thinking=False)
+    filtered_split = session_report(
+        state_db, session.id, thinking_level="high", split_thinking=True
+    )
+    split_all = session_report(state_db, session.id, split_thinking=True)
+    collapsed = session_report(state_db, session.id)
 
-    assert [(row.model_id, row.thinking_level) for row in filtered.by_model] == [
+    assert [(row.model_id, row.thinking_level) for row in filtered_split.by_model] == [
         ("claude-sonnet-4", "high")
+    ]
+    assert sorted([
+        (row.model_id, row.thinking_level, row.message_count)
+        for row in split_all.by_model
+    ], key=lambda x: x[1] or "") == [
+        ("claude-sonnet-4", "high", 1),
+        ("claude-sonnet-4", "low", 1),
     ]
     assert [
         (row.model_id, row.thinking_level, row.message_count)

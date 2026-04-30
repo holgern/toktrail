@@ -483,7 +483,7 @@ class ImportConfig:
         "droid",
         "amp",
     )
-    sources: dict[str, Path] | None = None
+    sources: dict[str, Path | list[Path]] | None = None
     missing_source: ImportMissingSourceMode = "warn"
     include_raw_json: bool = False
 
@@ -791,16 +791,28 @@ def _parse_import_harnesses(value: object, *, context: str) -> tuple[str, ...]:
     return tuple(harnesses)
 
 
-def _parse_import_sources(value: object, *, context: str) -> dict[str, Path]:
+def _parse_import_sources(value: object, *, context: str) -> dict[str, Path | list[Path]]:
     table = _parse_optional_table(value, context=context)
-    sources: dict[str, Path] = {}
+    sources: dict[str, Path | list[Path]] = {}
     for raw_harness, raw_path in table.items():
         harness = _parse_supported_harness(
             raw_harness,
             context=f"{context}.{raw_harness}",
         )
-        path_value = _parse_string(raw_path, context=f"{context}.{raw_harness}")
-        sources[harness] = Path(path_value).expanduser()
+        # Support both string and list of strings
+        if isinstance(raw_path, str):
+            sources[harness] = Path(raw_path).expanduser()
+        elif isinstance(raw_path, list):
+            paths: list[Path] = []
+            for idx, item in enumerate(raw_path, start=1):
+                if not isinstance(item, str):
+                    msg = f"{context}.{raw_harness}[{idx}] must be a string path, got {type(item).__name__}."
+                    raise ValueError(msg)
+                paths.append(Path(item).expanduser())
+            sources[harness] = paths
+        else:
+            msg = f"{context}.{raw_harness} must be a string or list of strings, got {type(raw_path).__name__}."
+            raise ValueError(msg)
     return sources
 
 

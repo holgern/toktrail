@@ -29,7 +29,7 @@ def session_report(
     agent: str | None = None,
     since_ms: int | None = None,
     until_ms: int | None = None,
-    split_thinking: bool = True,
+    split_thinking: bool = False,
     config_path: Path | None = None,
 ) -> TrackingSessionReport:
     conn, _ = _open_state_db(db_path)
@@ -83,7 +83,7 @@ def usage_report(
     agent: str | None = None,
     since_ms: int | None = None,
     until_ms: int | None = None,
-    split_thinking: bool = True,
+    split_thinking: bool = False,
     config_path: Path | None = None,
 ) -> TrackingSessionReport:
     if period is not None and (since_ms is not None or until_ms is not None):

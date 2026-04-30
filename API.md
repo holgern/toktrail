@@ -1,7 +1,8 @@
 # toktrail stable Python API
 
-`toktrail` exposes a stable public Python API for automation under `toktrail.api.*`
-plus canonical errors in `toktrail.errors`.
+`toktrail` exposes a stable public Python API for automation from the
+`toktrail.api` root facade, while preserving the documented `toktrail.api.*`
+submodules and canonical errors in `toktrail.errors`.
 
 Downstream code should use this surface instead of importing `toktrail.db`,
 `toktrail.models`, `toktrail.reporting`, `toktrail.paths`, `toktrail.config`,
@@ -9,12 +10,12 @@ Downstream code should use this surface instead of importing `toktrail.db`,
 
 ## Import boundary
 
-Supported public imports:
+Preferred public imports:
 
 ```python
 from toktrail.errors import ToktrailError
 
-from toktrail.api.models import (
+from toktrail.api import (
     AgentSummaryRow,
     CostTotals,
     FinalizedManualRun,
@@ -80,9 +81,13 @@ from toktrail.api.environment import prepare_environment
 from toktrail.api.workflow import finalize_manual_run, prepare_manual_run
 ```
 
+The root facade is the preferred import style. The documented submodules remain
+valid for callers that want narrower imports.
+
 ## Public modules
 
 - `toktrail.errors`
+- `toktrail.api`
 - `toktrail.api.models`
 - `toktrail.api.paths`
 - `toktrail.api.config`
@@ -216,8 +221,9 @@ period/time-range reporting, it returns `TrackingSessionReport(session=None, ...
 
 Use `import_configured_usage()` when the caller wants the same behavior as plain
 `toktrail import`: read enabled harnesses from `[imports].harnesses`, source
-paths from `[imports.sources]`, raw JSON behavior from
-`[imports].include_raw_json`, and missing-source handling from
+paths from `[imports.sources]` (each configured value may be a string or list
+of strings), raw JSON behavior from `[imports].include_raw_json`, and
+missing-source handling from
 `[imports].missing_source`.
 
 ```python

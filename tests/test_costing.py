@@ -54,21 +54,21 @@ def test_cost_from_price_uses_all_token_categories() -> None:
         cache_write=5,
     )
 
-    assert cost_from_price(tokens, price) == pytest.approx(0.0003595)
+    assert float(cost_from_price(tokens, price)) == pytest.approx(0.0003595)
 
 
 def test_cost_from_price_falls_back_to_output_for_reasoning() -> None:
     price = make_price(output_usd_per_1m=6.0, reasoning_usd_per_1m=None)
     tokens = TokenBreakdown(reasoning=100)
 
-    assert cost_from_price(tokens, price) == pytest.approx(0.0006)
+    assert float(cost_from_price(tokens, price)) == pytest.approx(0.0006)
 
 
 def test_cost_from_price_falls_back_to_input_for_cache_write() -> None:
     price = make_price(input_usd_per_1m=3.0, cache_write_usd_per_1m=None)
     tokens = TokenBreakdown(cache_write=100)
 
-    assert cost_from_price(tokens, price) == pytest.approx(0.0003)
+    assert float(cost_from_price(tokens, price)) == pytest.approx(0.0003)
 
 
 def test_resolve_price_prefers_exact_model_match() -> None:
@@ -145,7 +145,7 @@ def test_compute_costs_uses_source_actual_mode() -> None:
 
     assert breakdown.source_cost_usd == 2.5
     assert breakdown.actual_cost_usd == 2.5
-    assert breakdown.virtual_cost_usd == pytest.approx(0.0001)
+    assert float(breakdown.virtual_cost_usd) == pytest.approx(0.0001)
 
 
 def test_compute_costs_uses_zero_actual_mode() -> None:
@@ -185,7 +185,7 @@ def test_compute_costs_uses_pricing_actual_mode() -> None:
         ),
     )
 
-    assert breakdown.actual_cost_usd == pytest.approx(0.0002)
+    assert float(breakdown.actual_cost_usd) == pytest.approx(0.0002)
 
 
 def test_resolve_price_resolution_reports_missing_virtual_price() -> None:
@@ -334,6 +334,6 @@ def test_compute_costs_exposes_savings() -> None:
         config=config,
     )
 
-    assert breakdown.actual_cost_usd == pytest.approx(0.0001)
-    assert breakdown.virtual_cost_usd == pytest.approx(0.0003)
-    assert breakdown.savings_usd == pytest.approx(0.0002)
+    assert float(breakdown.actual_cost_usd) == pytest.approx(0.0001)
+    assert float(breakdown.virtual_cost_usd) == pytest.approx(0.0003)
+    assert float(breakdown.savings_usd) == pytest.approx(0.0002)

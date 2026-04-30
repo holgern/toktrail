@@ -4,6 +4,7 @@ import hashlib
 import json
 import math
 from dataclasses import replace
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +15,7 @@ from toktrail.models import TokenBreakdown, UsageEvent, normalize_thinking_level
 from toktrail.provider_identity import inferred_provider_from_model
 
 COPILOT_HARNESS = "copilot"
+COPILOT_PARSER_VERSION = 1
 
 CopilotScanResult = ScanResult
 
@@ -241,7 +243,7 @@ def _parse_copilot_line(
         created_ms=timestamp_ms,
         completed_ms=end_time_ms,
         tokens=tokens,
-        cost_usd=0.0,
+        source_cost_usd=Decimal(0),
         raw_json=line if include_raw_json else None,
     )
     return replace(event, fingerprint_hash=_make_fingerprint(event))

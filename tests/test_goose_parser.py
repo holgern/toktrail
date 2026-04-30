@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from decimal import Decimal
 from pathlib import Path
 
 from toktrail.adapters.goose import (
@@ -126,7 +127,7 @@ def test_parse_goose_sqlite_prefers_accumulated_tokens(tmp_path: Path) -> None:
     assert event.provider_id == "anthropic"
     assert event.model_id == "claude-sonnet-4-20250514"
     assert event.tokens == TokenBreakdown(input=90, output=40, reasoning=20)
-    assert event.cost_usd == 0.0
+    assert event.source_cost_usd == Decimal("0.0")
 
 
 def test_parse_goose_sqlite_infers_provider_from_model(tmp_path: Path) -> None:

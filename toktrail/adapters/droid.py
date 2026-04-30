@@ -5,6 +5,7 @@ import json
 import math
 from dataclasses import replace
 from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 
 from toktrail.adapters.base import ScanResult, SourceSessionSummary
@@ -14,6 +15,7 @@ from toktrail.models import TokenBreakdown, UsageEvent
 from toktrail.provider_identity import inferred_provider_from_model
 
 DROID_HARNESS = "droid"
+DROID_PARSER_VERSION = 1
 
 DroidScanResult = ScanResult
 DroidSessionSummary = SourceSessionSummary
@@ -192,7 +194,7 @@ def _parse_droid_settings(
         created_ms=created_ms,
         completed_ms=None,
         tokens=tokens,
-        cost_usd=0.0,
+        source_cost_usd=Decimal(0),
         raw_json=raw_json,
     )
     return replace(event, fingerprint_hash=_make_fingerprint(event))

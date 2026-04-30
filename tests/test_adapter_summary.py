@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from decimal import Decimal
+
 import pytest
 
 from toktrail.adapters.summary import (
@@ -42,7 +44,7 @@ def test_summary_helpers_aggregate_events_consistently() -> None:
             agent="plan",
             created_ms=2000,
             tokens=TokenBreakdown(input=10, output=2, cache_read=5),
-            cost_usd=0.1,
+            source_cost_usd=0.1,
         ),
         _event(
             source_session_id="ses-1",
@@ -51,7 +53,7 @@ def test_summary_helpers_aggregate_events_consistently() -> None:
             agent=None,
             created_ms=3000,
             tokens=TokenBreakdown(output=3, cache_write=7),
-            cost_usd=0.2,
+            source_cost_usd=0.2,
         ),
         _event(
             source_session_id="ses-2",
@@ -60,7 +62,7 @@ def test_summary_helpers_aggregate_events_consistently() -> None:
             agent="plan",
             created_ms=1000,
             tokens=TokenBreakdown(input=4, reasoning=6),
-            cost_usd=0.3,
+            source_cost_usd=0.3,
         ),
     ]
 
@@ -74,7 +76,7 @@ def test_summary_helpers_aggregate_events_consistently() -> None:
     by_agent = summarize_events_by_agent(events)
 
     assert totals.tokens.total == 37
-    assert totals.source_cost_usd == pytest.approx(0.6)
+    assert float(totals.source_cost_usd) == pytest.approx(0.6)
     assert totals.actual_cost_usd == 0.0
     assert totals.virtual_cost_usd == 0.0
     assert totals.unpriced_count == 2
@@ -85,7 +87,7 @@ def test_summary_helpers_aggregate_events_consistently() -> None:
     ]
     assert by_source_session[0].assistant_message_count == 2
     assert by_source_session[0].tokens.total == 27
-    assert by_source_session[0].source_cost_usd == pytest.approx(0.3)
+    assert float(by_source_session[0].source_cost_usd) == pytest.approx(0.3)
     assert by_source_session[0].actual_cost_usd == 0.0
     assert by_source_session[0].models == ("claude-sonnet-4",)
     assert by_source_session[0].providers == ("anthropic",)
@@ -95,13 +97,13 @@ def test_summary_helpers_aggregate_events_consistently() -> None:
         ("anthropic", "claude-sonnet-4", 27),
         ("openai", "gpt-5", 10),
     ]
-    assert by_model[0].source_cost_usd == pytest.approx(0.3)
+    assert float(by_model[0].source_cost_usd) == pytest.approx(0.3)
     assert by_model[0].actual_cost_usd == 0.0
     assert [(row.agent, row.total_tokens) for row in by_agent] == [
         ("plan", 27),
         ("unknown", 10),
     ]
-    assert by_agent[0].source_cost_usd == pytest.approx(0.4)
+    assert float(by_agent[0].source_cost_usd) == pytest.approx(0.4)
     assert by_agent[0].actual_cost_usd == 0.0
 
 
@@ -115,7 +117,7 @@ def test_summarize_events_by_model_can_collapse_thinking_levels() -> None:
             agent="plan",
             created_ms=1000,
             tokens=TokenBreakdown(input=10, output=2),
-            cost_usd=0.1,
+            source_cost_usd=0.1,
         ),
         _event(
             source_session_id="ses-1",
@@ -125,7 +127,7 @@ def test_summarize_events_by_model_can_collapse_thinking_levels() -> None:
             agent="plan",
             created_ms=2000,
             tokens=TokenBreakdown(input=4, reasoning=6),
-            cost_usd=0.2,
+            source_cost_usd=0.2,
         ),
     ]
 
@@ -150,7 +152,7 @@ def _event(
     agent: str | None,
     created_ms: int,
     tokens: TokenBreakdown,
-    cost_usd: float,
+    source_cost_usd: float | Decimal,
 ) -> UsageEvent:
     dedup_key = f"{source_session_id}:{created_ms}:{model_id}"
     return UsageEvent(
@@ -168,6 +170,6 @@ def _event(
         created_ms=created_ms,
         completed_ms=None,
         tokens=tokens,
-        cost_usd=cost_usd,
+        source_cost_usd=Decimal(str(source_cost_usd)) if not isinstance(source_cost_usd, Decimal) else source_cost_usd,
         raw_json=None,
     )

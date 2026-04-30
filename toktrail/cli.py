@@ -179,7 +179,7 @@ LimitOption = Annotated[int | None, typer.Option("--limit", min=1)]
 SortOption = Annotated[str, typer.Option("--sort")]
 ColumnsOption = Annotated[str | None, typer.Option("--columns")]
 RichOption = Annotated[bool, typer.Option("--rich")]
-CollapseThinkingOption = Annotated[bool, typer.Option("--collapse-thinking")]
+SplitThinkingOption = Annotated[bool, typer.Option("--split-thinking")]
 TimeBoundaryOption = Annotated[str | None, typer.Option("--since")]
 UntilBoundaryOption = Annotated[str | None, typer.Option("--until")]
 TimezoneOption = Annotated[str | None, typer.Option("--timezone")]
@@ -251,6 +251,9 @@ IntervalOption = Annotated[float, typer.Option("--interval", min=0.1)]
 CopilotRunArgs = Annotated[list[str], typer.Argument(help="Command to run after --.")]
 SourcePathOption = Annotated[Path | None, typer.Option("--source")]
 RawOption = Annotated[bool | None, typer.Option("--raw/--no-raw")]
+DryRunOption = Annotated[bool, typer.Option("--dry-run", help="Simulate import without persisting changes.")]
+RequiredHarnessOption = Annotated[str, typer.Option("--harness", help="Name of the harness to import from.")]
+RequiredSourceOption = Annotated[Path, typer.Option("--source", help="Path to source data.")]
 
 
 @app.callback()
@@ -325,7 +328,7 @@ def status(
     since_ms: SinceMsOption = None,
     until_ms: UntilMsOption = None,
     rich_output: RichOption = False,
-    collapse_thinking: CollapseThinkingOption = False,
+    split_thinking: SplitThinkingOption = False,
     price_state: PriceStateOption = "all",
     min_messages: MinMessagesOption = None,
     min_tokens: MinTokensOption = None,
@@ -360,7 +363,7 @@ def status(
                 agent=agent,
                 since_ms=since_ms,
                 until_ms=until_ms,
-                split_thinking=not collapse_thinking,
+                split_thinking=split_thinking,
             ),
             costing_config=costing_config,
         )
@@ -422,7 +425,7 @@ def usage(
     timezone_name: TimezoneOption = None,
     utc: UtcOption = False,
     rich_output: RichOption = False,
-    collapse_thinking: CollapseThinkingOption = False,
+    split_thinking: SplitThinkingOption = False,
     price_state: PriceStateOption = "all",
     min_messages: MinMessagesOption = None,
     min_tokens: MinTokensOption = None,
@@ -462,7 +465,7 @@ def usage(
                 agent=agent,
                 since_ms=resolved_range.since_ms,
                 until_ms=resolved_range.until_ms,
-                split_thinking=not collapse_thinking,
+                split_thinking=split_thinking,
             ),
             costing_config=costing_config,
         )
@@ -880,183 +883,81 @@ def sessions(ctx: typer.Context) -> None:
 
 
 @import_app.callback(invoke_without_command=True)
-def import_usage_command(
+def import_usage(
     ctx: typer.Context,
-    harnesses: HarnessesOption = None,
-    source_path: SourcePathOption = None,
+    harness: RequiredHarnessOption = None,
+    source: RequiredSourceOption = None,
     session_id: SessionOption = None,
-    no_session: Annotated[bool, typer.Option("--no-session")] = False,
-    raw: RawOption = None,
+    source_session_id: SourceSessionOption = None,
+    since_start: SinceStartOption = False,
+    no_raw: NoRawOption = False,
+    dry_run: DryRunOption = False,
     json_output: JsonOption = False,
 ) -> None:
+    """Import usage from external harnesses.
+    
+    Can operate in two modes:
+    - Explicit: with --harness and --source parameters
+    - Config-based: from configuration file (when neither parameter is provided)
+    """
     if ctx.invoked_subcommand is not None:
         return
-    if session_id is not None and no_session:
-        _exit_with_error("Use either --session or --no-session, not both.")
-    try:
-        results = import_configured_usage_api(
-            _resolve_state_db(ctx),
-            harnesses=harnesses,
-            source_path=source_path,
-            session_id=session_id,
-            use_active_session=not no_session,
-            include_raw_json=raw,
-            config_path=_resolve_config_path(ctx),
-        )
-    except (OSError, ValueError, ToktrailError) as exc:
-        _exit_with_error(str(exc))
-
-    if json_output:
-        typer.echo(json.dumps([result.as_dict() for result in results], indent=2))
-        return
-    _print_configured_import_results(results)
-
-
-@import_app.command("opencode")
-def import_opencode(
-    ctx: typer.Context,
-    session_id: SessionOption = None,
-    source_session_id: SourceSessionOption = None,
-    opencode_db: OpenCodeDbOption = None,
-    since_start: SinceStartOption = False,
-    no_raw: NoRawOption = False,
-) -> None:
-    result = _run_harness_import(
-        ctx,
-        harness_name="opencode",
-        source_path=opencode_db,
-        tracking_session_id=session_id,
-        source_session_id=source_session_id,
-        since_start=since_start,
-        no_raw=no_raw,
-    )
-    _print_import_result(result)
-
-
-@import_app.command("copilot")
-def import_copilot(
-    ctx: typer.Context,
-    session_id: SessionOption = None,
-    source_session_id: SourceSessionOption = None,
-    copilot_path: CopilotPathOption = None,
-    since_start: SinceStartOption = False,
-    no_raw: NoRawOption = False,
-) -> None:
-    result = _run_harness_import(
-        ctx,
-        harness_name="copilot",
-        source_path=copilot_path,
-        tracking_session_id=session_id,
-        source_session_id=source_session_id,
-        since_start=since_start,
-        no_raw=no_raw,
-    )
-    _print_import_result(result)
-
-
-@import_app.command("pi")
-def import_pi(
-    ctx: typer.Context,
-    session_id: SessionOption = None,
-    source_session_id: SourceSessionOption = None,
-    pi_path: PiPathOption = None,
-    since_start: SinceStartOption = False,
-    no_raw: NoRawOption = False,
-) -> None:
-    result = _run_harness_import(
-        ctx,
-        harness_name="pi",
-        source_path=pi_path,
-        tracking_session_id=session_id,
-        source_session_id=source_session_id,
-        since_start=since_start,
-        no_raw=no_raw,
-    )
-    _print_import_result(result)
-
-
-@import_app.command("codex")
-def import_codex(
-    ctx: typer.Context,
-    session_id: SessionOption = None,
-    source_session_id: SourceSessionOption = None,
-    codex_path: CodexPathOption = None,
-    since_start: SinceStartOption = False,
-    no_raw: NoRawOption = False,
-) -> None:
-    result = _run_harness_import(
-        ctx,
-        harness_name="codex",
-        source_path=codex_path,
-        tracking_session_id=session_id,
-        source_session_id=source_session_id,
-        since_start=since_start,
-        no_raw=no_raw,
-    )
-    _print_import_result(result)
-
-
-@import_app.command("goose")
-def import_goose(
-    ctx: typer.Context,
-    session_id: SessionOption = None,
-    source_session_id: SourceSessionOption = None,
-    goose_path: GoosePathOption = None,
-    since_start: SinceStartOption = False,
-    no_raw: NoRawOption = False,
-) -> None:
-    result = _run_harness_import(
-        ctx,
-        harness_name="goose",
-        source_path=goose_path,
-        tracking_session_id=session_id,
-        source_session_id=source_session_id,
-        since_start=since_start,
-        no_raw=no_raw,
-    )
-    _print_import_result(result)
-
-
-@import_app.command("droid")
-def import_droid(
-    ctx: typer.Context,
-    session_id: SessionOption = None,
-    source_session_id: SourceSessionOption = None,
-    droid_path: DroidPathOption = None,
-    since_start: SinceStartOption = False,
-    no_raw: NoRawOption = False,
-) -> None:
-    result = _run_harness_import(
-        ctx,
-        harness_name="droid",
-        source_path=droid_path,
-        tracking_session_id=session_id,
-        source_session_id=source_session_id,
-        since_start=since_start,
-        no_raw=no_raw,
-    )
-    _print_import_result(result)
-
-
-@import_app.command("amp")
-def import_amp(
-    ctx: typer.Context,
-    session_id: SessionOption = None,
-    source_session_id: SourceSessionOption = None,
-    amp_path: AmpPathOption = None,
-    since_start: SinceStartOption = False,
-    no_raw: NoRawOption = False,
-) -> None:
-    result = _run_harness_import(
-        ctx,
-        harness_name="amp",
-        source_path=amp_path,
-        tracking_session_id=session_id,
-        source_session_id=source_session_id,
-        since_start=since_start,
-        no_raw=no_raw,
-    )
-    _print_import_result(result)
+    
+    # If both harness and source are provided, use explicit import mode
+    if harness is not None and source is not None:
+        try:
+            result = _run_harness_import_with_dry_run(
+                ctx,
+                harness_name=harness,
+                source_path=source,
+                tracking_session_id=session_id,
+                source_session_id=source_session_id,
+                since_start=since_start,
+                no_raw=no_raw,
+                dry_run=dry_run,
+            )
+        except (OSError, ValueError, ToktrailError) as exc:
+            _exit_with_error(str(exc))
+        
+        if json_output:
+            from dataclasses import asdict
+            output = asdict(result)
+            # Convert Path to string for JSON serialization and normalize harness name
+            if "source_path" in output:
+                output["source_path"] = str(output["source_path"])
+            if "harness" in output:
+                output["harness"] = output["harness"].lower()
+            if dry_run:
+                output["dry_run"] = True
+            typer.echo(json.dumps([output], indent=2))
+            return
+        
+        _print_import_result(result)
+        if dry_run:
+            typer.echo("\n[dry-run: changes were not persisted]")
+    
+    # Otherwise, use config-based import mode
+    elif harness is None and source is None:
+        try:
+            results = import_configured_usage_api(
+                _resolve_state_db(ctx),
+                harnesses=None,
+                source_path=None,
+                session_id=session_id,
+                use_active_session=True,
+                include_raw_json=not no_raw,
+                config_path=_resolve_config_path(ctx),
+            )
+        except (OSError, ValueError, ToktrailError) as exc:
+            _exit_with_error(str(exc))
+        
+        if json_output:
+            typer.echo(json.dumps([result.as_dict() for result in results], indent=2))
+            return
+        _print_configured_import_results(results)
+    
+    else:
+        _exit_with_error("Either provide both --harness and --source, or neither for config-based import")
 
 
 @watch_app.command("opencode")
@@ -1535,6 +1436,99 @@ def _run_harness_import(
         ]
         insert_result = insert_usage_events(conn, selected_session_id, filtered_events)
         rows_filtered = len(scan.events) - len(filtered_events)
+    finally:
+        conn.close()
+
+    rows_skipped = (
+        scan.rows_skipped
+        + rows_filtered
+        + len(filtered_events)
+        - insert_result.rows_inserted
+    )
+    return ImportExecutionResult(
+        harness=harness.display_name,
+        source_path=resolved_source,
+        tracking_session_id=selected_session_id,
+        rows_seen=scan.rows_seen,
+        rows_imported=insert_result.rows_inserted,
+        rows_skipped=rows_skipped,
+    )
+
+
+def _run_harness_import_with_dry_run(
+    ctx: typer.Context,
+    *,
+    harness_name: str,
+    source_path: Path,
+    tracking_session_id: int | None,
+    source_session_id: str | None,
+    since_start: bool,
+    no_raw: bool,
+    dry_run: bool,
+) -> ImportExecutionResult:
+    """Run harness import with optional dry-run mode.
+    
+    In dry-run mode, changes are rolled back before connection closes.
+    Can operate with or without an active tracking session.
+    """
+    harness = get_harness(harness_name)
+    conn = _open_toktrail_connection(ctx)
+    try:
+        # Begin explicit transaction for dry-run
+        if dry_run:
+            conn.execute("BEGIN")
+        
+        resolved_source = harness.resolve_source_path(source_path)
+        if resolved_source is None or not resolved_source.exists():
+            _exit_with_error(
+                _missing_source_path_message(
+                    harness_name,
+                    resolved_source,
+                    explicit_source=source_path,
+                )
+            )
+
+        selected_session_id = tracking_session_id
+        if selected_session_id is None:
+            selected_session_id = get_active_tracking_session(conn)
+        
+        # If no session is provided and no active session exists, it's OK
+        # Just scan without filtering by session start time
+        tracking_session = None
+        if selected_session_id is not None:
+            tracking_session = get_tracking_session(conn, selected_session_id)
+            if tracking_session is None:
+                _exit_with_error(f"Tracking session not found: {selected_session_id}")
+
+        scan = harness.scan(
+            resolved_source,
+            source_session_id=source_session_id,
+            include_raw_json=not no_raw,
+        )
+        
+        # Only filter by since_start if we have a tracking session
+        since_ms = None
+        if tracking_session is not None and since_start:
+            since_ms = tracking_session.started_at_ms
+        
+        filtered_events = [
+            event
+            for event in scan.events
+            if since_ms is None or event.created_ms >= since_ms
+        ]
+        
+        # Only insert if we have a tracking session
+        if selected_session_id is not None:
+            insert_result = insert_usage_events(conn, selected_session_id, filtered_events)
+        else:
+            # No session - don't insert, but record what we would have inserted
+            insert_result = type('obj', (object,), {'rows_inserted': len(filtered_events)})()
+        
+        rows_filtered = len(scan.events) - len(filtered_events)
+        
+        # Rollback if dry-run
+        if dry_run:
+            conn.execute("ROLLBACK")
     finally:
         conn.close()
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from decimal import Decimal
 from pathlib import Path
 
 from toktrail.adapters.pi import list_pi_sessions, parse_pi_file, scan_pi_path
@@ -34,7 +35,7 @@ def test_parse_pi_jsonl_valid_assistant_message(tmp_path) -> None:
     assert event.tokens.cache_write == 5
     assert event.tokens.reasoning == 0
     assert event.tokens.total == 165
-    assert event.cost_usd == 0.0
+    assert event.source_cost_usd == Decimal("0.0")
     assert event.created_ms == 1_767_225_601_000
 
 
