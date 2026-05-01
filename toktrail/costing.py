@@ -45,7 +45,7 @@ class UsageCostAtom:
     provider_id: str
     model_id: str
     thinking_level: str | None
-    agent: str
+    agent: str | None
     message_count: int
     tokens: TokenBreakdown
     source_cost_usd: Decimal
@@ -208,3 +208,52 @@ def _provider_candidates(provider_id: str, model_id: str) -> tuple[str, ...]:
         if normalized_inferred not in candidates:
             candidates.append(normalized_inferred)
     return tuple(candidates)
+
+
+@dataclass(frozen=True)
+class SimulationTarget:
+    provider: str
+    model: str
+
+
+@dataclass(frozen=True)
+class SimulationResult:
+    target_provider: str
+    target_model: str
+    tokens: TokenBreakdown
+    cost_usd: Decimal
+    baseline_actual_usd: Decimal
+    baseline_virtual_usd: Decimal
+    delta_vs_actual_usd: Decimal
+    delta_vs_virtual_usd: Decimal
+    missing_price_kinds: tuple[str, ...]
+
+
+def simulate_cost(
+    *,
+    tokens: TokenBreakdown,
+    target: SimulationTarget,
+    config: CostingConfig,
+    baseline_actual_usd: Decimal,
+    baseline_virtual_usd: Decimal,
+) -> SimulationResult:
+    price = resolve_price(target.provider, target.model, config.virtual_prices)
+    missing_kinds: list[str] = []
+    if price is None:
+        price = resolve_price(target.provider, target.model, config.actual_prices)
+    if price is None:
+        missing_kinds.append("target")
+        cost = Decimal(0)
+    else:
+        cost = cost_from_price(tokens, price)
+    return SimulationResult(
+        target_provider=target.provider,
+        target_model=target.model,
+        tokens=tokens,
+        cost_usd=cost,
+        baseline_actual_usd=baseline_actual_usd,
+        baseline_virtual_usd=baseline_virtual_usd,
+        delta_vs_actual_usd=cost - baseline_actual_usd,
+        delta_vs_virtual_usd=cost - baseline_virtual_usd,
+        missing_price_kinds=tuple(missing_kinds),
+    )

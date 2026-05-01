@@ -63,7 +63,7 @@ def prepare_manual_run(
         )
     )
     return PreparedManualRun(
-        tracking_session=tracking_session,
+        run=tracking_session,
         harness=harness,
         source_path=selected_source_path,
         before_snapshot=before_snapshot,
@@ -94,23 +94,23 @@ def finalize_manual_run(
     import_result = import_usage(
         db_path,
         prepared.harness,
-        session_id=prepared.tracking_session.id,
+        session_id=prepared.run.id,
         source_path=prepared.source_path,
         source_session_id=selected_source_session.source_session_id,
         include_raw_json=include_raw_json,
     )
     report = session_report(
         db_path,
-        prepared.tracking_session.id,
+        prepared.run.id,
         config_path=config_path,
     )
     tracking_session = (
-        stop_tracking_session(db_path, prepared.tracking_session.id)
+        stop_tracking_session(db_path, prepared.run.id)
         if stop_session
-        else get_session(db_path, prepared.tracking_session.id)
+        else get_session(db_path, prepared.run.id)
     )
     return FinalizedManualRun(
-        tracking_session=tracking_session,
+        run=tracking_session,
         source_session=selected_source_session,
         source_diff=source_diff,
         import_result=import_result,

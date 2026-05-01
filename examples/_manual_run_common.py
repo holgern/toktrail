@@ -70,8 +70,8 @@ def print_report(report: TrackingSessionReport) -> None:
             f"unpriced={costs.unpriced_count}"
         )
 
-    print("\n== By agent ==")
-    for row in report.by_agent:
+    print("\n== By activity ==")
+    for row in report.by_activity:
         print(
             f"{row.agent}: messages={row.message_count} "
             f"tokens={row.total_tokens} "
@@ -94,11 +94,11 @@ def print_report(report: TrackingSessionReport) -> None:
 
 def print_finalized(finalized: FinalizedManualRun) -> None:
     print("\n== Tracking session ==")
-    print(f"id:           {finalized.tracking_session.id}")
-    print(f"name:         {finalized.tracking_session.name}")
-    print(f"started_ms:   {finalized.tracking_session.started_at_ms}")
-    print(f"ended_ms:     {finalized.tracking_session.ended_at_ms}")
-    print(f"active:       {finalized.tracking_session.active}")
+    print(f"id:           {finalized.run.id}")
+    print(f"name:         {finalized.run.name}")
+    print(f"started_ms:   {finalized.run.started_at_ms}")
+    print(f"ended_ms:     {finalized.run.ended_at_ms}")
+    print(f"active:       {finalized.run.active}")
 
     print("\n== Source session ==")
     source = finalized.source_session
@@ -142,7 +142,7 @@ def run_manual_example(
         shell=shell,
     )
 
-    print(f"Started toktrail tracking session {prepared.tracking_session.id}.")
+    print(f"Started toktrail tracking session {prepared.run.id}.")
     print(f"Harness: {display_name}")
     print(f"Source path: {prepared.source_path}")
 

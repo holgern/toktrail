@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 from toktrail.errors import AmbiguousSourceSessionError, SourcePathError
 
@@ -87,7 +88,7 @@ class CostTotals:
 
 
 @dataclass(frozen=True)
-class TrackingSession:
+class Run:
     id: int
     name: str | None
     started_at_ms: int
@@ -113,6 +114,10 @@ class TrackingSession:
             "ended_at_ms": self.ended_at_ms,
             "active": self.active,
         }
+
+
+# Type alias for backward compatibility during migration
+TrackingSession = Run
 
 
 @dataclass(frozen=True)
@@ -414,8 +419,10 @@ class UnconfiguredModelRow:
 
 
 @dataclass(frozen=True)
-class AgentSummaryRow:
-    agent: str
+class ActivitySummaryRow:
+    agent: str | None
+
+    agent: str | None
     message_count: int
     total_tokens: int
     costs: CostTotals
@@ -430,12 +437,12 @@ class AgentSummaryRow:
 
 
 @dataclass(frozen=True)
-class TrackingSessionReport:
-    session: TrackingSession | None
+class RunReport:
+    session: Run | None
     totals: SessionTotals
     by_harness: tuple[HarnessSummaryRow, ...]
     by_model: tuple[ModelSummaryRow, ...]
-    by_agent: tuple[AgentSummaryRow, ...]
+    by_activity: tuple[ActivitySummaryRow, ...]
     unconfigured_models: tuple[UnconfiguredModelRow, ...] = ()
     filters: dict[str, object] = field(default_factory=dict)
 
@@ -449,9 +456,13 @@ class TrackingSessionReport:
             "totals": self.totals.as_dict(),
             "by_harness": [row.as_dict() for row in self.by_harness],
             "by_model": [row.as_dict() for row in self.by_model],
-            "by_agent": [row.as_dict() for row in self.by_agent],
+            "by_activity": [row.as_dict() for row in self.by_activity],
             "unconfigured_models": [row.as_dict() for row in self.unconfigured_models],
         }
+
+
+# Type alias for backward compatibility during migration
+TrackingSessionReport = RunReport
 
 
 @dataclass(frozen=True)
@@ -502,38 +513,44 @@ class HarnessEnvironment:
 
 @dataclass(frozen=True)
 class PreparedManualRun:
-    tracking_session: TrackingSession
+    run: Run
     harness: str
     source_path: Path | None
     before_snapshot: SourceSessionSnapshot
     environment: HarnessEnvironment
 
-    def as_dict(self) -> dict[str, object]:
-        return {
-            "tracking_session": self.tracking_session.as_dict(),
+    def as_dict(self) -> dict[str, Any]:
+        result = {
+            "run": self.run.as_dict(),
             "harness": self.harness,
             "source_path": _path_text(self.source_path),
             "before_snapshot": self.before_snapshot.as_dict(),
             "environment": self.environment.as_dict(),
         }
+        # Expose tracking_session for backward compatibility during migration
+        result["tracking_session"] = result["run"]
+        return result
 
 
 @dataclass(frozen=True)
 class FinalizedManualRun:
-    tracking_session: TrackingSession
+    run: Run
     source_session: SourceSessionSummary
     source_diff: SourceSessionDiff
     import_result: ImportUsageResult
-    report: TrackingSessionReport
+    report: RunReport
 
-    def as_dict(self) -> dict[str, object]:
-        return {
-            "tracking_session": self.tracking_session.as_dict(),
+    def as_dict(self) -> dict[str, Any]:
+        result = {
+            "run": self.run.as_dict(),
             "source_session": self.source_session.as_dict(),
             "source_diff": self.source_diff.as_dict(),
             "import_result": self.import_result.as_dict(),
             "report": self.report.as_dict(),
         }
+        # Expose tracking_session for backward compatibility during migration
+        result["tracking_session"] = result["run"]
+        return result
 
 
 @dataclass(frozen=True)
@@ -619,7 +636,7 @@ class UsageSeriesReport:
 
 
 __all__ = [
-    "AgentSummaryRow",
+    "ActivitySummaryRow",
     "CostTotals",
     "FinalizedManualRun",
     "HarnessDefinition",
@@ -628,6 +645,8 @@ __all__ = [
     "ImportUsageResult",
     "ModelSummaryRow",
     "PreparedManualRun",
+    "Run",
+    "RunReport",
     "ScanUsageResult",
     "SessionTotals",
     "SourceSessionDiff",

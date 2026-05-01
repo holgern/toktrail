@@ -2,14 +2,14 @@ from __future__ import annotations
 
 from toktrail.adapters.base import SourceSessionSummary as InternalSourceSessionSummary
 from toktrail.api.models import (
-    AgentSummaryRow,
+    ActivitySummaryRow,
     CostTotals,
     HarnessSummaryRow,
     ModelSummaryRow,
+    Run,
     SessionTotals,
     SourceSessionSummary,
     TokenBreakdown,
-    TrackingSession,
     TrackingSessionReport,
     UnconfiguredModelRow,
     UsageEvent,
@@ -27,7 +27,7 @@ from toktrail.models import (
     UsageEvent as InternalUsageEvent,
 )
 from toktrail.reporting import (
-    AgentSummaryRow as InternalAgentSummaryRow,
+    ActivitySummaryRow as InternalActivitySummaryRow,
 )
 from toktrail.reporting import (
     CostTotals as InternalCostTotals,
@@ -70,15 +70,22 @@ def _to_public_cost_totals(value: InternalCostTotals) -> CostTotals:
 
 def _to_public_tracking_session(
     value: InternalTrackingSession | None,
-) -> TrackingSession | None:
+) -> Run | None:
     if value is None:
         return None
-    return TrackingSession(
+    return Run(
         id=value.id,
         name=value.name,
         started_at_ms=value.started_at_ms,
         ended_at_ms=value.ended_at_ms,
     )
+
+
+def _to_public_run(
+    value: InternalTrackingSession | None,
+) -> Run | None:
+    """Alias for _to_public_tracking_session for the new Run terminology."""
+    return _to_public_tracking_session(value)
 
 
 def _to_public_usage_event(
@@ -155,8 +162,8 @@ def _to_public_model_row(value: InternalModelSummaryRow) -> ModelSummaryRow:
     )
 
 
-def _to_public_agent_row(value: InternalAgentSummaryRow) -> AgentSummaryRow:
-    return AgentSummaryRow(
+def _to_public_activity_row(value: InternalActivitySummaryRow) -> ActivitySummaryRow:
+    return ActivitySummaryRow(
         agent=value.agent,
         message_count=value.message_count,
         total_tokens=value.total_tokens,
@@ -181,7 +188,7 @@ def _to_public_unconfigured_model_row(
 def _to_public_report(value: InternalTrackingSessionReport) -> TrackingSessionReport:
     by_harness = tuple(_to_public_harness_row(row) for row in value.by_harness)
     by_model = tuple(_to_public_model_row(row) for row in value.by_model)
-    by_agent = tuple(_to_public_agent_row(row) for row in value.by_agent)
+    by_activity = tuple(_to_public_activity_row(row) for row in value.by_activity)
     unconfigured_models = tuple(
         _to_public_unconfigured_model_row(row) for row in value.unconfigured_models
     )
@@ -194,7 +201,7 @@ def _to_public_report(value: InternalTrackingSessionReport) -> TrackingSessionRe
         totals=_to_public_session_totals(value.totals, message_count=message_count),
         by_harness=by_harness,
         by_model=by_model,
-        by_agent=by_agent,
+        by_activity=by_activity,
         unconfigured_models=unconfigured_models,
         filters=filters,
     )
@@ -260,7 +267,7 @@ def _to_public_series_instance(
 
 
 __all__ = [
-    "_to_public_agent_row",
+    "_to_public_activity_row",
     "_to_public_cost_totals",
     "_to_public_harness_row",
     "_to_public_model_row",

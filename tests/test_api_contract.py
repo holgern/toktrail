@@ -51,7 +51,7 @@ def test_public_models_star_export_includes_documented_models() -> None:
 
 def test_root_api_exports_documented_models_and_functions() -> None:
     required = {
-        "AgentSummaryRow",
+        "ActivitySummaryRow",
         "CostTotals",
         "FinalizedManualRun",
         "HarnessDefinition",

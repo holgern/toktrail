@@ -71,11 +71,15 @@ class UsageEvent:
 
 
 @dataclass(frozen=True)
-class TrackingSession:
+class Run:
     id: int
     name: str | None
     started_at_ms: int
     ended_at_ms: int | None
+
+
+# Type alias for backward compatibility during migration
+TrackingSession = Run
 
 
 @dataclass(frozen=True)

@@ -20,12 +20,15 @@ from toktrail.adapters.base import SourceSessionSummary
 from toktrail.adapters.registry import get_harness
 from toktrail.adapters.summary import (
     summarize_event_totals,
-    summarize_events_by_agent,
+    summarize_events_by_activity,
     summarize_events_by_model,
 )
 from toktrail.api.environment import prepare_environment as prepare_api_environment
 from toktrail.api.imports import import_configured_usage as import_configured_usage_api
 from toktrail.api.models import ImportUsageResult
+from toktrail.api.sessions import (
+    list_sessions,
+)
 from toktrail.api.sources import capture_source_snapshot
 from toktrail.config import (
     DEFAULT_TEMPLATE_NAME,
@@ -71,10 +74,24 @@ from toktrail.reporting import (
 app = typer.Typer(help="Track harness token usage in local SQLite sessions.")
 import_app = typer.Typer(help="Import usage from external harnesses.")
 watch_app = typer.Typer(help="Watch external harnesses and import new usage.")
+run_app = typer.Typer(help="Manage toktrail tracking runs.")
 sessions_app = typer.Typer(
     invoke_without_command=True,
-    help="List toktrail tracking sessions and raw source sessions.",
+    help="List raw harness source sessions.",
 )
+source_sessions_app = typer.Typer(help="List and inspect harness source sessions.")
+copilot_app = typer.Typer(help="Inspect and run GitHub Copilot CLI tracking.")
+config_app = typer.Typer(help="Inspect toktrail pricing config.")
+pricing_app = typer.Typer(help="Inspect configured and used model pricing.")
+
+app.add_typer(import_app, name="import")
+app.add_typer(watch_app, name="watch")
+app.add_typer(run_app, name="run")
+app.add_typer(source_sessions_app, name="source-sessions")
+app.add_typer(sessions_app, name="sessions")
+app.add_typer(copilot_app, name="copilot")
+app.add_typer(config_app, name="config")
+app.add_typer(pricing_app, name="pricing")
 copilot_app = typer.Typer(help="Inspect and run GitHub Copilot CLI tracking.")
 config_app = typer.Typer(help="Inspect toktrail pricing config.")
 pricing_app = typer.Typer(help="Inspect configured and used model pricing.")
@@ -303,7 +320,7 @@ def init(ctx: typer.Context) -> None:
     typer.echo(f"Initialized toktrail database: {db_path}")
 
 
-@app.command()
+@run_app.command()
 def start(
     ctx: typer.Context,
     name: NameOption = None,
@@ -318,7 +335,7 @@ def start(
     typer.echo(f"Started tracking session {session_id}: {name or '(unnamed)'}")
 
 
-@app.command()
+@run_app.command()
 def stop(
     ctx: typer.Context,
     session_id: SessionArgument = None,
@@ -343,7 +360,7 @@ def stop(
     )
 
 
-@app.command()
+@run_app.command()
 def status(
     ctx: typer.Context,
     session_id: SessionArgument = None,
@@ -436,6 +453,42 @@ def status(
         unconfigured_models=filtered_unconfigured,
         missing_price_mode=costing_config.missing_price,
     )
+
+
+@run_app.command()
+def runs(
+    ctx: typer.Context,
+    limit: ReportLimitOption = None,
+) -> None:
+    """List toktrail tracking runs."""
+    runs = list_runs(None, limit=limit)
+
+    if not runs:
+        typer.echo("No toktrail runs found.")
+        return
+
+    table_data: list[dict[str, object]] = []
+    for run in runs:
+        table_data.append(
+            {
+                "id": run.id,
+                "name": run.name or "(unnamed)",
+                "started_at": format_epoch_ms_compact(run.started_at_ms),
+                "ended_at": format_epoch_ms_compact(run.ended_at_ms)
+                if run.ended_at_ms
+                else "",
+                "active": "active" if run.active else "",
+            }
+        )
+
+    typer.echo(f"{len(runs)} toktrail run{'s' if len(runs) != 1 else ''}:\n")
+    table = Table(show_header=True, header_style="bold magenta")
+    table.add_column("ID", style="cyan")
+    table.add_column("Active", style="green")
+    table.add_column("Name", style="yellow")
+    table.add_column("Started", style="dim")
+    table.add_column("Ended", style="dim")
+    typer.echo(table)
 
 
 @app.command()
@@ -912,10 +965,10 @@ def _print_usage_summary(
         typer.echo("  (none)")
 
     typer.echo("")
-    typer.echo("By agent")
-    by_agent = report.by_agent
-    if by_agent:
-        for agent_row in by_agent:
+    typer.echo("By activity")
+    by_activity = report.by_activity
+    if by_activity:
+        for agent_row in by_activity:
             typer.echo(
                 f"  {agent_row.agent:<12}"
                 f"{_format_int(agent_row.total_tokens):>12} tokens   "
@@ -2153,7 +2206,7 @@ def _print_source_session_detail(
 ) -> None:
     totals = summarize_event_totals(events, costing_config=costing_config)
     by_model = summarize_events_by_model(events, costing_config=costing_config)
-    by_agent = summarize_events_by_agent(events, costing_config=costing_config)
+    by_activity = summarize_events_by_activity(events, costing_config=costing_config)
 
     if json_output:
         typer.echo(
@@ -2167,7 +2220,7 @@ def _print_source_session_detail(
                     "assistant_message_count": summary.assistant_message_count,
                     "totals": totals.as_dict(),
                     "by_model": [row.as_dict() for row in by_model],
-                    "by_agent": [row.as_dict() for row in by_agent],
+                    "by_activity": [row.as_dict() for row in by_activity],
                 },
                 indent=2,
             )
@@ -2204,10 +2257,10 @@ def _print_source_session_detail(
     typer.echo("")
     typer.echo("By model")
     _print_model_table(by_model, rich_output=rich_output)
-    if by_agent:
+    if by_activity:
         typer.echo("")
-        typer.echo("By agent")
-        for row in by_agent:
+        typer.echo("By activity")
+        for row in by_activity:
             typer.echo(
                 f"  {row.agent:<12}"
                 f"{_format_int(row.total_tokens):>12} tokens   "

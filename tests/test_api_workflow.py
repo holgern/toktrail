@@ -34,7 +34,7 @@ def test_prepare_manual_run_returns_tracking_session_snapshot_and_environment(
         source_path=source_db,
     )
 
-    assert prepared.tracking_session.active is True
+    assert prepared.run.active is True
     assert prepared.before_snapshot.sessions[0].source_session_id == "ses-1"
     assert prepared.environment.env == {}
 
@@ -73,7 +73,7 @@ def test_finalize_manual_run_detects_updated_source_session_for_opencode(
 
     assert finalized.source_session.source_session_id == "ses-1"
     assert finalized.import_result.rows_imported == 2
-    assert finalized.tracking_session.active is False
+    assert finalized.run.active is False
 
 
 def test_prepare_and_finalize_manual_run_for_codex(tmp_path) -> None:
@@ -101,7 +101,7 @@ def test_prepare_and_finalize_manual_run_for_codex(tmp_path) -> None:
     assert finalized.report.totals.tokens.cache_read == 20
     assert finalized.report.totals.tokens.output == 40
     assert finalized.report.totals.tokens.reasoning == 5
-    assert finalized.tracking_session.active is False
+    assert finalized.run.active is False
 
 
 def test_finalize_manual_run_explicit_source_session_id_bypasses_ambiguity(

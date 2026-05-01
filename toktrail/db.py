@@ -7,10 +7,11 @@ from pathlib import Path
 from time import time
 
 from toktrail.config import CostingConfig, default_costing_config
-from toktrail.costing import CostBreakdown, UsageCostAtom, resolve_price_resolution
+from toktrail.costing import CostBreakdown, SimulationTarget, UsageCostAtom, resolve_price_resolution, simulate_cost
+from toktrail.reporting import SimulationSummaryRow
 from toktrail.models import TokenBreakdown, TrackingSession, UsageEvent
 from toktrail.reporting import (
-    AgentSummaryRow,
+    ActivitySummaryRow,
     CostTotals,
     HarnessSummaryRow,
     ModelSummaryRow,
@@ -24,7 +25,7 @@ from toktrail.reporting import (
     UsageSeriesReport,
 )
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 @dataclass(frozen=True)
@@ -59,8 +60,16 @@ def migrate(conn: sqlite3.Connection) -> None:
         raise ValueError(msg)
     if current_version == 0:
         _create_schema_v2(conn)
+        current_version = 2
     elif current_version == 1:
         _migrate_v1_to_v2(conn)
+        current_version = 2
+    if current_version == 2:
+        _migrate_v3_to_v4(conn)
+        current_version = 3
+    if current_version == 3:
+        conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+        conn.commit()
     elif current_version == 2:
         _migrate_v2_to_v3(conn)
     if current_version != SCHEMA_VERSION:
@@ -71,7 +80,7 @@ def migrate(conn: sqlite3.Connection) -> None:
 def _create_schema_v2(conn: sqlite3.Connection) -> None:
     conn.executescript(
         """
-        CREATE TABLE IF NOT EXISTS tracking_sessions (
+        CREATE TABLE IF NOT EXISTS runs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT,
             started_at_ms INTEGER NOT NULL,
@@ -80,13 +89,13 @@ def _create_schema_v2(conn: sqlite3.Connection) -> None:
             updated_at_ms INTEGER NOT NULL
         );
 
-        CREATE INDEX IF NOT EXISTS idx_tracking_sessions_started
-        ON tracking_sessions(started_at_ms);
+        CREATE INDEX IF NOT EXISTS idx_runs_started
+        ON runs(started_at_ms);
 
-        CREATE TABLE IF NOT EXISTS harness_sessions (
+        CREATE TABLE IF NOT EXISTS source_sessions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             tracking_session_id INTEGER NOT NULL
-                REFERENCES tracking_sessions(id) ON DELETE CASCADE,
+                REFERENCES runs(id) ON DELETE CASCADE,
             harness TEXT NOT NULL,
             source_session_id TEXT NOT NULL,
             first_seen_ms INTEGER,
@@ -96,15 +105,15 @@ def _create_schema_v2(conn: sqlite3.Connection) -> None:
             UNIQUE(tracking_session_id, harness, source_session_id)
         );
 
-        CREATE INDEX IF NOT EXISTS idx_harness_sessions_lookup
-        ON harness_sessions(harness, source_session_id);
+        CREATE INDEX IF NOT EXISTS idx_source_sessions_lookup
+        ON source_sessions(harness, source_session_id);
 
         CREATE TABLE IF NOT EXISTS usage_events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             tracking_session_id INTEGER
-                REFERENCES tracking_sessions(id) ON DELETE SET NULL,
+                REFERENCES runs(id) ON DELETE SET NULL,
             harness_session_id INTEGER
-                REFERENCES harness_sessions(id) ON DELETE SET NULL,
+                REFERENCES source_sessions(id) ON DELETE SET NULL,
             harness TEXT NOT NULL,
             source_session_id TEXT NOT NULL,
             source_row_id TEXT,
@@ -142,17 +151,17 @@ def _create_schema_v2(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_usage_events_model_thinking
         ON usage_events(provider_id, model_id, thinking_level);
 
-        CREATE TABLE IF NOT EXISTS tracking_session_events (
+        CREATE TABLE IF NOT EXISTS run_events (
             tracking_session_id INTEGER NOT NULL
-                REFERENCES tracking_sessions(id) ON DELETE CASCADE,
+                REFERENCES runs(id) ON DELETE CASCADE,
             usage_event_id INTEGER NOT NULL
                 REFERENCES usage_events(id) ON DELETE CASCADE,
             created_at_ms INTEGER NOT NULL,
             PRIMARY KEY (tracking_session_id, usage_event_id)
         );
 
-        CREATE INDEX IF NOT EXISTS idx_tracking_session_events_usage
-        ON tracking_session_events(usage_event_id);
+        CREATE INDEX IF NOT EXISTS idx_run_events_usage
+        ON run_events(usage_event_id);
         """
     )
 
@@ -165,19 +174,19 @@ def _migrate_v1_to_v2(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_usage_events_model_thinking
         ON usage_events(provider_id, model_id, thinking_level);
 
-        CREATE TABLE IF NOT EXISTS tracking_session_events (
+        CREATE TABLE IF NOT EXISTS run_events (
             tracking_session_id INTEGER NOT NULL
-                REFERENCES tracking_sessions(id) ON DELETE CASCADE,
+                REFERENCES runs(id) ON DELETE CASCADE,
             usage_event_id INTEGER NOT NULL
                 REFERENCES usage_events(id) ON DELETE CASCADE,
             created_at_ms INTEGER NOT NULL,
             PRIMARY KEY (tracking_session_id, usage_event_id)
         );
 
-        CREATE INDEX IF NOT EXISTS idx_tracking_session_events_usage
-        ON tracking_session_events(usage_event_id);
+        CREATE INDEX IF NOT EXISTS idx_run_events_usage
+        ON run_events(usage_event_id);
 
-        INSERT OR IGNORE INTO tracking_session_events (
+        INSERT OR IGNORE INTO run_events (
             tracking_session_id,
             usage_event_id,
             created_at_ms
@@ -188,6 +197,20 @@ def _migrate_v1_to_v2(conn: sqlite3.Connection) -> None:
         """
     )
 
+
+
+def _migrate_v3_to_v4(conn: sqlite3.Connection) -> None:
+    """Rename tracking_sessions -> runs, harness_sessions -> source_sessions."""
+    try:
+        conn.executescript(
+            """
+            ALTER TABLE tracking_sessions RENAME TO runs;
+            ALTER TABLE harness_sessions RENAME TO source_sessions;
+            ALTER TABLE tracking_session_events RENAME TO run_events;
+            """
+        )
+    except sqlite3.OperationalError:
+        pass
 
 def _migrate_v2_to_v3(conn: sqlite3.Connection) -> None:
     conn.executescript(
@@ -210,7 +233,7 @@ def create_tracking_session(
     now_ms = started_at_ms if started_at_ms is not None else _now_ms()
     cursor = conn.execute(
         """
-        INSERT INTO tracking_sessions (
+        INSERT INTO runs (
             name,
             started_at_ms,
             created_at_ms,
@@ -233,7 +256,7 @@ def end_tracking_session(
     now_ms = ended_at_ms if ended_at_ms is not None else _now_ms()
     cursor = conn.execute(
         """
-        UPDATE tracking_sessions
+        UPDATE runs
         SET ended_at_ms = COALESCE(ended_at_ms, ?), updated_at_ms = ?
         WHERE id = ?
         """,
@@ -249,7 +272,7 @@ def get_active_tracking_session(conn: sqlite3.Connection) -> int | None:
     row = conn.execute(
         """
         SELECT id
-        FROM tracking_sessions
+        FROM runs
         WHERE ended_at_ms IS NULL
         ORDER BY started_at_ms DESC
         LIMIT 1
@@ -266,7 +289,7 @@ def get_tracking_session(
     row = conn.execute(
         """
         SELECT id, name, started_at_ms, ended_at_ms
-        FROM tracking_sessions
+        FROM runs
         WHERE id = ?
         """,
         (session_id,),
@@ -280,7 +303,7 @@ def list_tracking_sessions(conn: sqlite3.Connection) -> list[TrackingSession]:
     rows = conn.execute(
         """
         SELECT id, name, started_at_ms, ended_at_ms
-        FROM tracking_sessions
+        FROM runs
         ORDER BY started_at_ms DESC, id DESC
         """
     ).fetchall()
@@ -300,7 +323,7 @@ def attach_harness_session(
     existing = conn.execute(
         """
         SELECT id, first_seen_ms, last_seen_ms
-        FROM harness_sessions
+        FROM source_sessions
         WHERE tracking_session_id = ? AND harness = ? AND source_session_id = ?
         """,
         (tracking_session_id, harness, source_session_id),
@@ -308,7 +331,7 @@ def attach_harness_session(
     if existing is None:
         cursor = conn.execute(
             """
-            INSERT INTO harness_sessions (
+            INSERT INTO source_sessions (
                 tracking_session_id,
                 harness,
                 source_session_id,
@@ -345,7 +368,7 @@ def attach_harness_session(
     merged_last = _max_optional_int(existing_last, last_seen_ms)
     conn.execute(
         """
-        UPDATE harness_sessions
+        UPDATE source_sessions
         SET first_seen_ms = ?, last_seen_ms = ?, updated_at_ms = ?
         WHERE id = ?
         """,
@@ -472,7 +495,7 @@ def insert_usage_events(
                 raise ValueError(msg)
             link_cursor = conn.execute(
                 """
-                INSERT OR IGNORE INTO tracking_session_events (
+                INSERT OR IGNORE INTO run_events (
                     tracking_session_id,
                     usage_event_id,
                     created_at_ms
@@ -499,6 +522,7 @@ def summarize_tracking_session(
     session_id: int,
     *,
     costing_config: CostingConfig | None = None,
+    simulation_targets: tuple[SimulationTarget, ...] = (),
 ) -> TrackingSessionReport:
     return summarize_usage(
         conn,
@@ -512,6 +536,7 @@ def summarize_usage(
     filters: UsageReportFilter,
     *,
     costing_config: CostingConfig | None = None,
+    simulation_targets: tuple[SimulationTarget, ...] = (),
 ) -> TrackingSessionReport:
     session = None
     if filters.tracking_session_id is not None:
@@ -524,7 +549,7 @@ def summarize_usage(
     group_by_columns = ["ue.harness", "ue.provider_id", "ue.model_id"]
     if filters.split_thinking:
         group_by_columns.append("ue.thinking_level")
-    group_by_columns.append("COALESCE(ue.agent, 'unknown')")
+    group_by_columns.append("ue.agent")
     thinking_select = (
         "ue.thinking_level AS thinking_level"
         if filters.split_thinking
@@ -540,7 +565,7 @@ def summarize_usage(
         + thinking_select
         + """
             ,
-            COALESCE(ue.agent, 'unknown') AS agent,
+            ue.agent AS agent,
             COUNT(*) AS message_count,
             COALESCE(SUM(ue.input_tokens), 0) AS input_tokens,
             COALESCE(SUM(ue.output_tokens), 0) AS output_tokens,
@@ -577,7 +602,7 @@ def summarize_usage(
                 if row["thinking_level"] is not None
                 else None
             ),
-            agent=str(row["agent"]),
+            agent=row["agent"],
             message_count=_required_int(row["message_count"]),
             tokens=_row_tokens(row),
             source_cost_usd=_required_decimal(row["source_cost_usd"]),
@@ -597,7 +622,7 @@ def summarize_usage(
             (atom.provider_id, atom.model_id, atom.thinking_level),
             _ReportBucket(),
         ).add(atom, config)
-        by_agent.setdefault(atom.agent, _ReportBucket()).add(atom, config)
+        by_agent.setdefault(atom.agent or "unknown", _ReportBucket()).add(atom, config)
         if resolution.missing_kinds:
             unconfigured.setdefault(
                 (
@@ -610,6 +635,32 @@ def summarize_usage(
                 _UnconfiguredBucket(),
             ).add(atom)
 
+    simulations: list[SimulationSummaryRow] = []
+    for target in simulation_targets:
+        if costing_config is None:
+            costing_config = default_costing_config()
+        sim_result = simulate_cost(
+            tokens=totals_tokens,
+            target=target,
+            config=costing_config,
+            baseline_actual_usd=totals_costs.actual_cost_usd,
+            baseline_virtual_usd=totals_costs.virtual_cost_usd,
+        )
+        simulations.append(
+            SimulationSummaryRow(
+                target_provider=sim_result.target_provider,
+                target_model=sim_result.target_model,
+                input_tokens=totals_tokens.input,
+                output_tokens=totals_tokens.output,
+                reasoning_tokens=totals_tokens.reasoning,
+                cache_read_tokens=totals_tokens.cache_read,
+                cache_write_tokens=totals_tokens.cache_write,
+                total_tokens=totals_tokens.total,
+                cost_usd=sim_result.cost_usd,
+                baseline_virtual_usd=sim_result.baseline_virtual_usd,
+                delta_vs_virtual_usd=sim_result.delta_vs_virtual_usd,
+            )
+        )
     return TrackingSessionReport(
         session=session,
         totals=SessionTotals(tokens=totals_tokens, costs=totals_costs),
@@ -649,8 +700,8 @@ def summarize_usage(
                 ),
             )
         ],
-        by_agent=[
-            AgentSummaryRow(
+        by_activity=[
+            ActivitySummaryRow(
                 agent=agent,
                 message_count=bucket.message_count,
                 total_tokens=bucket.tokens.total,
@@ -733,7 +784,7 @@ def summarize_usage_series(
         + thinking_select
         + """
             ,
-            COALESCE(ue.agent, 'unknown') AS agent,
+            ue.agent AS agent,
             COUNT(*) AS message_count,
             COALESCE(SUM(ue.input_tokens), 0) AS input_tokens,
             COALESCE(SUM(ue.output_tokens), 0) AS output_tokens,
@@ -754,7 +805,7 @@ def summarize_usage_series(
         """
         + ("ue.thinking_level," if filters.split_thinking else "")
         + """
-            COALESCE(ue.agent, 'unknown')
+            ue.agent
         """,
         params,
     ).fetchall()
@@ -786,7 +837,7 @@ def summarize_usage_series(
                 if row["thinking_level"] is not None
                 else None
             ),
-            agent=str(row["agent"]),
+            agent=row["agent"],
             message_count=_required_int(row["message_count"]),
             tokens=_row_tokens(row),
             source_cost_usd=_required_decimal(row["source_cost_usd"]),
@@ -920,7 +971,7 @@ def _usage_report_query_parts(
     source_clause = " FROM usage_events AS ue"
     if filters.tracking_session_id is not None:
         source_clause += (
-            " JOIN tracking_session_events AS tse ON tse.usage_event_id = ue.id"
+            " JOIN run_events AS tse ON tse.usage_event_id = ue.id"
         )
         clauses.append("tse.tracking_session_id = ?")
         params.append(filters.tracking_session_id)
@@ -940,7 +991,7 @@ def _usage_report_query_parts(
         clauses.append("COALESCE(ue.thinking_level, '') = ?")
         params.append(filters.thinking_level)
     if filters.agent is not None:
-        clauses.append("COALESCE(ue.agent, 'unknown') = ?")
+        clauses.append("ue.agent = ?")
         params.append(filters.agent)
     if filters.since_ms is not None:
         clauses.append("ue.created_ms >= ?")

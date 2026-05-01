@@ -19,7 +19,7 @@ from toktrail.api.harnesses import (
 )
 from toktrail.api.imports import import_configured_usage, import_usage
 from toktrail.api.models import (
-    AgentSummaryRow,
+    ActivitySummaryRow,
     CostTotals,
     FinalizedManualRun,
     HarnessDefinition,
@@ -50,13 +50,13 @@ from toktrail.api.paths import (
 )
 from toktrail.api.reports import session_report, usage_report, usage_series_report
 from toktrail.api.sessions import (
-    get_active_session,
-    get_session,
+    get_active_run,
+    get_run,
     init_state,
-    list_sessions,
-    require_active_session,
-    start_session,
-    stop_session,
+    list_runs,
+    require_active_run,
+    start_run,
+    stop_run,
 )
 from toktrail.api.sources import (
     capture_source_snapshot,
@@ -67,7 +67,7 @@ from toktrail.api.sources import (
 from toktrail.api.workflow import finalize_manual_run, prepare_manual_run
 
 __all__ = [
-    "AgentSummaryRow",
+    "ActivitySummaryRow",
     "CostTotals",
     "FinalizedManualRun",
     "HarnessDefinition",

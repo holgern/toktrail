@@ -68,6 +68,9 @@ def session_report(
     return _to_public_report(report)
 
 
+run_report = session_report
+
+
 def usage_report(
     db_path: Path | None,
     *,

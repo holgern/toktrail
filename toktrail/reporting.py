@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from decimal import Decimal
 
-from toktrail.models import TokenBreakdown, TrackingSession
+from toktrail.models import Run, TokenBreakdown
 
 
 @dataclass(frozen=True)
@@ -228,8 +228,9 @@ class UnconfiguredModelRow:
 
 
 @dataclass(frozen=True)
-class AgentSummaryRow:
-    agent: str
+class ActivitySummaryRow:
+    agent: str | None
+
     message_count: int
     total_tokens: int
     costs: CostTotals
@@ -254,7 +255,7 @@ class AgentSummaryRow:
     def unpriced_count(self) -> int:
         return self.costs.unpriced_count
 
-    def as_dict(self) -> dict[str, int | float | str]:
+    def as_dict(self) -> dict[str, int | float | str | None]:
         return {
             "agent": self.agent,
             "message_count": self.message_count,
@@ -264,13 +265,44 @@ class AgentSummaryRow:
 
 
 @dataclass(frozen=True)
+class SimulationSummaryRow:
+    target_provider: str
+    target_model: str
+    input_tokens: int
+    output_tokens: int
+    reasoning_tokens: int
+    cache_read_tokens: int
+    cache_write_tokens: int
+    total_tokens: int
+    cost_usd: Decimal
+    baseline_virtual_usd: Decimal
+    delta_vs_virtual_usd: Decimal
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "target_provider": self.target_provider,
+            "target_model": self.target_model,
+            "input_tokens": self.input_tokens,
+            "output_tokens": self.output_tokens,
+            "reasoning_tokens": self.reasoning_tokens,
+            "cache_read_tokens": self.cache_read_tokens,
+            "cache_write_tokens": self.cache_write_tokens,
+            "total_tokens": self.total_tokens,
+            "cost_usd": str(self.cost_usd),
+            "baseline_virtual_usd": str(self.baseline_virtual_usd),
+            "delta_vs_virtual_usd": str(self.delta_vs_virtual_usd),
+        }
+
+
+@dataclass(frozen=True)
 class TrackingSessionReport:
-    session: TrackingSession | None
+    session: Run | None
     totals: SessionTotals
     by_harness: list[HarnessSummaryRow]
     by_model: list[ModelSummaryRow]
-    by_agent: list[AgentSummaryRow]
+    by_activity: list[ActivitySummaryRow]
     unconfigured_models: list[UnconfiguredModelRow] = field(default_factory=list)
+    simulations: list[SimulationSummaryRow] = field(default_factory=list)
     filters: UsageReportFilter = field(default_factory=UsageReportFilter)
 
     def as_dict(self) -> dict[str, object]:
@@ -287,9 +319,14 @@ class TrackingSessionReport:
             "totals": self.totals.as_dict(),
             "by_harness": [row.as_dict() for row in self.by_harness],
             "by_model": [row.as_dict() for row in self.by_model],
-            "by_agent": [row.as_dict() for row in self.by_agent],
+            "by_activity": [row.as_dict() for row in self.by_activity],
+            "simulations": [row.as_dict() for row in self.simulations],
             "unconfigured_models": [row.as_dict() for row in self.unconfigured_models],
         }
+
+
+# Type alias for backward compatibility during migration
+RunReport = TrackingSessionReport
 
 
 @dataclass(frozen=True)
@@ -338,6 +375,7 @@ class UsageSeriesBucket:
     costs: CostTotals
     models: tuple[str, ...] = ()
     by_model: tuple[ModelSummaryRow, ...] = ()
+    simulations: tuple[SimulationSummaryRow, ...] = ()
 
     def as_dict(self) -> dict[str, object]:
         result: dict[str, object] = {
@@ -351,6 +389,9 @@ class UsageSeriesBucket:
             "costs": self.costs.as_dict(),
         }
         if self.by_model:
+            result["by_model"] = [row.as_dict() for row in self.by_model]
+        if self.simulations:
+            result["simulations"] = [row.as_dict() for row in self.simulations]
             result["by_model"] = [row.as_dict() for row in self.by_model]
         return result
 

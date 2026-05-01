@@ -7,7 +7,7 @@ import pytest
 from toktrail.adapters.summary import (
     add_tokens,
     summarize_event_totals,
-    summarize_events_by_agent,
+    summarize_events_by_activity,
     summarize_events_by_model,
     summarize_events_by_source_session,
 )
@@ -73,7 +73,7 @@ def test_summary_helpers_aggregate_events_consistently() -> None:
         source_paths_by_session={"ses-1": ["/tmp/a.jsonl", "/tmp/b.jsonl"]},
     )
     by_model = summarize_events_by_model(events)
-    by_agent = summarize_events_by_agent(events)
+    by_agent = summarize_events_by_activity(events)
 
     assert totals.tokens.total == 37
     assert float(totals.source_cost_usd) == pytest.approx(0.6)

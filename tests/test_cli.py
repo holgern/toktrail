@@ -307,7 +307,7 @@ def test_cli_init_start_import_status_stop(tmp_path) -> None:
 
     for args in (
         ["--db", str(state_db), "init"],
-        ["--db", str(state_db), "start", "--name", "test-session"],
+        ["--db", str(state_db), "run", "start", "--name", "test-session"],
         [
             "--db",
             str(state_db),
@@ -318,14 +318,14 @@ def test_cli_init_start_import_status_stop(tmp_path) -> None:
             str(source_db),
         ],
         ["--db", str(state_db), "sessions"],
-        ["--db", str(state_db), "stop"],
+        ["--db", str(state_db), "run", "stop"],
     ):
         result = runner.invoke(app, args)
         assert result.exit_code == 0, result.output
 
     status_result = runner.invoke(
         app,
-        ["--db", str(state_db), "status", "1", "--json"],
+        ["--db", str(state_db), "run", "status", "1", "--json"],
     )
     assert status_result.exit_code == 0, status_result.output
     payload = json.loads(status_result.output)
@@ -733,7 +733,7 @@ def test_cli_status_supports_thinking_filter_and_collapse(tmp_path) -> None:
     )
     collapsed_default = runner.invoke(
         app,
-        ["--db", str(state_db), "status", "1", "--json"],
+        ["--db", str(state_db), "run", "status", "1", "--json"],
     )
     human = runner.invoke(app, ["--db", str(state_db), "status", "1"])
 

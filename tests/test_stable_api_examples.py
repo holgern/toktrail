@@ -6,7 +6,7 @@ from pathlib import Path
 
 from examples import _manual_run_common
 from toktrail.api.models import (
-    AgentSummaryRow,
+    ActivitySummaryRow,
     CostTotals,
     FinalizedManualRun,
     HarnessSummaryRow,
@@ -181,8 +181,8 @@ def test_print_report_formats_public_dataclasses(capsys) -> None:
                 costs=CostTotals(actual_cost_usd=0.02, virtual_cost_usd=0.05),
             ),
         ),
-        by_agent=(
-            AgentSummaryRow(
+        by_activity=(
+            ActivitySummaryRow(
                 agent="build",
                 message_count=2,
                 total_tokens=42,
@@ -241,10 +241,10 @@ def test_print_finalized_formats_import_and_source_session(capsys) -> None:
         ),
         by_harness=(),
         by_model=(),
-        by_agent=(),
+        by_activity=(),
     )
     finalized = FinalizedManualRun(
-        tracking_session=TrackingSession(
+        run=TrackingSession(
             id=1,
             name="example",
             started_at_ms=1000,

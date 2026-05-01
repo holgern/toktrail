@@ -96,12 +96,12 @@ def test_migrate_creates_tables_and_is_idempotent(tmp_path) -> None:
     user_version = int(conn.execute("PRAGMA user_version").fetchone()[0])
 
     assert {
-        "tracking_sessions",
-        "harness_sessions",
+        "runs",
+        "source_sessions",
         "usage_events",
-        "tracking_session_events",
+        "run_events",
     } <= table_names
-    assert user_version == 3
+    assert user_version == 4
 
 
 def test_create_tracking_session_and_end_session(tmp_path) -> None:
@@ -128,7 +128,7 @@ def test_insert_usage_events_attaches_multiple_source_sessions(tmp_path) -> None
     insert_usage_events(conn, session_id, [first, second])
 
     harness_session_count = int(
-        conn.execute("SELECT COUNT(*) FROM harness_sessions").fetchone()[0]
+        conn.execute("SELECT COUNT(*) FROM source_sessions").fetchone()[0]
     )
     assert harness_session_count == 2
 
@@ -174,9 +174,9 @@ def test_insert_usage_events_is_idempotent_and_aggregates_correctly(tmp_path) ->
     assert report.by_model[0].model_id == "claude-sonnet-4"
     assert report.by_model[0].source_cost_usd == Decimal("0.75")
     assert report.by_model[0].actual_cost_usd == 0.75
-    assert report.by_agent[0].agent == "build"
-    assert report.by_agent[0].source_cost_usd == Decimal("0.75")
-    assert report.by_agent[0].actual_cost_usd == 0.75
+    assert report.by_activity[0].agent == "build"
+    assert report.by_activity[0].source_cost_usd == Decimal("0.75")
+    assert report.by_activity[0].actual_cost_usd == 0.75
 
 
 def test_summarize_usage_applies_filters_and_echoes_them(tmp_path) -> None:
@@ -260,9 +260,9 @@ def test_summarize_usage_applies_filters_and_echoes_them(tmp_path) -> None:
     assert report.by_model[0].thinking_level == "high"
     assert report.by_model[0].source_cost_usd == Decimal("0.1")
     assert report.by_model[0].actual_cost_usd == 0.0
-    assert report.by_agent[0].agent == "plan"
-    assert report.by_agent[0].source_cost_usd == Decimal("0.1")
-    assert report.by_agent[0].actual_cost_usd == 0.0
+    assert report.by_activity[0].agent == "plan"
+    assert report.by_activity[0].source_cost_usd == Decimal("0.1")
+    assert report.by_activity[0].actual_cost_usd == 0.0
 
 
 def test_summarize_usage_supports_unscoped_period_ranges(tmp_path) -> None:

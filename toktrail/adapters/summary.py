@@ -10,7 +10,7 @@ from toktrail.config import CostingConfig, default_costing_config
 from toktrail.costing import CostBreakdown, UsageCostAtom
 from toktrail.models import TokenBreakdown, UsageEvent
 from toktrail.reporting import (
-    AgentSummaryRow,
+    ActivitySummaryRow,
     CostTotals,
     HarnessSummaryRow,
     ModelSummaryRow,
@@ -128,11 +128,11 @@ def summarize_events_by_model(
     )
 
 
-def summarize_events_by_agent(
+def summarize_events_by_activity(
     events: Iterable[UsageEvent],
     *,
     costing_config: CostingConfig | None = None,
-) -> list[AgentSummaryRow]:
+) -> list[ActivitySummaryRow]:
     config = costing_config or default_costing_config()
     grouped: dict[str, _AggregateBucket] = {}
     for atom in _usage_cost_atom_map(
@@ -149,7 +149,7 @@ def summarize_events_by_agent(
         bucket.add_atom(atom, config)
     return sorted(
         (
-            AgentSummaryRow(
+            ActivitySummaryRow(
                 agent=agent,
                 message_count=bucket.message_count,
                 total_tokens=bucket.tokens.total,

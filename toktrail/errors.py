@@ -49,12 +49,23 @@ class InvalidAPIUsageError(ToktrailError):
     """The public API was called with invalid or conflicting arguments."""
 
 
+# Run-named aliases (new primary terminology)
+RunNotFoundError = SessionNotFoundError
+NoActiveRunError = NoActiveSessionError
+ActiveRunExistsError = ActiveSessionExistsError
+RunAlreadyEndedError = SessionAlreadyEndedError
+
+
 __all__ = [
+    "ActiveRunExistsError",
     "ActiveSessionExistsError",
     "AmbiguousSourceSessionError",
     "ConfigurationError",
     "InvalidAPIUsageError",
+    "NoActiveRunError",
     "NoActiveSessionError",
+    "RunAlreadyEndedError",
+    "RunNotFoundError",
     "SessionAlreadyEndedError",
     "SessionNotFoundError",
     "SourcePathError",
