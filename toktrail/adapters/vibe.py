@@ -163,10 +163,9 @@ def _parse_vibe_meta(
         return None
 
     session_id = _as_str(meta.get("session_id")) or path.parent.name or path.stem
-    created_ms = (
-        _parse_rfc3339_ms(meta.get("start_time"))
-        or _file_modified_timestamp_ms(path)
-    )
+    created_ms = _parse_rfc3339_ms(
+        meta.get("start_time")
+    ) or _file_modified_timestamp_ms(path)
     if created_ms == 0:
         return None
 
@@ -176,8 +175,7 @@ def _parse_vibe_meta(
 
     provider_id, model_id, thinking_level = _model_identity(meta)
     source_message_id = (
-        _last_assistant_message_id(path.with_name("messages.jsonl"))
-        or session_id
+        _last_assistant_message_id(path.with_name("messages.jsonl")) or session_id
     )
     source_cost_usd = _source_cost(stats, tokens)
 
@@ -244,9 +242,7 @@ def _model_identity(meta: dict[str, object]) -> tuple[str, str, str | None]:
             model_id = name or active_model
             thinking_str = _as_str(model.get("thinking"))
             thinking_level = (
-                normalize_thinking_level(thinking_str)
-                if thinking_str
-                else None
+                normalize_thinking_level(thinking_str) if thinking_str else None
             )
             return provider_id, model_id, thinking_level
 
@@ -260,10 +256,9 @@ def _source_cost(stats: dict[str, object], tokens: TokenBreakdown) -> Decimal:
         return explicit
     input_price = _as_non_negative_decimal(stats.get("input_price_per_million"))
     output_price = _as_non_negative_decimal(stats.get("output_price_per_million"))
-    return (
-        Decimal(tokens.input) * input_price / Decimal(1_000_000)
-        + Decimal(tokens.output) * output_price / Decimal(1_000_000)
-    )
+    return Decimal(tokens.input) * input_price / Decimal(1_000_000) + Decimal(
+        tokens.output
+    ) * output_price / Decimal(1_000_000)
 
 
 def _last_assistant_message_id(jsonl_path: Path) -> str | None:

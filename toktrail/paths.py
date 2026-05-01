@@ -234,4 +234,3 @@ def resolve_vibe_logs_path(cli_value: Path | None = None) -> Path:
     if env_value:
         return Path(env_value).expanduser()
     return default_vibe_logs_path()
-

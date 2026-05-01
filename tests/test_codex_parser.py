@@ -154,12 +154,28 @@ def test_token_count_repeated_totals_are_deduped(tmp_path) -> None:
         tmp_path / "repeated.jsonl",
         [
             _token_count_row(
-                total={"input_tokens": 120, "cached_input_tokens": 20, "output_tokens": 30},
-                last={"input_tokens": 120, "cached_input_tokens": 20, "output_tokens": 30},
+                total={
+                    "input_tokens": 120,
+                    "cached_input_tokens": 20,
+                    "output_tokens": 30,
+                },
+                last={
+                    "input_tokens": 120,
+                    "cached_input_tokens": 20,
+                    "output_tokens": 30,
+                },
             ),
             _token_count_row(
-                total={"input_tokens": 120, "cached_input_tokens": 20, "output_tokens": 30},
-                last={"input_tokens": 120, "cached_input_tokens": 20, "output_tokens": 30},
+                total={
+                    "input_tokens": 120,
+                    "cached_input_tokens": 20,
+                    "output_tokens": 30,
+                },
+                last={
+                    "input_tokens": 120,
+                    "cached_input_tokens": 20,
+                    "output_tokens": 30,
+                },
                 timestamp="2026-01-01T00:00:02Z",
             ),
         ],
@@ -259,7 +275,9 @@ def test_into_tokens_clamps_cached_to_input() -> None:
     assert tokens.cache_read == 50
 
 
-def test_token_count_avoids_double_counting_stale_cumulative_regressions(tmp_path) -> None:
+def test_token_count_avoids_double_counting_stale_cumulative_regressions(
+    tmp_path,
+) -> None:
     session_file = write_codex_rows(
         tmp_path / "stale-regression.jsonl",
         [
@@ -373,7 +391,12 @@ def test_list_codex_sessions_aggregates_messages(tmp_path) -> None:
         tmp_path / "aggregate.jsonl",
         [
             _token_count_row(
-                last={"input_tokens": 120, "cached_input_tokens": 20, "output_tokens": 30, "reasoning_output_tokens": 5},
+                last={
+                    "input_tokens": 120,
+                    "cached_input_tokens": 20,
+                    "output_tokens": 30,
+                    "reasoning_output_tokens": 5,
+                },
                 payload={"model": "gpt-5.2-codex"},
             ),
             _token_count_row(

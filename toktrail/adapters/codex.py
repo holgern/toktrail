@@ -366,10 +366,9 @@ def _parse_structured_token_count(
         if previous is not None:
             if total_usage == previous:
                 return None, True
-            if (
-                total_usage.delta_from(previous) is None
-                and total_usage.looks_like_stale_regression(previous, last_usage)
-            ):
+            if total_usage.delta_from(
+                previous
+            ) is None and total_usage.looks_like_stale_regression(previous, last_usage):
                 return None, True
         tokens = last_usage.into_tokens()
         next_baseline = total_usage

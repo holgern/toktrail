@@ -49,7 +49,7 @@ def test_discover_sources_with_explicit_source(tmp_path: Path) -> None:
     """Test discovery with explicit source path."""
     test_file = tmp_path / "test.db"
     test_file.touch()
-    
+
     result = discover_sources(
         harnesses=["opencode"],
         explicit_source=test_file,
@@ -91,7 +91,7 @@ def test_source_file_creation(tmp_path: Path) -> None:
     """Test creating a source file."""
     path = tmp_path / "test.json"
     path.touch()
-    
+
     fp = SourceFingerprint(size=0, mtime_ns=0, inode=0)
     source = SourceFile(
         harness="pi",
@@ -118,17 +118,14 @@ def test_discover_sources_nonexistent_path() -> None:
         config=config,
     )
     # With warn mode (default), missing paths should generate warnings
-    assert any(
-        "does not exist" in w.message
-        for w in result.warnings
-    )
+    assert any("does not exist" in w.message for w in result.warnings)
 
 
 def test_discover_sources_with_config(tmp_path: Path) -> None:
     """Test discovery using provided config."""
     test_db = tmp_path / "opencode.db"
     test_db.touch()
-    
+
     config = ToktrailConfig(
         costing=CostingConfig(),
         imports=ImportConfig(
@@ -150,7 +147,7 @@ def test_discover_sources_with_list_of_paths(tmp_path: Path) -> None:
     path2 = tmp_path / "sessions2"
     path1.mkdir()
     path2.mkdir()
-    
+
     config = ToktrailConfig(
         costing=CostingConfig(),
         imports=ImportConfig(
