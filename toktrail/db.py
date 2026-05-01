@@ -7,8 +7,13 @@ from pathlib import Path
 from time import time
 
 from toktrail.config import CostingConfig, default_costing_config
-from toktrail.costing import CostBreakdown, SimulationTarget, UsageCostAtom, resolve_price_resolution, simulate_cost
-from toktrail.reporting import SimulationSummaryRow
+from toktrail.costing import (
+    CostBreakdown,
+    SimulationTarget,
+    UsageCostAtom,
+    resolve_price_resolution,
+    simulate_cost,
+)
 from toktrail.models import TokenBreakdown, TrackingSession, UsageEvent
 from toktrail.reporting import (
     ActivitySummaryRow,
@@ -16,6 +21,7 @@ from toktrail.reporting import (
     HarnessSummaryRow,
     ModelSummaryRow,
     SessionTotals,
+    SimulationSummaryRow,
     TrackingSessionReport,
     UnconfiguredModelRow,
     UsageReportFilter,

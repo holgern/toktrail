@@ -51,12 +51,18 @@ from toktrail.api.paths import (
 from toktrail.api.reports import session_report, usage_report, usage_series_report
 from toktrail.api.sessions import (
     get_active_run,
+    get_active_session,
     get_run,
+    get_session,
     init_state,
     list_runs,
+    list_sessions,
     require_active_run,
+    require_active_session,
     start_run,
+    start_session,
     stop_run,
+    stop_session,
 )
 from toktrail.api.sources import (
     capture_source_snapshot,

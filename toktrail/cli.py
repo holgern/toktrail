@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, NoReturn, cast
 
 import typer
+from rich.table import Table
 
 if TYPE_CHECKING:
     from toktrail.reporting import UsageSeriesBucket
@@ -26,9 +27,7 @@ from toktrail.adapters.summary import (
 from toktrail.api.environment import prepare_environment as prepare_api_environment
 from toktrail.api.imports import import_configured_usage as import_configured_usage_api
 from toktrail.api.models import ImportUsageResult
-from toktrail.api.sessions import (
-    list_sessions,
-)
+from toktrail.api.sessions import list_runs
 from toktrail.api.sources import capture_source_snapshot
 from toktrail.config import (
     DEFAULT_TEMPLATE_NAME,
@@ -2413,7 +2412,7 @@ def _print_table(
 
     try:
         from rich.console import Console
-        from rich.table import Table
+
     except ImportError:
         _exit_with_error("Rich output requires installing toktrail[rich].")
 

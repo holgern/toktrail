@@ -227,7 +227,8 @@ def setup_pricing_status_fixture(tmp_path: Path) -> tuple[CliRunner, Path, Path]
     create_pricing_source_db(source_db)
     write_pricing_config(config_path)
     runner.invoke(app, ["--db", str(state_db), "init"])
-    runner.invoke(app, ["--db", str(state_db), "start", "--name", "pricing-session"])
+    runner.invoke(app, ["--db", str(state_db), "run", "start",
+                                 "--name", "pricing-session"])
     runner.invoke(
         app,
         [
@@ -343,7 +344,10 @@ def test_cli_sessions_without_subcommand_lists_tracking_sessions(tmp_path) -> No
     state_db = tmp_path / "toktrail.db"
 
     runner.invoke(app, ["--db", str(state_db), "init"])
-    runner.invoke(app, ["--db", str(state_db), "start", "--name", "test-session"])
+    runner.invoke(
+        app,
+        ["--db", str(state_db), "run", "start", "--name", "test-session"]
+    )
     result = runner.invoke(app, ["--db", str(state_db), "sessions"])
 
     assert result.exit_code == 0, result.output
@@ -357,7 +361,8 @@ def test_cli_import_missing_opencode_db_fails(tmp_path) -> None:
     state_db = tmp_path / "toktrail.db"
 
     runner.invoke(app, ["--db", str(state_db), "init"])
-    runner.invoke(app, ["--db", str(state_db), "start", "--name", "test-session"])
+    runner.invoke(app,
+        ["--db", str(state_db), "run", "start", "--name", "test-session"])
     result = runner.invoke(
         app,
         [
@@ -461,7 +466,8 @@ def test_cli_watch_opencode_exits_cleanly_on_ctrl_c(tmp_path, monkeypatch) -> No
     create_source_db(source_db)
 
     runner.invoke(app, ["--db", str(state_db), "init"])
-    runner.invoke(app, ["--db", str(state_db), "start", "--name", "test-session"])
+    runner.invoke(app,
+        ["--db", str(state_db), "run", "start", "--name", "test-session"])
 
     def interrupt_after_first_sleep(_interval: float) -> None:
         raise KeyboardInterrupt
@@ -493,7 +499,8 @@ def test_cli_import_copilot_status(tmp_path) -> None:
     create_copilot_file(copilot_file)
 
     runner.invoke(app, ["--db", str(state_db), "init"])
-    runner.invoke(app, ["--db", str(state_db), "start", "--name", "test-session"])
+    runner.invoke(app,
+        ["--db", str(state_db), "run", "start", "--name", "test-session"])
     result = runner.invoke(
         app,
         [
@@ -511,7 +518,7 @@ def test_cli_import_copilot_status(tmp_path) -> None:
     assert "Imported Copilot usage:" in result.output
     assert "rows imported: 1" in result.output
 
-    status = runner.invoke(app, ["--db", str(state_db), "status", "1", "--json"])
+    status = runner.invoke(app, ["--db", str(state_db), "run", "status", "1", "--json"])
     payload = json.loads(status.output)
     assert payload["by_harness"][0]["harness"] == "copilot"
     assert payload["totals"]["input"] == 100
@@ -525,7 +532,8 @@ def test_cli_import_codex_status(tmp_path) -> None:
     create_codex_session_file(codex_file)
 
     runner.invoke(app, ["--db", str(state_db), "init"])
-    runner.invoke(app, ["--db", str(state_db), "start", "--name", "test-session"])
+    runner.invoke(app,
+        ["--db", str(state_db), "run", "start", "--name", "test-session"])
     result = runner.invoke(
         app,
         [
@@ -543,7 +551,7 @@ def test_cli_import_codex_status(tmp_path) -> None:
     assert "Imported Codex usage:" in result.output
     assert "rows imported: 1" in result.output
 
-    status = runner.invoke(app, ["--db", str(state_db), "status", "1", "--json"])
+    status = runner.invoke(app, ["--db", str(state_db), "run", "status", "1", "--json"])
     payload = json.loads(status.output)
     assert payload["by_harness"][0]["harness"] == "codex"
     assert payload["totals"]["input"] == 100
@@ -559,7 +567,8 @@ def test_cli_import_goose_status(tmp_path) -> None:
     create_goose_source_db(goose_db)
 
     runner.invoke(app, ["--db", str(state_db), "init"])
-    runner.invoke(app, ["--db", str(state_db), "start", "--name", "test-session"])
+    runner.invoke(app,
+        ["--db", str(state_db), "run", "start", "--name", "test-session"])
     result = runner.invoke(
         app,
         [
@@ -577,7 +586,7 @@ def test_cli_import_goose_status(tmp_path) -> None:
     assert "Imported Goose usage:" in result.output
     assert "rows imported: 1" in result.output
 
-    status = runner.invoke(app, ["--db", str(state_db), "status", "1", "--json"])
+    status = runner.invoke(app, ["--db", str(state_db), "run", "status", "1", "--json"])
     payload = json.loads(status.output)
     assert payload["by_harness"][0]["harness"] == "goose"
     assert payload["totals"]["input"] == 90
@@ -594,7 +603,8 @@ def test_cli_import_droid_status(tmp_path) -> None:
     create_droid_source(source_path)
 
     runner.invoke(app, ["--db", str(state_db), "init"])
-    runner.invoke(app, ["--db", str(state_db), "start", "--name", "droid"])
+    runner.invoke(app,
+        ["--db", str(state_db), "run", "start", "--name", "droid"])
     result = runner.invoke(
         app,
         [
@@ -612,7 +622,7 @@ def test_cli_import_droid_status(tmp_path) -> None:
     assert "Imported Droid usage:" in result.output
     assert "rows imported: 1" in result.output
 
-    status = runner.invoke(app, ["--db", str(state_db), "status", "1", "--json"])
+    status = runner.invoke(app, ["--db", str(state_db), "run", "status", "1", "--json"])
     payload = json.loads(status.output)
     assert payload["by_harness"][0]["harness"] == "droid"
     assert payload["totals"]["input"] == 1234
@@ -630,7 +640,8 @@ def test_cli_import_amp_status(tmp_path) -> None:
     create_amp_source(source_path)
 
     runner.invoke(app, ["--db", str(state_db), "init"])
-    runner.invoke(app, ["--db", str(state_db), "start", "--name", "amp"])
+    runner.invoke(app,
+        ["--db", str(state_db), "run", "start", "--name", "amp"])
     result = runner.invoke(
         app,
         [
@@ -648,7 +659,7 @@ def test_cli_import_amp_status(tmp_path) -> None:
     assert "Imported Amp usage:" in result.output
     assert "rows imported: 1" in result.output
 
-    status = runner.invoke(app, ["--db", str(state_db), "status", "1", "--json"])
+    status = runner.invoke(app, ["--db", str(state_db), "run", "status", "1", "--json"])
     payload = json.loads(status.output)
     assert payload["by_harness"][0]["harness"] == "amp"
     assert payload["totals"]["input"] == 100
@@ -700,7 +711,8 @@ def test_cli_status_supports_thinking_filter_and_collapse(tmp_path) -> None:
     create_thinking_source_db(source_db)
 
     runner.invoke(app, ["--db", str(state_db), "init"])
-    runner.invoke(app, ["--db", str(state_db), "start", "--name", "test-session"])
+    runner.invoke(app,
+        ["--db", str(state_db), "run", "start", "--name", "test-session"])
     runner.invoke(
         app,
         [
@@ -719,7 +731,7 @@ def test_cli_status_supports_thinking_filter_and_collapse(tmp_path) -> None:
         [
             "--db",
             str(state_db),
-            "status",
+            "run", "status",
             "1",
             "--json",
             "--thinking",
@@ -729,13 +741,13 @@ def test_cli_status_supports_thinking_filter_and_collapse(tmp_path) -> None:
     )
     split_thinking = runner.invoke(
         app,
-        ["--db", str(state_db), "status", "1", "--json", "--split-thinking"],
+        ["--db", str(state_db), "run", "status", "1", "--json", "--split-thinking"],
     )
     collapsed_default = runner.invoke(
         app,
         ["--db", str(state_db), "run", "status", "1", "--json"],
     )
-    human = runner.invoke(app, ["--db", str(state_db), "status", "1"])
+    human = runner.invoke(app, ["--db", str(state_db), "run", "status", "1"])
 
     assert filtered_split.exit_code == 0, filtered_split.output
     assert split_thinking.exit_code == 0, split_thinking.output
@@ -1124,7 +1136,8 @@ def test_cli_import_missing_copilot_file_fails(tmp_path) -> None:
     state_db = tmp_path / "toktrail.db"
 
     runner.invoke(app, ["--db", str(state_db), "init"])
-    runner.invoke(app, ["--db", str(state_db), "start", "--name", "test-session"])
+    runner.invoke(app,
+        ["--db", str(state_db), "run", "start", "--name", "test-session"])
     result = runner.invoke(
         app,
         [
@@ -1149,7 +1162,8 @@ def test_cli_import_codex_without_path_or_env_fails(tmp_path, monkeypatch) -> No
     monkeypatch.delenv("TOKTRAIL_CODEX_SESSIONS", raising=False)
 
     runner.invoke(app, ["--db", str(state_db), "init"])
-    runner.invoke(app, ["--db", str(state_db), "start", "--name", "test-session"])
+    runner.invoke(app,
+        ["--db", str(state_db), "run", "start", "--name", "test-session"])
     result = runner.invoke(
         app,
         [
@@ -1178,7 +1192,8 @@ def test_cli_import_copilot_without_file_or_env_fails(tmp_path) -> None:
     }
 
     runner.invoke(app, ["--db", str(state_db), "init"])
-    runner.invoke(app, ["--db", str(state_db), "start", "--name", "test-session"])
+    runner.invoke(app,
+        ["--db", str(state_db), "run", "start", "--name", "test-session"])
     result = runner.invoke(
         app,
         [
@@ -1204,7 +1219,8 @@ def test_cli_watch_copilot_exits_cleanly_on_ctrl_c(tmp_path, monkeypatch) -> Non
     create_copilot_file(copilot_file)
 
     runner.invoke(app, ["--db", str(state_db), "init"])
-    runner.invoke(app, ["--db", str(state_db), "start", "--name", "test-session"])
+    runner.invoke(app,
+        ["--db", str(state_db), "run", "start", "--name", "test-session"])
 
     def interrupt_after_first_sleep(_interval: float) -> None:
         raise KeyboardInterrupt
@@ -1236,7 +1252,8 @@ def test_cli_import_pi_status(tmp_path) -> None:
     create_pi_session_file(session_file)
 
     runner.invoke(app, ["--db", str(state_db), "init"])
-    runner.invoke(app, ["--db", str(state_db), "start", "--name", "test-session"])
+    runner.invoke(app,
+        ["--db", str(state_db), "run", "start", "--name", "test-session"])
     result = runner.invoke(
         app,
         [
@@ -1254,7 +1271,7 @@ def test_cli_import_pi_status(tmp_path) -> None:
     assert "Imported Pi usage:" in result.output
     assert "rows imported: 1" in result.output
 
-    status = runner.invoke(app, ["--db", str(state_db), "status", "1", "--json"])
+    status = runner.invoke(app, ["--db", str(state_db), "run", "status", "1", "--json"])
     payload = json.loads(status.output)
     assert payload["by_harness"][0]["harness"] == "pi"
     assert payload["totals"]["total"] == 165
@@ -1279,7 +1296,8 @@ def test_cli_status_filters_by_harness_and_source_session(tmp_path) -> None:
     create_pi_session_file(session_file)
 
     runner.invoke(app, ["--db", str(state_db), "init"])
-    runner.invoke(app, ["--db", str(state_db), "start", "--name", "test-session"])
+    runner.invoke(app,
+        ["--db", str(state_db), "run", "start", "--name", "test-session"])
     runner.invoke(
         app,
         [
@@ -1310,7 +1328,7 @@ def test_cli_status_filters_by_harness_and_source_session(tmp_path) -> None:
         [
             "--db",
             str(state_db),
-            "status",
+            "run", "status",
             "--harness",
             "pi",
             "--source-session",
@@ -1494,7 +1512,8 @@ def test_cli_status_with_template_config_computes_copilot_virtual_cost(
         ["--config", str(config_path), "config", "init", "--template", "copilot"],
     )
     runner.invoke(app, ["--db", str(state_db), "init"])
-    runner.invoke(app, ["--db", str(state_db), "start", "--name", "test-session"])
+    runner.invoke(app,
+        ["--db", str(state_db), "run", "start", "--name", "test-session"])
     runner.invoke(
         app,
         [
@@ -1515,7 +1534,7 @@ def test_cli_status_with_template_config_computes_copilot_virtual_cost(
             str(state_db),
             "--config",
             str(config_path),
-            "status",
+            "run", "status",
             "1",
             "--json",
         ],
@@ -1536,7 +1555,8 @@ def test_cli_status_human_output_contains_actual_virtual_and_savings(tmp_path) -
     create_source_db(source_db)
 
     runner.invoke(app, ["--db", str(state_db), "init"])
-    runner.invoke(app, ["--db", str(state_db), "start", "--name", "test-session"])
+    runner.invoke(app,
+        ["--db", str(state_db), "run", "start", "--name", "test-session"])
     runner.invoke(
         app,
         [
@@ -1550,7 +1570,7 @@ def test_cli_status_human_output_contains_actual_virtual_and_savings(tmp_path) -
         ],
     )
 
-    result = runner.invoke(app, ["--db", str(state_db), "status", "1"])
+    result = runner.invoke(app, ["--db", str(state_db), "run", "status", "1"])
 
     assert result.exit_code == 0, result.output
     assert "Costs" in result.output
@@ -1564,7 +1584,7 @@ def test_cli_status_human_output_lists_unconfigured_models(tmp_path) -> None:
 
     result = runner.invoke(
         app,
-        ["--db", str(state_db), "--config", str(config_path), "status", "1"],
+        ["--db", str(state_db), "--config", str(config_path), "run", "status", "1"],
     )
 
     assert result.exit_code == 0, result.output
@@ -1585,7 +1605,7 @@ def test_cli_status_json_contains_unconfigured_models(tmp_path) -> None:
             str(state_db),
             "--config",
             str(config_path),
-            "status",
+            "run", "status",
             "1",
             "--json",
         ],
@@ -1621,7 +1641,7 @@ def test_cli_status_price_state_unpriced_filters_model_table(tmp_path) -> None:
             str(state_db),
             "--config",
             str(config_path),
-            "status",
+            "run", "status",
             "1",
             "--json",
             "--price-state",
@@ -1646,7 +1666,7 @@ def test_cli_status_sort_and_limit_apply_to_model_rows_only(tmp_path) -> None:
             str(state_db),
             "--config",
             str(config_path),
-            "status",
+            "run", "status",
             "1",
             "--json",
             "--sort",
@@ -1775,7 +1795,7 @@ def test_cli_status_rejects_invalid_display_filter_values(tmp_path) -> None:
             str(state_db),
             "--config",
             str(config_path),
-            "status",
+            "run", "status",
             "1",
             "--price-state",
             "bogus",
@@ -1788,7 +1808,7 @@ def test_cli_status_rejects_invalid_display_filter_values(tmp_path) -> None:
             str(state_db),
             "--config",
             str(config_path),
-            "status",
+            "run", "status",
             "1",
             "--sort",
             "bogus",
@@ -2158,7 +2178,8 @@ def test_cli_watch_pi_exits_cleanly_on_ctrl_c(tmp_path, monkeypatch) -> None:
     create_pi_session_file(session_file)
 
     runner.invoke(app, ["--db", str(state_db), "init"])
-    runner.invoke(app, ["--db", str(state_db), "start", "--name", "test-session"])
+    runner.invoke(app,
+        ["--db", str(state_db), "run", "start", "--name", "test-session"])
 
     def interrupt_after_first_sleep(_interval: float) -> None:
         raise KeyboardInterrupt
@@ -2190,7 +2211,8 @@ def test_cli_watch_codex_exits_cleanly_on_ctrl_c(tmp_path, monkeypatch) -> None:
     create_codex_session_file(codex_file)
 
     runner.invoke(app, ["--db", str(state_db), "init"])
-    runner.invoke(app, ["--db", str(state_db), "start", "--name", "test-session"])
+    runner.invoke(app,
+        ["--db", str(state_db), "run", "start", "--name", "test-session"])
 
     def interrupt_after_first_sleep(_interval: float) -> None:
         raise KeyboardInterrupt
@@ -2222,7 +2244,8 @@ def test_cli_watch_amp_exits_cleanly_on_ctrl_c(tmp_path, monkeypatch) -> None:
     create_amp_source(source_path)
 
     runner.invoke(app, ["--db", str(state_db), "init"])
-    runner.invoke(app, ["--db", str(state_db), "start", "--name", "test-session"])
+    runner.invoke(app,
+        ["--db", str(state_db), "run", "start", "--name", "test-session"])
 
     def interrupt_after_first_sleep(_interval: float) -> None:
         raise KeyboardInterrupt
@@ -2254,7 +2277,8 @@ def test_cli_import_pi_without_path_or_env_fails(tmp_path, monkeypatch) -> None:
     monkeypatch.delenv("TOKTRAIL_PI_SESSIONS", raising=False)
 
     runner.invoke(app, ["--db", str(state_db), "init"])
-    runner.invoke(app, ["--db", str(state_db), "start", "--name", "test-session"])
+    runner.invoke(app,
+        ["--db", str(state_db), "run", "start", "--name", "test-session"])
     result = runner.invoke(
         app,
         [
