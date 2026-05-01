@@ -5,8 +5,12 @@ from pathlib import Path
 
 from toktrail import db as db_module
 from toktrail.api._common import _load_costing_config, _open_state_db
-from toktrail.api._conversions import _to_public_report, _to_public_series_report
-from toktrail.api.models import RunReport, UsageSeriesReport
+from toktrail.api._conversions import (
+    _to_public_report,
+    _to_public_series_report,
+    _to_public_subscription_report,
+)
+from toktrail.api.models import RunReport, SubscriptionUsageReport, UsageSeriesReport
 from toktrail.errors import (
     InvalidAPIUsageError,
     StateDatabaseError,
@@ -207,4 +211,32 @@ def usage_series_report(
     return _to_public_series_report(report)
 
 
-__all__ = ["session_report", "usage_report", "usage_series_report"]
+def subscription_usage_report(
+    db_path: Path | None = None,
+    *,
+    provider_id: str | None = None,
+    now_ms: int | None = None,
+    config_path: Path | None = None,
+) -> SubscriptionUsageReport:
+    conn, _ = _open_state_db(db_path)
+    try:
+        report = db_module.summarize_subscription_usage(
+            conn,
+            _load_costing_config(config_path),
+            provider_id=provider_id,
+            now_ms=now_ms,
+        )
+    except ValueError as exc:
+        raise StateDatabaseError(str(exc)) from exc
+    finally:
+        conn.close()
+
+    return _to_public_subscription_report(report)
+
+
+__all__ = [
+    "session_report",
+    "usage_report",
+    "usage_series_report",
+    "subscription_usage_report",
+]

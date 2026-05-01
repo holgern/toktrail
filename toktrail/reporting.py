@@ -158,6 +158,46 @@ class HarnessSummaryRow:
 
 
 @dataclass(frozen=True)
+class ProviderSummaryRow:
+    provider_id: str
+    message_count: int
+    tokens: TokenBreakdown
+    costs: CostTotals
+
+    @property
+    def total_tokens(self) -> int:
+        return self.tokens.total
+
+    @property
+    def source_cost_usd(self) -> Decimal:
+        return self.costs.source_cost_usd
+
+    @property
+    def actual_cost_usd(self) -> Decimal:
+        return self.costs.actual_cost_usd
+
+    @property
+    def virtual_cost_usd(self) -> Decimal:
+        return self.costs.virtual_cost_usd
+
+    @property
+    def savings_usd(self) -> Decimal:
+        return self.costs.savings_usd
+
+    @property
+    def unpriced_count(self) -> int:
+        return self.costs.unpriced_count
+
+    def as_dict(self) -> dict[str, int | float | str]:
+        return {
+            "provider_id": self.provider_id,
+            "message_count": self.message_count,
+            **self.tokens.as_dict(),
+            **self.costs.as_dict(),
+        }
+
+
+@dataclass(frozen=True)
 class ModelSummaryRow:
     provider_id: str
     model_id: str
@@ -298,6 +338,7 @@ class SimulationSummaryRow:
 class RunReport:
     session: Run | None
     totals: SessionTotals
+    by_provider: list[ProviderSummaryRow]
     by_harness: list[HarnessSummaryRow]
     by_model: list[ModelSummaryRow]
     by_activity: list[ActivitySummaryRow]
@@ -317,11 +358,76 @@ class RunReport:
             },
             "filters": self.filters.as_dict(),
             "totals": self.totals.as_dict(),
+            "by_provider": [row.as_dict() for row in self.by_provider],
             "by_harness": [row.as_dict() for row in self.by_harness],
             "by_model": [row.as_dict() for row in self.by_model],
             "by_activity": [row.as_dict() for row in self.by_activity],
             "simulations": [row.as_dict() for row in self.simulations],
             "unconfigured_models": [row.as_dict() for row in self.unconfigured_models],
+        }
+
+
+@dataclass(frozen=True)
+class SubscriptionUsagePeriod:
+    period: str
+    since_ms: int
+    until_ms: int
+    limit_usd: Decimal
+    used_usd: Decimal
+    remaining_usd: Decimal
+    over_limit_usd: Decimal
+    percent_used: Decimal | None
+    message_count: int
+    tokens: TokenBreakdown
+    costs: CostTotals
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "period": self.period,
+            "since_ms": self.since_ms,
+            "until_ms": self.until_ms,
+            "limit_usd": str(self.limit_usd),
+            "used_usd": str(self.used_usd),
+            "remaining_usd": str(self.remaining_usd),
+            "over_limit_usd": str(self.over_limit_usd),
+            "percent_used": None
+            if self.percent_used is None
+            else str(self.percent_used),
+            "message_count": self.message_count,
+            "tokens": self.tokens.as_dict(),
+            "costs": self.costs.as_dict(),
+        }
+
+
+@dataclass(frozen=True)
+class SubscriptionUsageRow:
+    provider_id: str
+    display_name: str
+    timezone: str | None
+    cycle_start: str
+    cost_basis: str
+    periods: tuple[SubscriptionUsagePeriod, ...]
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "provider_id": self.provider_id,
+            "display_name": self.display_name,
+            "timezone": self.timezone,
+            "cycle_start": self.cycle_start,
+            "cost_basis": self.cost_basis,
+            "periods": [period.as_dict() for period in self.periods],
+        }
+
+
+@dataclass(frozen=True)
+class SubscriptionUsageReport:
+    generated_at_ms: int
+    subscriptions: tuple[SubscriptionUsageRow, ...]
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "generated_at_ms": self.generated_at_ms,
+            "subscriptions": [row.as_dict() for row in self.subscriptions],
         }
 
 

@@ -2499,3 +2499,242 @@ opencode = "{opencode_db}"
     assert len(events) >= 1
     assert all(event["type"] == "usage_delta" for event in events)
     assert events[0]["delta"]["total"] > 0
+
+
+
+def create_opencode_go_source_db(path: Path) -> None:
+    conn = create_opencode_db(path)
+    opencode_go = deepcopy(VALID_ASSISTANT)
+    opencode_go["id"] = "msg-opencode-go"
+    opencode_go["providerID"] = "opencode-go"
+    opencode_go["modelID"] = "opencode-go/deepseek-v4-pro"
+    opencode_go["cost"] = 3.2
+    opencode_go["tokens"] = {
+        "input": 120,
+        "output": 30,
+        "reasoning": 0,
+        "cache": {"read": 0, "write": 0},
+    }
+    insert_message(conn, row_id="row-opencode-go", session_id="ses-1", data=opencode_go)
+    conn.commit()
+    conn.close()
+
+
+def write_subscriptions_config(path: Path) -> None:
+    path.write_text(
+        """
+config_version = 1
+
+[[subscriptions]]
+provider = "opencode-go"
+display_name = "OpenCode Go"
+timezone = "UTC"
+cycle_start = "2023-11-01"
+cost_basis = "source"
+daily_limit_usd = 10
+weekly_limit_usd = 50
+monthly_limit_usd = 200
+""".strip(),
+        encoding="utf-8",
+    )
+
+
+def test_cli_usage_summary_human_output_contains_by_provider(tmp_path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    source_db = tmp_path / "opencode.db"
+    create_source_db(source_db)
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    runner.invoke(app, ["--db", str(state_db), "run", "start", "--name", "test"])
+    runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "import",
+            "--harness",
+            "opencode",
+            "--source",
+            str(source_db),
+        ],
+    )
+
+    result = runner.invoke(app, ["--db", str(state_db), "usage", "summary"])
+
+    assert result.exit_code == 0, result.output
+    assert "By provider" in result.output
+
+
+def test_cli_usage_summary_json_contains_by_provider(tmp_path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    source_db = tmp_path / "opencode.db"
+    create_source_db(source_db)
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    runner.invoke(app, ["--db", str(state_db), "run", "start", "--name", "test"])
+    runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "import",
+            "--harness",
+            "opencode",
+            "--source",
+            str(source_db),
+        ],
+    )
+
+    result = runner.invoke(app, ["--db", str(state_db), "usage", "summary", "--json"])
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert "by_provider" in payload
+    assert payload["by_provider"][0]["provider_id"] == "anthropic"
+
+
+def test_cli_subscriptions_prints_configured_provider_and_periods(tmp_path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    source_db = tmp_path / "opencode-go.db"
+    config_path = tmp_path / "toktrail.toml"
+    create_opencode_go_source_db(source_db)
+    write_subscriptions_config(config_path)
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "import",
+            "--no-session",
+            "--harness",
+            "opencode",
+            "--source",
+            str(source_db),
+        ],
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "--config",
+            str(config_path),
+            "subscriptions",
+            "--now-ms",
+            "1700000000000",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "OpenCode Go (opencode-go)" in result.output
+    assert "daily" in result.output
+    assert "weekly" in result.output
+    assert "monthly" in result.output
+
+
+def test_cli_subscriptions_provider_filter_json_shape(tmp_path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    source_db = tmp_path / "opencode-go.db"
+    config_path = tmp_path / "toktrail.toml"
+    create_opencode_go_source_db(source_db)
+    write_subscriptions_config(config_path)
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "import",
+            "--no-session",
+            "--harness",
+            "opencode",
+            "--source",
+            str(source_db),
+        ],
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "--config",
+            str(config_path),
+            "subscriptions",
+            "--provider",
+            "opencode-go",
+            "--json",
+            "--now-ms",
+            "1700000000000",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert "generated_at_ms" in payload
+    assert len(payload["subscriptions"]) == 1
+    assert payload["subscriptions"][0]["provider_id"] == "opencode-go"
+    assert [period["period"] for period in payload["subscriptions"][0]["periods"]] == [
+        "daily",
+        "weekly",
+        "monthly",
+    ]
+
+
+def test_cli_subscriptions_no_configured_subscriptions_is_clear(tmp_path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    result = runner.invoke(app, ["--db", str(state_db), "subscriptions"])
+
+    assert result.exit_code == 0, result.output
+    assert "No provider subscriptions configured." in result.output
+
+
+def test_cli_subscriptions_unknown_provider_filter_is_clear(tmp_path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    source_db = tmp_path / "opencode-go.db"
+    config_path = tmp_path / "toktrail.toml"
+    create_opencode_go_source_db(source_db)
+    write_subscriptions_config(config_path)
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "import",
+            "--no-session",
+            "--harness",
+            "opencode",
+            "--source",
+            str(source_db),
+        ],
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "--config",
+            str(config_path),
+            "subscriptions",
+            "--provider",
+            "unknown-provider",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "No subscriptions matched provider unknown-provider." in result.output

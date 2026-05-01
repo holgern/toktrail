@@ -43,6 +43,8 @@ def test_public_models_star_export_includes_documented_models() -> None:
 
     assert "UnconfiguredModelRow" in namespace
     assert "RunReport" in namespace
+    assert "ProviderSummaryRow" in namespace
+    assert "SubscriptionUsageReport" in namespace
     assert "FinalizedManualRun" in namespace
     assert "UsageSeriesBucket" in namespace
     assert "UsageSeriesInstance" in namespace
@@ -60,11 +62,15 @@ def test_root_api_exports_documented_models_and_functions() -> None:
         "ImportUsageResult",
         "ModelSummaryRow",
         "PreparedManualRun",
+        "ProviderSummaryRow",
         "ScanUsageResult",
         "SessionTotals",
         "SourceSessionDiff",
         "SourceSessionSnapshot",
         "SourceSessionSummary",
+        "SubscriptionUsagePeriod",
+        "SubscriptionUsageRow",
+        "SubscriptionUsageReport",
         "TokenBreakdown",
         "Run",
         "RunReport",
@@ -101,6 +107,7 @@ def test_root_api_exports_documented_models_and_functions() -> None:
         "resolve_toktrail_db_path",
         "scan_usage",
         "session_report",
+        "subscription_usage_report",
         "start_run",
         "stop_run",
         "supported_harnesses",

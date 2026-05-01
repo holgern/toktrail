@@ -8,6 +8,7 @@ import pytest
 from toktrail.periods import (
     bucket_for_timestamp,
     parse_cli_boundary,
+    resolve_subscription_cycle_window,
     resolve_time_range,
 )
 
@@ -74,3 +75,104 @@ def test_bucket_for_timestamp_daily_weekly_monthly() -> None:
 def test_parse_cli_boundary_rejects_invalid_date() -> None:
     with pytest.raises(ValueError, match="Invalid time boundary"):
         parse_cli_boundary("2025-99-99", tz=ZoneInfo("UTC"))
+
+
+def test_resolve_subscription_cycle_window_daily_from_cycle_start_timezone() -> None:
+    tz = ZoneInfo("Europe/Berlin")
+    now_ms = int(datetime(2026, 5, 3, 10, 0, tzinfo=tz).timestamp() * 1000)
+
+    window = resolve_subscription_cycle_window(
+        period="daily",
+        cycle_start="2026-05-01",
+        timezone_name="Europe/Berlin",
+        now_ms=now_ms,
+    )
+
+    since = datetime.fromtimestamp(window.since_ms / 1000, tz=tz)
+    until = datetime.fromtimestamp(window.until_ms / 1000, tz=tz)
+    assert since == datetime(2026, 5, 3, 0, 0, tzinfo=tz)
+    assert until == datetime(2026, 5, 4, 0, 0, tzinfo=tz)
+
+
+def test_resolve_subscription_cycle_window_weekly_anchors_to_cycle_start() -> None:
+    tz = ZoneInfo("UTC")
+    now_ms = int(datetime(2026, 5, 10, 12, 0, tzinfo=tz).timestamp() * 1000)
+
+    window = resolve_subscription_cycle_window(
+        period="weekly",
+        cycle_start="2026-05-01",
+        timezone_name="UTC",
+        now_ms=now_ms,
+    )
+
+    since = datetime.fromtimestamp(window.since_ms / 1000, tz=tz)
+    until = datetime.fromtimestamp(window.until_ms / 1000, tz=tz)
+    assert since == datetime(2026, 5, 8, 0, 0, tzinfo=tz)
+    assert until == datetime(2026, 5, 15, 0, 0, tzinfo=tz)
+
+
+def test_resolve_subscription_cycle_window_monthly_anchors_day_of_month() -> None:
+    tz = ZoneInfo("UTC")
+    now_ms = int(datetime(2026, 7, 20, 12, 0, tzinfo=tz).timestamp() * 1000)
+
+    window = resolve_subscription_cycle_window(
+        period="monthly",
+        cycle_start="2026-05-15",
+        timezone_name="UTC",
+        now_ms=now_ms,
+    )
+
+    since = datetime.fromtimestamp(window.since_ms / 1000, tz=tz)
+    until = datetime.fromtimestamp(window.until_ms / 1000, tz=tz)
+    assert since == datetime(2026, 7, 15, 0, 0, tzinfo=tz)
+    assert until == datetime(2026, 8, 15, 0, 0, tzinfo=tz)
+
+
+def test_resolve_subscription_cycle_window_monthly_clamps_day_31() -> None:
+    tz = ZoneInfo("UTC")
+    now_ms = int(datetime(2026, 3, 1, 12, 0, tzinfo=tz).timestamp() * 1000)
+
+    window = resolve_subscription_cycle_window(
+        period="monthly",
+        cycle_start="2026-01-31",
+        timezone_name="UTC",
+        now_ms=now_ms,
+    )
+
+    since = datetime.fromtimestamp(window.since_ms / 1000, tz=tz)
+    until = datetime.fromtimestamp(window.until_ms / 1000, tz=tz)
+    assert since == datetime(2026, 2, 28, 0, 0, tzinfo=tz)
+    assert until == datetime(2026, 3, 28, 0, 0, tzinfo=tz)
+
+
+def test_resolve_subscription_cycle_window_date_only_uses_midnight() -> None:
+    tz = ZoneInfo("Europe/Berlin")
+    now_ms = int(datetime(2026, 5, 1, 12, 0, tzinfo=tz).timestamp() * 1000)
+
+    window = resolve_subscription_cycle_window(
+        period="daily",
+        cycle_start="2026-05-01",
+        timezone_name="Europe/Berlin",
+        now_ms=now_ms,
+    )
+
+    since = datetime.fromtimestamp(window.since_ms / 1000, tz=tz)
+    assert since.hour == 0
+    assert since.minute == 0
+
+
+def test_subscription_cycle_window_before_start_returns_first_window() -> None:
+    tz = ZoneInfo("UTC")
+    now_ms = int(datetime(2026, 4, 1, 0, 0, tzinfo=tz).timestamp() * 1000)
+
+    window = resolve_subscription_cycle_window(
+        period="monthly",
+        cycle_start="2026-05-01",
+        timezone_name="UTC",
+        now_ms=now_ms,
+    )
+
+    since = datetime.fromtimestamp(window.since_ms / 1000, tz=tz)
+    until = datetime.fromtimestamp(window.until_ms / 1000, tz=tz)
+    assert since == datetime(2026, 5, 1, 0, 0, tzinfo=tz)
+    assert until == datetime(2026, 6, 1, 0, 0, tzinfo=tz)

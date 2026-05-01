@@ -15,6 +15,7 @@ The preferred CLI workflow is:
    toktrail import
    toktrail status
    toktrail usage today
+   toktrail subscriptions
    toktrail sessions
    toktrail stop
 
@@ -52,6 +53,7 @@ Core commands
    toktrail status --split-thinking
    toktrail usage today
    toktrail usage last-week --utc --json
+   toktrail subscriptions --provider opencode-go --json
    toktrail sessions
    toktrail sessions opencode
    toktrail sessions pi
@@ -65,3 +67,17 @@ Core commands
 
 For harness-session inspection, use ``toktrail sessions <harness>`` to inspect
 raw harness sessions without mutating toktrail state.
+
+
+Provider subscription status
+----------------------------
+
+Use ``toktrail subscriptions`` to inspect configured ``[[subscriptions]]`` quota
+windows. The command reports daily, weekly, and monthly windows that are
+configured for each provider, including used, remaining, and over-limit values.
+
+.. code-block:: bash
+
+   toktrail subscriptions
+   toktrail subscriptions --provider opencode-go
+   toktrail subscriptions --period monthly --json

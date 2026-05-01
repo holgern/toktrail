@@ -145,7 +145,8 @@ def summarize_events_by_activity(
             event.agent or "unknown",
         ),
     ).values():
-        bucket = grouped.setdefault(atom.agent, _AggregateBucket())
+        agent_key = atom.agent or "unknown"
+        bucket = grouped.setdefault(agent_key, _AggregateBucket())
         bucket.add_atom(atom, config)
     return sorted(
         (

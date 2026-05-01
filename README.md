@@ -50,7 +50,7 @@ importing internals like `toktrail.db` or `toktrail.adapters.*`.
 from pathlib import Path
 
 from toktrail.api.imports import import_usage
-from toktrail.api.reports import session_report, usage_report
+from toktrail.api.reports import session_report, subscription_usage_report, usage_report
 from toktrail.api.sessions import init_state, start_session
 
 db_path = Path(".toktrail/toktrail.db")
@@ -62,6 +62,7 @@ session = start_session(db_path, name="benchmark-run")
 import_usage(db_path, "opencode", session_id=session.id, source_path=source_path)
 session_usage = session_report(db_path, session.id)
 today_usage = usage_report(db_path, period="today", timezone="UTC")
+subscription_usage = subscription_usage_report(db_path, provider_id="opencode-go")
 ```
 
 See [`API.md`](API.md) for the stable import boundary, public models, workflow
@@ -122,6 +123,8 @@ toktrail usage today
 toktrail usage last-week --utc --json
 toktrail usage --since 2026-05-01 --until 2026-06-01 --timezone Europe/Berlin
 toktrail usage --price-state priced --sort provider --limit 10 --json
+toktrail subscriptions
+toktrail subscriptions --provider opencode-go --json
 ```
 
 Stop the active tracking session:
@@ -143,6 +146,7 @@ toktrail import
 toktrail status
 toktrail usage today
 toktrail sessions
+toktrail subscriptions
 toktrail stop
 ```
 
@@ -166,6 +170,18 @@ amp = "~/.local/share/amp/threads"
 claude = "~/.claude/projects"
 ```
 
+```toml
+[[subscriptions]]
+provider = "opencode-go"
+display_name = "OpenCode Go"
+timezone = "Europe/Berlin"
+cycle_start = "2026-05-01"
+cost_basis = "source"
+daily_limit_usd = 10
+weekly_limit_usd = 50
+monthly_limit_usd = 200
+```
+
 `imports.sources.<harness>` accepts either a single path string or a list of
 paths. Use `toktrail import --harness <name> --source <path>` for one-off
 imports. The pre-release contract does not preserve harness-specific
@@ -186,6 +202,7 @@ toktrail start --name refactor-auth-flow
 toktrail stop
 toktrail stop 3
 toktrail sessions
+toktrail subscriptions
 toktrail sessions pi
 toktrail sessions pi pi_ses_001
 ```
@@ -213,6 +230,7 @@ toktrail pricing list
 toktrail pricing list --used-only
 toktrail pricing list --missing-only
 toktrail config validate
+toktrail subscriptions
 toktrail --config /path/to/config.toml status --json
 ```
 

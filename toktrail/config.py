@@ -17,6 +17,7 @@ ActualCostMode = Literal["source", "zero", "pricing"]
 VirtualCostMode = Literal["zero", "pricing"]
 MissingPriceMode = Literal["zero", "warn"]
 ImportMissingSourceMode = Literal["warn", "error", "skip"]
+SubscriptionCostBasis = Literal["source", "actual", "virtual"]
 
 CONFIG_VERSION = 1
 DEFAULT_TEMPLATE_NAME = "default"
@@ -25,6 +26,7 @@ _VALID_ACTUAL_COST_MODES = {"source", "zero", "pricing"}
 _VALID_VIRTUAL_COST_MODES = {"zero", "pricing"}
 _VALID_MISSING_PRICE_MODES = {"zero", "warn"}
 _VALID_IMPORT_MISSING_SOURCE_MODES = {"warn", "error", "skip"}
+_VALID_SUBSCRIPTION_COST_BASES = {"source", "actual", "virtual"}
 _PRICE_FIELDS = {
     "provider",
     "model",
@@ -46,6 +48,25 @@ _COSTING_FIELDS = {
     "price_profile",
 }
 _PRICING_FIELDS = {"virtual", "actual"}
+_SUBSCRIPTION_FIELDS = {
+    "provider",
+    "display_name",
+    "timezone",
+    "cycle_start",
+    "cost_basis",
+    "daily_limit_usd",
+    "weekly_limit_usd",
+    "monthly_limit_usd",
+    "enabled",
+}
+_ROOT_FIELDS = {
+    "config_version",
+    "imports",
+    "costing",
+    "actual_cost",
+    "pricing",
+    "subscriptions",
+}
 _SUPPORTED_HARNESSES = {
     "opencode",
     "pi",
@@ -86,6 +107,16 @@ vibe = "~/.vibe/logs/session"
 default_actual_mode = "source"
 default_virtual_mode = "pricing"
 missing_price = "warn"
+
+# [[subscriptions]]
+# provider = "opencode-go"
+# display_name = "OpenCode Go"
+# timezone = "Europe/Berlin"
+# cycle_start = "2026-05-01"
+# cost_basis = "source"
+# daily_limit_usd = 10.00
+# weekly_limit_usd = 50.00
+# monthly_limit_usd = 200.00
 
 [[actual_cost]]
 harness = "opencode"
@@ -150,6 +181,16 @@ default_actual_mode = "source"
 default_virtual_mode = "pricing"
 missing_price = "warn"
 price_profile = "copilot-public-api-equivalent"
+
+# [[subscriptions]]
+# provider = "opencode-go"
+# display_name = "OpenCode Go"
+# timezone = "Europe/Berlin"
+# cycle_start = "2026-05-01"
+# cost_basis = "source"
+# daily_limit_usd = 10.00
+# weekly_limit_usd = 50.00
+# monthly_limit_usd = 200.00
 
 [[actual_cost]]
 harness = "copilot"
@@ -468,6 +509,23 @@ class ActualCostRule:
 
 
 @dataclass(frozen=True)
+class SubscriptionConfig:
+    provider: str
+    display_name: str | None = None
+    timezone: str | None = None
+    cycle_start: str = ""
+    cost_basis: SubscriptionCostBasis = "source"
+    daily_limit_usd: float | None = None
+    weekly_limit_usd: float | None = None
+    monthly_limit_usd: float | None = None
+    enabled: bool = True
+
+    @property
+    def label(self) -> str:
+        return self.display_name or self.provider
+
+
+@dataclass(frozen=True)
 class CostingConfig:
     config_version: int = CONFIG_VERSION
     default_actual_mode: ActualCostMode = "source"
@@ -477,6 +535,7 @@ class CostingConfig:
     actual_rules: tuple[ActualCostRule, ...] = ()
     virtual_prices: tuple[Price, ...] = ()
     actual_prices: tuple[Price, ...] = ()
+    subscriptions: tuple[SubscriptionConfig, ...] = ()
 
     def resolve_actual_cost_mode(
         self,
@@ -548,6 +607,7 @@ class CostingConfigSummary:
     actual_rule_count: int
     actual_price_count: int
     virtual_price_count: int
+    subscription_count: int
 
 
 def default_costing_config() -> CostingConfig:
@@ -676,6 +736,8 @@ def parse_toktrail_config(data: object) -> ToktrailConfig:
         msg = "Toktrail config must be a TOML table."
         raise ValueError(msg)
 
+    _validate_allowed_keys(data, _ROOT_FIELDS, context="root")
+
     default_config = default_toktrail_config()
     costing_default = default_config.costing
     config_version = _parse_config_version(data.get("config_version", CONFIG_VERSION))
@@ -715,6 +777,7 @@ def parse_toktrail_config(data: object) -> ToktrailConfig:
         pricing_table.get("actual"),
         context="pricing.actual",
     )
+    subscriptions = _parse_subscriptions(data.get("subscriptions"))
 
     return ToktrailConfig(
         costing=CostingConfig(
@@ -726,6 +789,7 @@ def parse_toktrail_config(data: object) -> ToktrailConfig:
             actual_rules=actual_rules,
             virtual_prices=virtual_prices,
             actual_prices=actual_prices,
+            subscriptions=subscriptions,
         ),
         imports=_parse_import_config(
             data.get("imports"),
@@ -744,7 +808,113 @@ def summarize_costing_config(config: CostingConfig) -> CostingConfigSummary:
         actual_rule_count=len(config.actual_rules),
         actual_price_count=len(config.actual_prices),
         virtual_price_count=len(config.virtual_prices),
+        subscription_count=len(config.subscriptions),
     )
+
+
+def _parse_subscriptions(value: object) -> tuple[SubscriptionConfig, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, list):
+        msg = "subscriptions must be an array of tables."
+        raise ValueError(msg)
+
+    subscriptions: list[SubscriptionConfig] = []
+    enabled_providers: set[str] = set()
+    for index, raw_subscription in enumerate(value, start=1):
+        if not isinstance(raw_subscription, dict):
+            msg = f"subscriptions[{index}] must be a TOML table."
+            raise ValueError(msg)
+        _validate_allowed_keys(
+            raw_subscription,
+            _SUBSCRIPTION_FIELDS,
+            context=f"subscriptions[{index}]",
+        )
+        provider_text = _parse_required_identity(
+            raw_subscription.get("provider"),
+            context=f"subscriptions[{index}].provider",
+        )
+        provider = normalize_identity(provider_text)
+        display_name = _parse_optional_string(
+            raw_subscription.get("display_name"),
+            context=f"subscriptions[{index}].display_name",
+        )
+        timezone_name = _parse_optional_string(
+            raw_subscription.get("timezone"),
+            context=f"subscriptions[{index}].timezone",
+        )
+        cycle_start = _parse_string(
+            raw_subscription.get("cycle_start"),
+            context=f"subscriptions[{index}].cycle_start",
+        )
+        if not cycle_start:
+            msg = f"subscriptions[{index}].cycle_start must not be empty."
+            raise ValueError(msg)
+        cost_basis = cast(
+            SubscriptionCostBasis,
+            _parse_choice(
+                raw_subscription.get("cost_basis", "source"),
+                valid=_VALID_SUBSCRIPTION_COST_BASES,
+                context=f"subscriptions[{index}].cost_basis",
+            ),
+        )
+        daily_limit_usd = _parse_positive_float(
+            raw_subscription.get("daily_limit_usd"),
+            context=f"subscriptions[{index}].daily_limit_usd",
+        )
+        weekly_limit_usd = _parse_positive_float(
+            raw_subscription.get("weekly_limit_usd"),
+            context=f"subscriptions[{index}].weekly_limit_usd",
+        )
+        monthly_limit_usd = _parse_positive_float(
+            raw_subscription.get("monthly_limit_usd"),
+            context=f"subscriptions[{index}].monthly_limit_usd",
+        )
+        if (
+            daily_limit_usd is None
+            and weekly_limit_usd is None
+            and monthly_limit_usd is None
+        ):
+            msg = (
+                f"subscriptions[{index}] must define at least one of "
+                "daily_limit_usd, weekly_limit_usd, or monthly_limit_usd."
+            )
+            raise ValueError(msg)
+        enabled = _parse_bool(
+            raw_subscription.get("enabled", True),
+            context=f"subscriptions[{index}].enabled",
+        )
+
+        _validate_subscription_cycle_start(
+            cycle_start=cycle_start,
+            timezone_name=timezone_name,
+            context=f"subscriptions[{index}].cycle_start",
+        )
+
+        if enabled and provider in enabled_providers:
+            msg = (
+                f"subscriptions[{index}].provider duplicates enabled provider "
+                f"{provider!r}."
+            )
+            raise ValueError(msg)
+        if enabled:
+            enabled_providers.add(provider)
+
+        subscriptions.append(
+            SubscriptionConfig(
+                provider=provider,
+                display_name=display_name,
+                timezone=timezone_name,
+                cycle_start=cycle_start,
+                cost_basis=cost_basis,
+                daily_limit_usd=daily_limit_usd,
+                weekly_limit_usd=weekly_limit_usd,
+                monthly_limit_usd=monthly_limit_usd,
+                enabled=enabled,
+            )
+        )
+
+    return tuple(subscriptions)
 
 
 def normalize_identity(value: str) -> str:
@@ -1058,6 +1228,14 @@ def _parse_non_negative_float(
     return numeric_value
 
 
+def _parse_positive_float(value: object, *, context: str) -> float | None:
+    parsed = _parse_non_negative_float(value, context=context, required=False)
+    if parsed is not None and parsed <= 0:
+        msg = f"{context} must be positive."
+        raise ValueError(msg)
+    return parsed
+
+
 def _parse_bool(value: object, *, context: str) -> bool:
     if not isinstance(value, bool):
         msg = f"{context} must be a boolean."
@@ -1109,6 +1287,26 @@ def _parse_choice(
         msg = f"{context} must be one of: {valid_values}"
         raise ValueError(msg)
     return text
+
+
+def _validate_subscription_cycle_start(
+    *,
+    cycle_start: str,
+    timezone_name: str | None,
+    context: str,
+) -> None:
+    from toktrail.periods import resolve_subscription_cycle_window
+
+    try:
+        resolve_subscription_cycle_window(
+            period="daily",
+            cycle_start=cycle_start,
+            timezone_name=timezone_name,
+            now_ms=0,
+        )
+    except ValueError as exc:
+        msg = f"{context} is invalid: {exc}"
+        raise ValueError(msg) from exc
 
 
 def _validate_allowed_keys(

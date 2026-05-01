@@ -14,7 +14,12 @@ from tests.helpers import (
 )
 from toktrail.api.config import init_config
 from toktrail.api.imports import import_usage
-from toktrail.api.reports import session_report, usage_report, usage_series_report
+from toktrail.api.reports import (
+    session_report,
+    subscription_usage_report,
+    usage_report,
+    usage_series_report,
+)
 from toktrail.api.sessions import init_state, start_session
 from toktrail.errors import InvalidAPIUsageError, NoActiveSessionError
 
@@ -186,3 +191,56 @@ def test_session_report_supports_thinking_filter_and_collapse(tmp_path) -> None:
         (row.model_id, row.thinking_level, row.message_count)
         for row in collapsed.by_model
     ] == [("claude-sonnet-4", None, 2)]
+
+
+
+def test_usage_report_exposes_provider_summary(tmp_path) -> None:
+    state_db = tmp_path / "toktrail.db"
+    source_db = tmp_path / "opencode.db"
+    conn = create_opencode_db(source_db)
+    insert_message(conn, row_id="row-1", session_id="ses-1", data=VALID_ASSISTANT)
+    conn.commit()
+    conn.close()
+    init_state(state_db)
+    import_usage(state_db, "opencode", source_path=source_db)
+
+    report = usage_report(state_db)
+
+    assert report.by_provider
+    assert report.by_provider[0].provider_id == "anthropic"
+
+
+def test_subscription_usage_report_returns_public_dataclasses(tmp_path) -> None:
+    state_db = tmp_path / "toktrail.db"
+    source_db = tmp_path / "opencode.db"
+    config_path = tmp_path / "config.toml"
+    conn = create_opencode_db(source_db)
+    insert_message(conn, row_id="row-1", session_id="ses-1", data=VALID_ASSISTANT)
+    conn.commit()
+    conn.close()
+    init_state(state_db)
+    import_usage(state_db, "opencode", source_path=source_db)
+    config_path.write_text(
+        """
+config_version = 1
+
+[[subscriptions]]
+provider = "anthropic"
+cycle_start = "2023-11-01"
+timezone = "UTC"
+cost_basis = "source"
+monthly_limit_usd = 1
+""".strip(),
+        encoding="utf-8",
+    )
+
+    report = subscription_usage_report(
+        state_db,
+        config_path=config_path,
+        now_ms=1700000000000,
+    )
+
+    payload = report.as_dict()
+    assert "generated_at_ms" in payload
+    assert payload["subscriptions"][0]["provider_id"] == "anthropic"
+    assert payload["subscriptions"][0]["periods"][0]["period"] == "monthly"

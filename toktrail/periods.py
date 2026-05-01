@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import calendar
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone, tzinfo
@@ -30,6 +31,14 @@ class TimeBucket:
     label: str
     since_ms: int
     until_ms: int
+
+
+@dataclass(frozen=True)
+class SubscriptionCycleWindow:
+    period: str
+    since_ms: int
+    until_ms: int
+    label: str
 
 
 def current_time_in_zone(tz: tzinfo) -> datetime:
@@ -170,6 +179,96 @@ def _parse_boundary_ms(value: str | None, *, tz: tzinfo) -> int | None:
 
 def _datetime_to_ms(value: datetime) -> int:
     return int(value.timestamp() * 1000)
+
+
+def resolve_subscription_cycle_window(
+    *,
+    period: str,
+    cycle_start: str,
+    timezone_name: str | None,
+    now_ms: int | None = None,
+) -> SubscriptionCycleWindow:
+    normalized_period = period.strip().lower()
+    if normalized_period not in {"daily", "weekly", "monthly"}:
+        msg = "period must be daily, weekly, or monthly."
+        raise ValueError(msg)
+
+    tz = _resolve_timezone(timezone_name=timezone_name, utc=False)
+    cycle_start_dt = _parse_subscription_cycle_start(cycle_start, tz=tz)
+    if now_ms is None:
+        now = current_time_in_zone(tz)
+    else:
+        now = datetime.fromtimestamp(now_ms / 1000, tz=tz)
+
+    if now < cycle_start_dt:
+        since = cycle_start_dt
+    elif normalized_period == "daily":
+        elapsed = now - cycle_start_dt
+        offset = int(elapsed // timedelta(days=1))
+        since = cycle_start_dt + timedelta(days=offset)
+    elif normalized_period == "weekly":
+        elapsed = now - cycle_start_dt
+        offset = int(elapsed // timedelta(days=7))
+        since = cycle_start_dt + timedelta(days=offset * 7)
+    else:
+        month_offset = _month_offset_for_timestamp(cycle_start_dt, now)
+        since = _add_months_with_clamp(cycle_start_dt, month_offset)
+
+    if normalized_period == "daily":
+        until = since + timedelta(days=1)
+    elif normalized_period == "weekly":
+        until = since + timedelta(days=7)
+    else:
+        until = _add_months_with_clamp(since, 1)
+
+    return SubscriptionCycleWindow(
+        period=normalized_period,
+        since_ms=_datetime_to_ms(since),
+        until_ms=_datetime_to_ms(until),
+        label=f"{since.date().isoformat()}..{until.date().isoformat()}",
+    )
+
+
+def _parse_subscription_cycle_start(value: str, *, tz: tzinfo) -> datetime:
+    raw = value.strip()
+    if not raw:
+        msg = "cycle_start must not be empty."
+        raise ValueError(msg)
+
+    normalized = raw[:-1] + "+00:00" if raw.endswith("Z") else raw
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError as exc:
+        msg = f"Invalid cycle_start: {value}"
+        raise ValueError(msg) from exc
+
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=tz)
+    else:
+        parsed = parsed.astimezone(tz)
+    return parsed
+
+
+def _add_months_with_clamp(value: datetime, months: int) -> datetime:
+    month_index = value.month - 1 + months
+    year = value.year + month_index // 12
+    month = month_index % 12 + 1
+    last_day = calendar.monthrange(year, month)[1]
+    day = min(value.day, last_day)
+    return value.replace(year=year, month=month, day=day)
+
+
+def _month_offset_for_timestamp(start: datetime, now: datetime) -> int:
+    offset = (now.year - start.year) * 12 + (now.month - start.month)
+    candidate = _add_months_with_clamp(start, offset)
+    if candidate > now:
+        while candidate > now:
+            offset -= 1
+            candidate = _add_months_with_clamp(start, offset)
+    else:
+        while _add_months_with_clamp(start, offset + 1) <= now:
+            offset += 1
+    return offset
 
 
 def _yyyymmdd_to_iso(value: str) -> str:

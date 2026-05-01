@@ -9,6 +9,7 @@ from toktrail.config import (
     load_toktrail_config,
     normalize_identity,
     render_config_template,
+    summarize_costing_config,
 )
 
 
@@ -225,3 +226,204 @@ def test_price_dataclass_keeps_optional_fields() -> None:
 
     assert price.cached_input_usd_per_1m is None
     assert price.cache_write_usd_per_1m is None
+
+
+def test_load_costing_config_parses_subscription_with_all_fields(tmp_path) -> None:
+    config_path = tmp_path / "toktrail.toml"
+    config_path.write_text(
+        """
+config_version = 1
+
+[[subscriptions]]
+provider = "OpenCode Go"
+display_name = "OpenCode Go"
+timezone = "Europe/Berlin"
+cycle_start = "2026-05-01"
+cost_basis = "source"
+daily_limit_usd = 10.0
+weekly_limit_usd = 50.0
+monthly_limit_usd = 200.0
+enabled = true
+""".strip(),
+        encoding="utf-8",
+    )
+
+    config = load_costing_config(config_path)
+
+    assert len(config.subscriptions) == 1
+    subscription = config.subscriptions[0]
+    assert subscription.provider == "opencode-go"
+    assert subscription.display_name == "OpenCode Go"
+    assert subscription.timezone == "Europe/Berlin"
+    assert subscription.cycle_start == "2026-05-01"
+    assert subscription.cost_basis == "source"
+    assert subscription.daily_limit_usd == 10.0
+    assert subscription.weekly_limit_usd == 50.0
+    assert subscription.monthly_limit_usd == 200.0
+    assert subscription.enabled is True
+
+
+def test_load_costing_config_subscription_defaults_cost_basis_and_enabled(
+    tmp_path,
+) -> None:
+    config_path = tmp_path / "toktrail.toml"
+    config_path.write_text(
+        """
+config_version = 1
+
+[[subscriptions]]
+provider = "anthropic"
+cycle_start = "2026-05-01"
+monthly_limit_usd = 100
+""".strip(),
+        encoding="utf-8",
+    )
+
+    config = load_costing_config(config_path)
+
+    subscription = config.subscriptions[0]
+    assert subscription.cost_basis == "source"
+    assert subscription.enabled is True
+
+
+def test_load_costing_config_rejects_subscription_without_limits(tmp_path) -> None:
+    config_path = tmp_path / "toktrail.toml"
+    config_path.write_text(
+        """
+config_version = 1
+
+[[subscriptions]]
+provider = "anthropic"
+cycle_start = "2026-05-01"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="must define at least one"):
+        load_costing_config(config_path)
+
+
+def test_load_costing_config_rejects_invalid_subscription_cost_basis(tmp_path) -> None:
+    config_path = tmp_path / "toktrail.toml"
+    config_path.write_text(
+        """
+config_version = 1
+
+[[subscriptions]]
+provider = "anthropic"
+cycle_start = "2026-05-01"
+cost_basis = "other"
+monthly_limit_usd = 100
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="cost_basis"):
+        load_costing_config(config_path)
+
+
+def test_load_costing_config_rejects_duplicate_subscription_provider(tmp_path) -> None:
+    config_path = tmp_path / "toktrail.toml"
+    config_path.write_text(
+        """
+config_version = 1
+
+[[subscriptions]]
+provider = "OpenCode Go"
+cycle_start = "2026-05-01"
+monthly_limit_usd = 100
+
+[[subscriptions]]
+provider = "opencode-go"
+cycle_start = "2026-05-01"
+monthly_limit_usd = 200
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="duplicates enabled provider"):
+        load_costing_config(config_path)
+
+
+def test_load_costing_config_rejects_non_positive_subscription_limits(tmp_path) -> None:
+    config_path = tmp_path / "toktrail.toml"
+    config_path.write_text(
+        """
+config_version = 1
+
+[[subscriptions]]
+provider = "anthropic"
+cycle_start = "2026-05-01"
+daily_limit_usd = 0
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="must be positive"):
+        load_costing_config(config_path)
+
+    config_path.write_text(
+        """
+config_version = 1
+
+[[subscriptions]]
+provider = "anthropic"
+cycle_start = "2026-05-01"
+daily_limit_usd = -1
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="must be non-negative"):
+        load_costing_config(config_path)
+
+
+def test_load_costing_config_rejects_invalid_subscription_cycle_start(tmp_path) -> None:
+    config_path = tmp_path / "toktrail.toml"
+    config_path.write_text(
+        """
+config_version = 1
+
+[[subscriptions]]
+provider = "anthropic"
+cycle_start = "not-a-date"
+monthly_limit_usd = 100
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="cycle_start"):
+        load_costing_config(config_path)
+
+
+def test_summarize_costing_config_includes_subscription_count(tmp_path) -> None:
+    config_path = tmp_path / "toktrail.toml"
+    config_path.write_text(
+        """
+config_version = 1
+
+[[subscriptions]]
+provider = "anthropic"
+cycle_start = "2026-05-01"
+monthly_limit_usd = 100
+""".strip(),
+        encoding="utf-8",
+    )
+
+    summary = summarize_costing_config(load_costing_config(config_path))
+
+    assert summary.subscription_count == 1
+
+
+def test_load_costing_config_rejects_unknown_root_keys(tmp_path) -> None:
+    config_path = tmp_path / "toktrail.toml"
+    config_path.write_text(
+        """
+config_version = 1
+unknown_root_key = true
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="root has unsupported keys"):
+        load_costing_config(config_path)

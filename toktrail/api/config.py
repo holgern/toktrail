@@ -33,6 +33,7 @@ def config_summary(config_path: Path | None = None) -> dict[str, object]:
         "actual_rule_count": summary.actual_rule_count,
         "actual_price_count": summary.actual_price_count,
         "virtual_price_count": summary.virtual_price_count,
+        "subscription_count": summary.subscription_count,
     }
 
 

@@ -7,7 +7,7 @@ import shlex
 import sqlite3
 import subprocess
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, NoReturn, cast
@@ -50,6 +50,7 @@ from toktrail.db import (
     insert_usage_events,
     list_tracking_sessions,
     migrate,
+    summarize_subscription_usage,
     summarize_usage,
 )
 from toktrail.errors import InvalidAPIUsageError, ToktrailError
@@ -64,6 +65,8 @@ from toktrail.periods import resolve_time_range
 from toktrail.reporting import (
     CostTotals,
     ModelSummaryRow,
+    ProviderSummaryRow,
+    SubscriptionUsageReport,
     UnconfiguredModelRow,
     UsageReportFilter,
 )
@@ -83,6 +86,7 @@ source_sessions_app = typer.Typer(help="List and inspect harness source sessions
 copilot_app = typer.Typer(help="Inspect and run GitHub Copilot CLI tracking.")
 config_app = typer.Typer(help="Inspect toktrail pricing config.")
 pricing_app = typer.Typer(help="Inspect configured and used model pricing.")
+subscriptions_app = typer.Typer(help="Inspect provider subscription limits.")
 
 app.add_typer(import_app, name="import")
 app.add_typer(watch_app, name="watch")
@@ -92,6 +96,7 @@ app.add_typer(sessions_app, name="sessions")
 app.add_typer(copilot_app, name="copilot")
 app.add_typer(config_app, name="config")
 app.add_typer(pricing_app, name="pricing")
+app.add_typer(subscriptions_app, name="subscriptions")
 
 _VALID_REPORT_PRICE_STATES = {"all", "priced", "unpriced"}
 _VALID_REPORT_SORTS = {
@@ -483,6 +488,49 @@ def runs(
             "started": "Started",
             "ended": "Ended",
         },
+        rich_output=rich_output,
+    )
+
+
+@subscriptions_app.callback(invoke_without_command=True)
+def subscriptions_status(
+    ctx: typer.Context,
+    provider_id: ProviderOption = None,
+    period: Annotated[str, typer.Option("--period")] = "all",
+    json_output: JsonOption = False,
+    rich_output: RichOption = False,
+    now_ms: Annotated[int | None, typer.Option("--now-ms", hidden=True)] = None,
+) -> None:
+    normalized_period = period.strip().lower()
+    if normalized_period not in {"all", "daily", "weekly", "monthly"}:
+        _exit_with_error("--period must be one of: all, daily, weekly, monthly.")
+
+    costing_config = _load_costing_config_or_exit(ctx)
+    conn = _open_toktrail_connection(ctx)
+    try:
+        report = summarize_subscription_usage(
+            conn,
+            costing_config,
+            provider_id=provider_id,
+            now_ms=now_ms,
+        )
+    except ValueError as exc:
+        _exit_with_error(str(exc))
+    finally:
+        conn.close()
+
+    filtered_report = _filter_subscription_usage_report(
+        report,
+        period=normalized_period,
+    )
+
+    if json_output:
+        typer.echo(json.dumps(filtered_report.as_dict(), indent=2))
+        return
+
+    _print_subscription_usage_report(
+        filtered_report,
+        provider_filter=provider_id,
         rich_output=rich_output,
     )
 
@@ -938,6 +986,22 @@ def _print_usage_summary(
         _print_unconfigured_model_table(unconfigured, rich_output=rich_output)
 
     typer.echo("")
+    typer.echo("By provider")
+    by_provider: list[ProviderSummaryRow] = report.by_provider
+    if by_provider:
+        for provider_row in by_provider:
+            typer.echo(
+                f"  {provider_row.provider_id:<12}"
+                f"{_format_int(provider_row.total_tokens):>12} tokens   "
+                f"source {_format_cost(provider_row.source_cost_usd)}   "
+                f"actual {_format_cost(provider_row.actual_cost_usd)}   "
+                f"virtual {_format_cost(provider_row.virtual_cost_usd)}   "
+                f"savings {_format_cost(provider_row.savings_usd)}"
+            )
+    else:
+        typer.echo("  (none)")
+
+    typer.echo("")
     typer.echo("By harness")
     by_harness = report.by_harness
     if by_harness:
@@ -976,6 +1040,101 @@ def _print_usage_summary(
         typer.echo("  (none)")
 
 
+def _filter_subscription_usage_report(
+    report: SubscriptionUsageReport,
+    *,
+    period: str,
+) -> SubscriptionUsageReport:
+    if period == "all":
+        return report
+    subscriptions = []
+    for subscription in report.subscriptions:
+        periods = tuple(item for item in subscription.periods if item.period == period)
+        if not periods:
+            continue
+        subscriptions.append(replace(subscription, periods=periods))
+    return replace(report, subscriptions=tuple(subscriptions))
+
+
+def _print_subscription_usage_report(
+    report: SubscriptionUsageReport,
+    *,
+    provider_filter: str | None,
+    rich_output: bool,
+) -> None:
+    if not report.subscriptions:
+        if provider_filter:
+            typer.echo(f"No subscriptions matched provider {provider_filter}.")
+            return
+        typer.echo("No provider subscriptions configured.")
+        return
+
+    typer.echo("toktrail subscriptions")
+    for subscription in report.subscriptions:
+        typer.echo("")
+        timezone_label = subscription.timezone or "(local)"
+        typer.echo(
+            f"{subscription.display_name} ({subscription.provider_id})  "
+            f"basis={subscription.cost_basis}  "
+            f"timezone={timezone_label}  "
+            f"cycle_start={subscription.cycle_start}"
+        )
+        rows: list[dict[str, str]] = []
+        for period in subscription.periods:
+            left_value = _format_cost(period.remaining_usd)
+            if period.over_limit_usd > 0:
+                left_value = (
+                    f"{left_value} over {_format_cost(period.over_limit_usd)}"
+                )
+            rows.append(
+                {
+                    "period": period.period,
+                    "window": _format_subscription_window(
+                        period.since_ms,
+                        period.until_ms,
+                        timezone_name=subscription.timezone,
+                    ),
+                    "limit": _format_cost(period.limit_usd),
+                    "used": _format_cost(period.used_usd),
+                    "left": left_value,
+                    "used_pct": _format_percent(period.percent_used),
+                }
+            )
+        _print_table(
+            rows,
+            ["period", "window", "limit", "used", "left", "used_pct"],
+            {
+                "period": "period",
+                "window": "window",
+                "limit": "limit",
+                "used": "used",
+                "left": "left",
+                "used_pct": "used%",
+            },
+            rich_output=rich_output,
+        )
+
+
+def _format_subscription_window(
+    since_ms: int,
+    until_ms: int,
+    *,
+    timezone_name: str | None,
+) -> str:
+    from toktrail.periods import _resolve_timezone
+
+    tz = _resolve_timezone(timezone_name=timezone_name, utc=False)
+    since_dt = datetime.datetime.fromtimestamp(since_ms / 1000, tz=tz)
+    until_dt = datetime.datetime.fromtimestamp(until_ms / 1000, tz=tz)
+    return f"{since_dt.date().isoformat()}..{until_dt.date().isoformat()}"
+
+
+def _format_percent(value: Decimal | None) -> str:
+    if value is None:
+        return "-"
+    return f"{value.quantize(Decimal('0.1'))}%"
+
+
 @config_app.command("path")
 def config_path(ctx: typer.Context) -> None:
     typer.echo(_resolve_config_path(ctx))
@@ -1007,6 +1166,7 @@ def config_validate(ctx: typer.Context) -> None:
     typer.echo(f"  actual rules:   {summary.actual_rule_count}")
     typer.echo(f"  actual prices:  {summary.actual_price_count}")
     typer.echo(f"  virtual prices: {summary.virtual_price_count}")
+    typer.echo(f"  subscriptions:  {summary.subscription_count}")
     warnings = [
         price
         for price in (*loaded.config.actual_prices, *loaded.config.virtual_prices)
@@ -1033,6 +1193,7 @@ def config_show(ctx: typer.Context) -> None:
     typer.echo(f"actual rules:    {summary.actual_rule_count}")
     typer.echo(f"actual prices:   {summary.actual_price_count}")
     typer.echo(f"virtual prices:  {summary.virtual_price_count}")
+    typer.echo(f"subscriptions:   {summary.subscription_count}")
     typer.echo("Run `toktrail config prices` to inspect configured price rows.")
 
 
@@ -1356,7 +1517,7 @@ def watch(
     json_output: JsonOption = False,
 ) -> None:
     """Watch configured harnesses and print token usage deltas for the active run."""
-    harness_list: list[str] | None = harnesses  # type: ignore[assignment]
+    harness_list: list[str] | None = harnesses
     try:
         _watch_configured(
             ctx,

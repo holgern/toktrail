@@ -6,7 +6,7 @@ from decimal import Decimal
 from pathlib import Path
 from time import time
 
-from toktrail.config import CostingConfig, default_costing_config
+from toktrail.config import CostingConfig, default_costing_config, normalize_identity
 from toktrail.costing import (
     CostBreakdown,
     SimulationTarget,
@@ -21,9 +21,13 @@ from toktrail.reporting import (
     CostTotals,
     HarnessSummaryRow,
     ModelSummaryRow,
+    ProviderSummaryRow,
     RunReport,
     SessionTotals,
     SimulationSummaryRow,
+    SubscriptionUsagePeriod,
+    SubscriptionUsageReport,
+    SubscriptionUsageRow,
     UnconfiguredModelRow,
     UsageReportFilter,
     UsageSeriesBucket,
@@ -534,6 +538,7 @@ def summarize_usage(
     config = costing_config or default_costing_config()
     totals_tokens = TokenBreakdown()
     totals_costs = CostTotals()
+    by_provider: dict[str, _ReportBucket] = {}
     by_harness: dict[str, _ReportBucket] = {}
     by_model: dict[tuple[str, str, str | None], _ReportBucket] = {}
     by_agent: dict[str, _ReportBucket] = {}
@@ -566,6 +571,7 @@ def summarize_usage(
         totals_tokens = _add_tokens(totals_tokens, atom.tokens)
         totals_costs = _add_cost_breakdown(totals_costs, breakdown)
 
+        by_provider.setdefault(atom.provider_id, _ReportBucket()).add(atom, config)
         by_harness.setdefault(atom.harness, _ReportBucket()).add(atom, config)
         by_model.setdefault(
             (atom.provider_id, atom.model_id, atom.thinking_level),
@@ -613,6 +619,23 @@ def summarize_usage(
     return RunReport(
         session=session,
         totals=SessionTotals(tokens=totals_tokens, costs=totals_costs),
+        by_provider=[
+            ProviderSummaryRow(
+                provider_id=provider_id,
+                message_count=bucket.message_count,
+                tokens=bucket.tokens,
+                costs=bucket.costs,
+            )
+            for provider_id, bucket in sorted(
+                by_provider.items(),
+                key=lambda item: (
+                    -item[1].costs.actual_cost_usd,
+                    -item[1].costs.source_cost_usd,
+                    -item[1].tokens.total,
+                    item[0],
+                ),
+            )
+        ],
         by_harness=[
             HarnessSummaryRow(
                 harness=harness,
@@ -695,6 +718,102 @@ def summarize_usage(
             )
         ],
         filters=filters,
+    )
+
+
+def summarize_subscription_usage(
+    conn: sqlite3.Connection,
+    config: CostingConfig,
+    *,
+    provider_id: str | None = None,
+    now_ms: int | None = None,
+) -> SubscriptionUsageReport:
+    from toktrail.periods import resolve_subscription_cycle_window
+
+    generated_at_ms = _now_ms() if now_ms is None else now_ms
+    provider_filter = (
+        normalize_identity(provider_id) if provider_id is not None else None
+    )
+
+    subscriptions = [
+        subscription
+        for subscription in config.subscriptions
+        if subscription.enabled
+        and (provider_filter is None or subscription.provider == provider_filter)
+    ]
+
+    rows: list[SubscriptionUsageRow] = []
+    for subscription in sorted(subscriptions, key=lambda item: item.provider):
+        periods: list[SubscriptionUsagePeriod] = []
+        for period_name, limit_value in (
+            ("daily", subscription.daily_limit_usd),
+            ("weekly", subscription.weekly_limit_usd),
+            ("monthly", subscription.monthly_limit_usd),
+        ):
+            if limit_value is None:
+                continue
+
+            window = resolve_subscription_cycle_window(
+                period=period_name,
+                cycle_start=subscription.cycle_start,
+                timezone_name=subscription.timezone,
+                now_ms=generated_at_ms,
+            )
+            report = summarize_usage(
+                conn,
+                UsageReportFilter(
+                    provider_id=subscription.provider,
+                    since_ms=window.since_ms,
+                    until_ms=window.until_ms,
+                ),
+                costing_config=config,
+            )
+
+            if subscription.cost_basis == "source":
+                used_usd = report.totals.source_cost_usd
+            elif subscription.cost_basis == "actual":
+                used_usd = report.totals.actual_cost_usd
+            else:
+                used_usd = report.totals.virtual_cost_usd
+
+            limit_usd = Decimal(str(limit_value))
+            remaining_usd = max(limit_usd - used_usd, Decimal(0))
+            over_limit_usd = max(used_usd - limit_usd, Decimal(0))
+            percent_used = (
+                None if limit_usd == 0 else (used_usd / limit_usd) * Decimal(100)
+            )
+            message_count = sum(row.message_count for row in report.by_harness)
+
+            periods.append(
+                SubscriptionUsagePeriod(
+                    period=period_name,
+                    since_ms=window.since_ms,
+                    until_ms=window.until_ms,
+                    limit_usd=limit_usd,
+                    used_usd=used_usd,
+                    remaining_usd=remaining_usd,
+                    over_limit_usd=over_limit_usd,
+                    percent_used=percent_used,
+                    message_count=message_count,
+                    tokens=report.totals.tokens,
+                    costs=report.totals.costs,
+                )
+            )
+
+        rows.append(
+            SubscriptionUsageRow(
+                provider_id=subscription.provider,
+                display_name=subscription.label,
+                timezone=subscription.timezone,
+                cycle_start=subscription.cycle_start,
+                cost_basis=subscription.cost_basis,
+                periods=tuple(periods),
+            )
+        )
+
+    return SubscriptionUsageReport(
+        generated_at_ms=generated_at_ms,
+        subscriptions=tuple(rows),
     )
 
 

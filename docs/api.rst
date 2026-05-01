@@ -36,6 +36,10 @@ Runnable manual-run examples for the stable API are documented in
 .. automodule:: toktrail.api.reports
    :members:
 
+The reports module includes ``subscription_usage_report()`` for provider
+subscription quota windows and ``usage_report()``/``session_report()`` for
+run and period usage summaries with provider-level breakdowns.
+
 .. automodule:: toktrail.api.environment
    :members:
 

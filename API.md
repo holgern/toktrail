@@ -77,7 +77,7 @@ from toktrail.api.sources import (
     scan_usage,
 )
 from toktrail.api.imports import import_configured_usage, import_usage
-from toktrail.api.reports import session_report, usage_report
+from toktrail.api.reports import session_report, subscription_usage_report, usage_report
 from toktrail.api.environment import prepare_environment
 from toktrail.api.workflow import finalize_manual_run, prepare_manual_run
 ```
@@ -135,8 +135,7 @@ Key public models:
 harness provides it. This is reporting metadata only; pricing still keys on
 provider and model identity.
 
-`TrackingSessionReport` now includes `unconfigured_models` so callers can audit
-which harness/provider/model combinations still need configured pricing rows.
+`TrackingSessionReport` now includes `by_provider` and `unconfigured_models` so callers can audit provider-level usage and missing pricing rows.
 
 All public dataclasses are frozen.
 
@@ -192,7 +191,7 @@ from pathlib import Path
 
 from toktrail.api.imports import import_configured_usage, import_usage
 from toktrail.api.sources import capture_source_snapshot, list_source_sessions
-from toktrail.api.reports import session_report, usage_report
+from toktrail.api.reports import session_report, subscription_usage_report, usage_report
 from toktrail.api.sessions import init_state, start_session
 
 db_path = Path(".toktrail/toktrail.db")
@@ -205,6 +204,7 @@ result = import_usage(db_path, "codex", session_id=session.id, source_path=sourc
 source_sessions = list_source_sessions("codex", source_path=source_path, limit=5)
 report = session_report(db_path, session.id)
 window = usage_report(db_path, period="today", timezone="UTC")
+quotas = subscription_usage_report(db_path, provider_id="opencode-go")
 ```
 
 `import_usage()` can import canonical usage rows without an active session. A
@@ -217,6 +217,13 @@ before import with the same public API used for OpenCode, Pi, and Copilot.
 
 `usage_report()` no longer requires `session_id`. When used for canonical
 period/time-range reporting, it returns `TrackingSessionReport(session=None, ...)`.
+
+### Subscription usage report
+
+`subscription_usage_report()` returns provider subscription quota usage for configured
+`[[subscriptions]]`, including daily, weekly, and monthly windows with used, remaining,
+and over-limit cost values based on each subscription `cost_basis` (`source`, `actual`,
+or `virtual`).
 
 ### Configured import
 

@@ -12,6 +12,7 @@ from toktrail.api.models import (
     HarnessSummaryRow,
     ImportUsageResult,
     ModelSummaryRow,
+    ProviderSummaryRow,
     Run,
     RunReport,
     SessionTotals,
@@ -163,6 +164,16 @@ def test_print_report_formats_public_dataclasses(capsys) -> None:
             ),
             message_count=2,
         ),
+        by_provider=(
+            ProviderSummaryRow(
+                provider_id="openai",
+                message_count=2,
+                tokens=TokenBreakdown(
+                    input=10, output=20, reasoning=3, cache_read=4, cache_write=5
+                ),
+                costs=CostTotals(actual_cost_usd=0.02, virtual_cost_usd=0.05),
+            ),
+        ),
         by_harness=(
             HarnessSummaryRow(
                 harness="codex",
@@ -239,6 +250,7 @@ def test_print_finalized_formats_import_and_source_session(capsys) -> None:
             costs=CostTotals(source_cost_usd=0.01),
             message_count=1,
         ),
+        by_provider=(),
         by_harness=(),
         by_model=(),
         by_activity=(),

@@ -6,10 +6,14 @@ from toktrail.api.models import (
     CostTotals,
     HarnessSummaryRow,
     ModelSummaryRow,
+    ProviderSummaryRow,
     Run,
     RunReport,
     SessionTotals,
     SourceSessionSummary,
+    SubscriptionUsagePeriod,
+    SubscriptionUsageReport,
+    SubscriptionUsageRow,
     TokenBreakdown,
     UnconfiguredModelRow,
     UsageEvent,
@@ -39,10 +43,22 @@ from toktrail.reporting import (
     ModelSummaryRow as InternalModelSummaryRow,
 )
 from toktrail.reporting import (
+    ProviderSummaryRow as InternalProviderSummaryRow,
+)
+from toktrail.reporting import (
     RunReport as InternalRunReport,
 )
 from toktrail.reporting import (
     SessionTotals as InternalSessionTotals,
+)
+from toktrail.reporting import (
+    SubscriptionUsagePeriod as InternalSubscriptionUsagePeriod,
+)
+from toktrail.reporting import (
+    SubscriptionUsageReport as InternalSubscriptionUsageReport,
+)
+from toktrail.reporting import (
+    SubscriptionUsageRow as InternalSubscriptionUsageRow,
 )
 from toktrail.reporting import (
     UnconfiguredModelRow as InternalUnconfiguredModelRow,
@@ -151,6 +167,15 @@ def _to_public_harness_row(value: InternalHarnessSummaryRow) -> HarnessSummaryRo
     )
 
 
+def _to_public_provider_row(value: InternalProviderSummaryRow) -> ProviderSummaryRow:
+    return ProviderSummaryRow(
+        provider_id=value.provider_id,
+        message_count=value.message_count,
+        tokens=_to_public_token_breakdown(value.tokens),
+        costs=_to_public_cost_totals(value.costs),
+    )
+
+
 def _to_public_model_row(value: InternalModelSummaryRow) -> ModelSummaryRow:
     return ModelSummaryRow(
         provider_id=value.provider_id,
@@ -186,6 +211,7 @@ def _to_public_unconfigured_model_row(
 
 
 def _to_public_report(value: InternalRunReport) -> RunReport:
+    by_provider = tuple(_to_public_provider_row(row) for row in value.by_provider)
     by_harness = tuple(_to_public_harness_row(row) for row in value.by_harness)
     by_model = tuple(_to_public_model_row(row) for row in value.by_model)
     by_activity = tuple(_to_public_activity_row(row) for row in value.by_activity)
@@ -199,11 +225,57 @@ def _to_public_report(value: InternalRunReport) -> RunReport:
     return RunReport(
         session=_to_public_tracking_session(value.session),
         totals=_to_public_session_totals(value.totals, message_count=message_count),
+        by_provider=by_provider,
         by_harness=by_harness,
         by_model=by_model,
         by_activity=by_activity,
         unconfigured_models=unconfigured_models,
         filters=filters,
+    )
+
+
+def _to_public_subscription_period(
+    value: InternalSubscriptionUsagePeriod,
+) -> SubscriptionUsagePeriod:
+    return SubscriptionUsagePeriod(
+        period=value.period,
+        since_ms=value.since_ms,
+        until_ms=value.until_ms,
+        limit_usd=value.limit_usd,
+        used_usd=value.used_usd,
+        remaining_usd=value.remaining_usd,
+        over_limit_usd=value.over_limit_usd,
+        percent_used=value.percent_used,
+        message_count=value.message_count,
+        tokens=_to_public_token_breakdown(value.tokens),
+        costs=_to_public_cost_totals(value.costs),
+    )
+
+
+def _to_public_subscription_row(
+    value: InternalSubscriptionUsageRow,
+) -> SubscriptionUsageRow:
+    return SubscriptionUsageRow(
+        provider_id=value.provider_id,
+        display_name=value.display_name,
+        timezone=value.timezone,
+        cycle_start=value.cycle_start,
+        cost_basis=value.cost_basis,
+        periods=tuple(
+            _to_public_subscription_period(period) for period in value.periods
+        ),
+    )
+
+
+def _to_public_subscription_report(
+    value: InternalSubscriptionUsageReport,
+) -> SubscriptionUsageReport:
+    return SubscriptionUsageReport(
+        generated_at_ms=value.generated_at_ms,
+        subscriptions=tuple(
+            _to_public_subscription_row(subscription)
+            for subscription in value.subscriptions
+        ),
     )
 
 
@@ -271,9 +343,11 @@ __all__ = [
     "_to_public_cost_totals",
     "_to_public_harness_row",
     "_to_public_model_row",
+    "_to_public_provider_row",
     "_to_public_report",
     "_to_public_session_totals",
     "_to_public_source_summary",
+    "_to_public_subscription_report",
     "_to_public_token_breakdown",
     "_to_public_tracking_session",
     "_to_public_unconfigured_model_row",
