@@ -12,12 +12,12 @@ from toktrail.api.models import (
     HarnessSummaryRow,
     ImportUsageResult,
     ModelSummaryRow,
+    Run,
+    RunReport,
     SessionTotals,
     SourceSessionDiff,
     SourceSessionSummary,
     TokenBreakdown,
-    TrackingSession,
-    TrackingSessionReport,
     UnconfiguredModelRow,
 )
 
@@ -140,8 +140,8 @@ def test_argument_parser_can_be_constructed() -> None:
 
 
 def test_print_report_formats_public_dataclasses(capsys) -> None:
-    report = TrackingSessionReport(
-        session=TrackingSession(
+    report = RunReport(
+        session=Run(
             id=1,
             name="example",
             started_at_ms=1000,
@@ -232,7 +232,7 @@ def test_print_finalized_formats_import_and_source_session(capsys) -> None:
         models=("gpt-5",),
         providers=("openai",),
     )
-    report = TrackingSessionReport(
+    report = RunReport(
         session=None,
         totals=SessionTotals(
             tokens=TokenBreakdown(input=1, output=2),
@@ -244,7 +244,7 @@ def test_print_finalized_formats_import_and_source_session(capsys) -> None:
         by_activity=(),
     )
     finalized = FinalizedManualRun(
-        run=TrackingSession(
+        run=Run(
             id=1,
             name="example",
             started_at_ms=1000,

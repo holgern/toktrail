@@ -14,15 +14,16 @@ from toktrail.costing import (
     resolve_price_resolution,
     simulate_cost,
 )
-from toktrail.models import TokenBreakdown, TrackingSession, UsageEvent
+from toktrail.models import Run as TrackingSession
+from toktrail.models import TokenBreakdown, UsageEvent
 from toktrail.reporting import (
     ActivitySummaryRow,
     CostTotals,
     HarnessSummaryRow,
     ModelSummaryRow,
+    RunReport,
     SessionTotals,
     SimulationSummaryRow,
-    TrackingSessionReport,
     UnconfiguredModelRow,
     UsageReportFilter,
     UsageSeriesBucket,
@@ -31,7 +32,7 @@ from toktrail.reporting import (
     UsageSeriesReport,
 )
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 1
 
 
 @dataclass(frozen=True)
@@ -56,34 +57,30 @@ def connect(path: Path) -> sqlite3.Connection:
 
 
 def migrate(conn: sqlite3.Connection) -> None:
-    current_version_row = conn.execute("PRAGMA user_version").fetchone()
-    if current_version_row is None:
+    current_version = _read_user_version(conn)
+    if current_version == 0:
+        _create_schema(conn)
+        conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+        conn.commit()
+        return
+    if current_version == SCHEMA_VERSION:
+        return
+    msg = (
+        f"Unsupported pre-release toktrail schema version {current_version}; "
+        "delete the state DB or export/import manually before first release."
+    )
+    raise ValueError(msg)
+
+
+def _read_user_version(conn: sqlite3.Connection) -> int:
+    row = conn.execute("PRAGMA user_version").fetchone()
+    if row is None:
         msg = "Could not read SQLite user_version."
         raise ValueError(msg)
-    current_version = _required_int(current_version_row[0])
-    if current_version > SCHEMA_VERSION:
-        msg = f"Unsupported schema version: {current_version}"
-        raise ValueError(msg)
-    if current_version == 0:
-        _create_schema_v2(conn)
-        current_version = 2
-    elif current_version == 1:
-        _migrate_v1_to_v2(conn)
-        current_version = 2
-    if current_version == 2:
-        _migrate_v3_to_v4(conn)
-        current_version = 3
-    if current_version == 3:
-        conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
-        conn.commit()
-    elif current_version == 2:
-        _migrate_v2_to_v3(conn)
-    if current_version != SCHEMA_VERSION:
-        conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
-        conn.commit()
+    return _required_int(row[0])
 
 
-def _create_schema_v2(conn: sqlite3.Connection) -> None:
+def _create_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(
         """
         CREATE TABLE IF NOT EXISTS runs (
@@ -168,60 +165,6 @@ def _create_schema_v2(conn: sqlite3.Connection) -> None:
 
         CREATE INDEX IF NOT EXISTS idx_run_events_usage
         ON run_events(usage_event_id);
-        """
-    )
-
-
-def _migrate_v1_to_v2(conn: sqlite3.Connection) -> None:
-    conn.executescript(
-        """
-        ALTER TABLE usage_events ADD COLUMN thinking_level TEXT;
-
-        CREATE INDEX IF NOT EXISTS idx_usage_events_model_thinking
-        ON usage_events(provider_id, model_id, thinking_level);
-
-        CREATE TABLE IF NOT EXISTS run_events (
-            tracking_session_id INTEGER NOT NULL
-                REFERENCES runs(id) ON DELETE CASCADE,
-            usage_event_id INTEGER NOT NULL
-                REFERENCES usage_events(id) ON DELETE CASCADE,
-            created_at_ms INTEGER NOT NULL,
-            PRIMARY KEY (tracking_session_id, usage_event_id)
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_run_events_usage
-        ON run_events(usage_event_id);
-
-        INSERT OR IGNORE INTO run_events (
-            tracking_session_id,
-            usage_event_id,
-            created_at_ms
-        )
-        SELECT tracking_session_id, id, imported_at_ms
-        FROM usage_events
-        WHERE tracking_session_id IS NOT NULL;
-        """
-    )
-
-
-
-def _migrate_v3_to_v4(conn: sqlite3.Connection) -> None:
-    """Rename tracking_sessions -> runs, harness_sessions -> source_sessions."""
-    try:
-        conn.executescript(
-            """
-            ALTER TABLE tracking_sessions RENAME TO runs;
-            ALTER TABLE harness_sessions RENAME TO source_sessions;
-            ALTER TABLE tracking_session_events RENAME TO run_events;
-            """
-        )
-    except sqlite3.OperationalError:
-        pass
-
-def _migrate_v2_to_v3(conn: sqlite3.Connection) -> None:
-    conn.executescript(
-        """
-        ALTER TABLE usage_events RENAME COLUMN cost_usd TO source_cost_usd;
         """
     )
 
@@ -529,7 +472,7 @@ def summarize_tracking_session(
     *,
     costing_config: CostingConfig | None = None,
     simulation_targets: tuple[SimulationTarget, ...] = (),
-) -> TrackingSessionReport:
+) -> RunReport:
     return summarize_usage(
         conn,
         UsageReportFilter(tracking_session_id=session_id),
@@ -543,7 +486,7 @@ def summarize_usage(
     *,
     costing_config: CostingConfig | None = None,
     simulation_targets: tuple[SimulationTarget, ...] = (),
-) -> TrackingSessionReport:
+) -> RunReport:
     session = None
     if filters.tracking_session_id is not None:
         session = get_tracking_session(conn, filters.tracking_session_id)
@@ -667,7 +610,7 @@ def summarize_usage(
                 delta_vs_virtual_usd=sim_result.delta_vs_virtual_usd,
             )
         )
-    return TrackingSessionReport(
+    return RunReport(
         session=session,
         totals=SessionTotals(tokens=totals_tokens, costs=totals_costs),
         by_harness=[
@@ -976,9 +919,7 @@ def _usage_report_query_parts(
 
     source_clause = " FROM usage_events AS ue"
     if filters.tracking_session_id is not None:
-        source_clause += (
-            " JOIN run_events AS tse ON tse.usage_event_id = ue.id"
-        )
+        source_clause += " JOIN run_events AS tse ON tse.usage_event_id = ue.id"
         clauses.append("tse.tracking_session_id = ?")
         params.append(filters.tracking_session_id)
     if filters.harness is not None:

@@ -11,8 +11,10 @@ from toktrail.api.paths import resolve_source_path
 from toktrail.config import load_resolved_toktrail_config
 from toktrail.errors import (
     InvalidAPIUsageError,
-    SessionNotFoundError,
     UsageImportError,
+)
+from toktrail.errors import (
+    RunNotFoundError as SessionNotFoundError,
 )
 
 
@@ -138,15 +140,56 @@ def import_configured_usage(
         raw_source = (
             source_path if source_path is not None else sources.get(harness_name)
         )
-        configured_source = (
-            raw_source[0] if isinstance(raw_source, list) and raw_source else raw_source
-        )
-        if isinstance(configured_source, list):
-            configured_source = None
-        resolved = resolve_source_path(harness_name, configured_source)
-        if resolved is None or not resolved.exists():
-            if source_path is not None or import_config.missing_source == "error":
-                result = import_usage(
+
+        # Normalize to a list of individual source paths
+        if raw_source is None:
+            source_candidates: Sequence[Path | None] = [None]
+        elif isinstance(raw_source, list):
+            source_candidates = raw_source
+        else:
+            source_candidates = [raw_source]
+
+        for configured_source in source_candidates:
+            resolved = resolve_source_path(harness_name, configured_source)
+            if resolved is None or not resolved.exists():
+                if source_path is not None or import_config.missing_source == "error":
+                    result = import_usage(
+                        db_path,
+                        harness_name,
+                        session_id=session_id,
+                        source_path=configured_source,
+                        use_active_session=use_active_session,
+                        include_raw_json=(
+                            import_config.include_raw_json
+                            if include_raw_json is None
+                            else include_raw_json
+                        ),
+                    )
+                    results.append(result)
+                    continue
+                results.append(
+                    ImportUsageResult(
+                        tracking_session_id=session_id,
+                        harness=harness_name,
+                        source_path=resolved,
+                        source_session_id=None,
+                        rows_seen=0,
+                        rows_imported=0,
+                        rows_skipped=0,
+                        events_seen=0,
+                        events_imported=0,
+                        events_skipped=0,
+                        status="skipped",
+                        error_message=(
+                            None
+                            if import_config.missing_source == "skip"
+                            else f"Missing source path for {harness_name}: {resolved}"
+                        ),
+                    )
+                )
+                continue
+            results.append(
+                import_usage(
                     db_path,
                     harness_name,
                     session_id=session_id,
@@ -158,43 +201,7 @@ def import_configured_usage(
                         else include_raw_json
                     ),
                 )
-                results.append(result)
-                continue
-            results.append(
-                ImportUsageResult(
-                    tracking_session_id=session_id,
-                    harness=harness_name,
-                    source_path=resolved,
-                    source_session_id=None,
-                    rows_seen=0,
-                    rows_imported=0,
-                    rows_skipped=0,
-                    events_seen=0,
-                    events_imported=0,
-                    events_skipped=0,
-                    status="skipped",
-                    error_message=(
-                        None
-                        if import_config.missing_source == "skip"
-                        else f"Missing source path for {harness_name}: {resolved}"
-                    ),
-                )
             )
-            continue
-        results.append(
-            import_usage(
-                db_path,
-                harness_name,
-                session_id=session_id,
-                source_path=configured_source,
-                use_active_session=use_active_session,
-                include_raw_json=(
-                    import_config.include_raw_json
-                    if include_raw_json is None
-                    else include_raw_json
-                ),
-            )
-        )
     return tuple(results)
 
 

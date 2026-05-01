@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, NoReturn, cast
 
 import typer
-from rich.table import Table
 
 if TYPE_CHECKING:
     from toktrail.reporting import UsageSeriesBucket
@@ -67,7 +66,7 @@ from toktrail.reporting import (
     UsageReportFilter,
 )
 from toktrail.reporting import (
-    TrackingSessionReport as InternalTrackingSessionReport,
+    RunReport as InternalRunReport,
 )
 
 app = typer.Typer(help="Track harness token usage in local SQLite sessions.")
@@ -87,16 +86,6 @@ app.add_typer(import_app, name="import")
 app.add_typer(watch_app, name="watch")
 app.add_typer(run_app, name="run")
 app.add_typer(source_sessions_app, name="source-sessions")
-app.add_typer(sessions_app, name="sessions")
-app.add_typer(copilot_app, name="copilot")
-app.add_typer(config_app, name="config")
-app.add_typer(pricing_app, name="pricing")
-copilot_app = typer.Typer(help="Inspect and run GitHub Copilot CLI tracking.")
-config_app = typer.Typer(help="Inspect toktrail pricing config.")
-pricing_app = typer.Typer(help="Inspect configured and used model pricing.")
-
-app.add_typer(import_app, name="import")
-app.add_typer(watch_app, name="watch")
 app.add_typer(sessions_app, name="sessions")
 app.add_typer(copilot_app, name="copilot")
 app.add_typer(config_app, name="config")
@@ -458,36 +447,42 @@ def status(
 def runs(
     ctx: typer.Context,
     limit: ReportLimitOption = None,
+    rich_output: RichOption = False,
 ) -> None:
     """List toktrail tracking runs."""
-    runs = list_runs(None, limit=limit)
+    rows = list_runs(_resolve_state_db(ctx), limit=limit)
 
-    if not runs:
+    if not rows:
         typer.echo("No toktrail runs found.")
         return
 
-    table_data: list[dict[str, object]] = []
-    for run in runs:
-        table_data.append(
-            {
-                "id": run.id,
-                "name": run.name or "(unnamed)",
-                "started_at": format_epoch_ms_compact(run.started_at_ms),
-                "ended_at": format_epoch_ms_compact(run.ended_at_ms)
-                if run.ended_at_ms
-                else "",
-                "active": "active" if run.active else "",
-            }
-        )
+    typer.echo(f"{len(rows)} toktrail run{'s' if len(rows) != 1 else ''}:\n")
 
-    typer.echo(f"{len(runs)} toktrail run{'s' if len(runs) != 1 else ''}:\n")
-    table = Table(show_header=True, header_style="bold magenta")
-    table.add_column("ID", style="cyan")
-    table.add_column("Active", style="green")
-    table.add_column("Name", style="yellow")
-    table.add_column("Started", style="dim")
-    table.add_column("Ended", style="dim")
-    typer.echo(table)
+    payload_rows = [
+        {
+            "id": str(run.id),
+            "active": "active" if run.active else "",
+            "name": run.name or "(unnamed)",
+            "started": format_epoch_ms_compact(run.started_at_ms),
+            "ended": format_epoch_ms_compact(run.ended_at_ms)
+            if run.ended_at_ms
+            else "",
+        }
+        for run in rows
+    ]
+
+    _print_table(
+        payload_rows,
+        ["id", "active", "name", "started", "ended"],
+        {
+            "id": "ID",
+            "active": "Active",
+            "name": "Name",
+            "started": "Started",
+            "ended": "Ended",
+        },
+        rich_output=rich_output,
+    )
 
 
 @app.command()
@@ -901,7 +896,7 @@ def _usage_aggregate(
 
 
 def _print_usage_summary(
-    report: InternalTrackingSessionReport,
+    report: InternalRunReport,
     *,
     rich_output: bool,
     by_model: list[ModelSummaryRow] | None = None,
@@ -1480,7 +1475,7 @@ def watch_claude(
     )
 
 
-@sessions_app.command("opencode")
+@source_sessions_app.command("opencode")
 def sessions_opencode(
     ctx: typer.Context,
     source_session_id: SourceSessionArgument = None,
@@ -1510,7 +1505,7 @@ def sessions_opencode(
     )
 
 
-@sessions_app.command("pi")
+@source_sessions_app.command("pi")
 def sessions_pi(
     ctx: typer.Context,
     source_session_id: SourceSessionArgument = None,
@@ -1540,7 +1535,7 @@ def sessions_pi(
     )
 
 
-@sessions_app.command("codex")
+@source_sessions_app.command("codex")
 def sessions_codex(
     ctx: typer.Context,
     source_session_id: SourceSessionArgument = None,
@@ -1570,7 +1565,7 @@ def sessions_codex(
     )
 
 
-@sessions_app.command("goose")
+@source_sessions_app.command("goose")
 def sessions_goose(
     ctx: typer.Context,
     source_session_id: SourceSessionArgument = None,
@@ -1600,7 +1595,7 @@ def sessions_goose(
     )
 
 
-@sessions_app.command("droid")
+@source_sessions_app.command("droid")
 def sessions_droid(
     ctx: typer.Context,
     source_session_id: SourceSessionArgument = None,
@@ -1630,7 +1625,7 @@ def sessions_droid(
     )
 
 
-@sessions_app.command("copilot")
+@source_sessions_app.command("copilot")
 def sessions_copilot(
     ctx: typer.Context,
     source_session_id: SourceSessionArgument = None,
@@ -1660,7 +1655,7 @@ def sessions_copilot(
     )
 
 
-@sessions_app.command("amp")
+@source_sessions_app.command("amp")
 def sessions_amp(
     ctx: typer.Context,
     source_session_id: SourceSessionArgument = None,
@@ -1690,7 +1685,7 @@ def sessions_amp(
     )
 
 
-@sessions_app.command("claude")
+@source_sessions_app.command("claude")
 def sessions_claude(
     ctx: typer.Context,
     source_session_id: SourceSessionArgument = None,
@@ -1720,7 +1715,7 @@ def sessions_claude(
     )
 
 
-@sessions_app.command("vibe")
+@source_sessions_app.command("vibe")
 def sessions_vibe(
     ctx: typer.Context,
     source_session_id: SourceSessionArgument = None,
@@ -2412,7 +2407,7 @@ def _print_table(
 
     try:
         from rich.console import Console
-
+        from rich.table import Table
     except ImportError:
         _exit_with_error("Rich output requires installing toktrail[rich].")
 

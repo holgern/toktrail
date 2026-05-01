@@ -101,7 +101,7 @@ def test_migrate_creates_tables_and_is_idempotent(tmp_path) -> None:
         "usage_events",
         "run_events",
     } <= table_names
-    assert user_version == 4
+    assert user_version == 1
 
 
 def test_create_tracking_session_and_end_session(tmp_path) -> None:

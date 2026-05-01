@@ -6,12 +6,16 @@ from pathlib import Path
 from toktrail import db as db_module
 from toktrail.api._common import _load_costing_config, _open_state_db
 from toktrail.api._conversions import _to_public_report, _to_public_series_report
-from toktrail.api.models import TrackingSessionReport, UsageSeriesReport
+from toktrail.api.models import RunReport, UsageSeriesReport
 from toktrail.errors import (
     InvalidAPIUsageError,
-    NoActiveSessionError,
-    SessionNotFoundError,
     StateDatabaseError,
+)
+from toktrail.errors import (
+    NoActiveRunError as NoActiveSessionError,
+)
+from toktrail.errors import (
+    RunNotFoundError as SessionNotFoundError,
 )
 from toktrail.periods import resolve_time_range
 from toktrail.reporting import UsageReportFilter
@@ -31,7 +35,7 @@ def session_report(
     until_ms: int | None = None,
     split_thinking: bool = False,
     config_path: Path | None = None,
-) -> TrackingSessionReport:
+) -> RunReport:
     conn, _ = _open_state_db(db_path)
     try:
         selected_session_id = session_id
@@ -88,7 +92,7 @@ def usage_report(
     until_ms: int | None = None,
     split_thinking: bool = False,
     config_path: Path | None = None,
-) -> TrackingSessionReport:
+) -> RunReport:
     if period is not None and (since_ms is not None or until_ms is not None):
         msg = "usage_report() accepts either period or since/until filters, not both."
         raise InvalidAPIUsageError(msg)

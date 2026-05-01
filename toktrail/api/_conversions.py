@@ -7,10 +7,10 @@ from toktrail.api.models import (
     HarnessSummaryRow,
     ModelSummaryRow,
     Run,
+    RunReport,
     SessionTotals,
     SourceSessionSummary,
     TokenBreakdown,
-    TrackingSessionReport,
     UnconfiguredModelRow,
     UsageEvent,
     UsageSeriesBucket,
@@ -18,10 +18,10 @@ from toktrail.api.models import (
     UsageSeriesReport,
 )
 from toktrail.models import (
-    TokenBreakdown as InternalTokenBreakdown,
+    Run as InternalTrackingSession,
 )
 from toktrail.models import (
-    TrackingSession as InternalTrackingSession,
+    TokenBreakdown as InternalTokenBreakdown,
 )
 from toktrail.models import (
     UsageEvent as InternalUsageEvent,
@@ -39,10 +39,10 @@ from toktrail.reporting import (
     ModelSummaryRow as InternalModelSummaryRow,
 )
 from toktrail.reporting import (
-    SessionTotals as InternalSessionTotals,
+    RunReport as InternalRunReport,
 )
 from toktrail.reporting import (
-    TrackingSessionReport as InternalTrackingSessionReport,
+    SessionTotals as InternalSessionTotals,
 )
 from toktrail.reporting import (
     UnconfiguredModelRow as InternalUnconfiguredModelRow,
@@ -185,7 +185,7 @@ def _to_public_unconfigured_model_row(
     )
 
 
-def _to_public_report(value: InternalTrackingSessionReport) -> TrackingSessionReport:
+def _to_public_report(value: InternalRunReport) -> RunReport:
     by_harness = tuple(_to_public_harness_row(row) for row in value.by_harness)
     by_model = tuple(_to_public_model_row(row) for row in value.by_model)
     by_activity = tuple(_to_public_activity_row(row) for row in value.by_activity)
@@ -196,7 +196,7 @@ def _to_public_report(value: InternalTrackingSessionReport) -> TrackingSessionRe
     filters: dict[str, object] = {
         key: filter_value for key, filter_value in value.filters.as_dict().items()
     }
-    return TrackingSessionReport(
+    return RunReport(
         session=_to_public_tracking_session(value.session),
         totals=_to_public_session_totals(value.totals, message_count=message_count),
         by_harness=by_harness,

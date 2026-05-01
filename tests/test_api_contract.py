@@ -42,7 +42,7 @@ def test_public_models_star_export_includes_documented_models() -> None:
     exec("from toktrail.api.models import *", namespace, namespace)
 
     assert "UnconfiguredModelRow" in namespace
-    assert "TrackingSessionReport" in namespace
+    assert "RunReport" in namespace
     assert "FinalizedManualRun" in namespace
     assert "UsageSeriesBucket" in namespace
     assert "UsageSeriesInstance" in namespace
@@ -66,8 +66,8 @@ def test_root_api_exports_documented_models_and_functions() -> None:
         "SourceSessionSnapshot",
         "SourceSessionSummary",
         "TokenBreakdown",
-        "TrackingSession",
-        "TrackingSessionReport",
+        "Run",
+        "RunReport",
         "UnconfiguredModelRow",
         "UsageEvent",
         "UsageSeriesBucket",
@@ -81,28 +81,28 @@ def test_root_api_exports_documented_models_and_functions() -> None:
         "default_toktrail_db_path",
         "diff_source_snapshots",
         "finalize_manual_run",
-        "get_active_session",
+        "get_active_run",
         "get_harness_definition",
-        "get_session",
+        "get_run",
         "import_configured_usage",
         "import_usage",
         "init_config",
         "init_state",
         "is_supported_harness",
-        "list_sessions",
+        "list_runs",
         "list_source_sessions",
         "normalize_harness_name",
         "prepare_environment",
         "prepare_manual_run",
         "render_config_template",
-        "require_active_session",
+        "require_active_run",
         "resolve_source_path",
         "resolve_toktrail_config_path",
         "resolve_toktrail_db_path",
         "scan_usage",
         "session_report",
-        "start_session",
-        "stop_session",
+        "start_run",
+        "stop_run",
         "supported_harnesses",
         "usage_report",
         "usage_series_report",

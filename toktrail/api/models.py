@@ -461,10 +461,6 @@ class RunReport:
         }
 
 
-# Type alias for backward compatibility during migration
-TrackingSessionReport = RunReport
-
-
 @dataclass(frozen=True)
 class ScanUsageResult:
     harness: str
@@ -653,8 +649,8 @@ __all__ = [
     "SourceSessionSnapshot",
     "SourceSessionSummary",
     "TokenBreakdown",
-    "TrackingSession",
-    "TrackingSessionReport",
+    "Run",
+    "RunReport",
     "UnconfiguredModelRow",
     "UsageEvent",
     "UsageSeriesBucket",

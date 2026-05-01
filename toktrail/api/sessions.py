@@ -8,12 +8,20 @@ from toktrail.api._common import _open_state_db
 from toktrail.api._conversions import (
     _to_public_tracking_session,
 )
-from toktrail.api.models import Run, TrackingSession
+from toktrail.api.models import Run
 from toktrail.errors import (
-    ActiveSessionExistsError,
-    NoActiveSessionError,
-    SessionAlreadyEndedError,
-    SessionNotFoundError,
+    ActiveRunExistsError as ActiveSessionExistsError,
+)
+from toktrail.errors import (
+    NoActiveRunError as NoActiveSessionError,
+)
+from toktrail.errors import (
+    RunAlreadyEndedError as SessionAlreadyEndedError,
+)
+from toktrail.errors import (
+    RunNotFoundError as SessionNotFoundError,
+)
+from toktrail.errors import (
     StateDatabaseError,
 )
 
@@ -80,7 +88,7 @@ def start_session(
     *,
     name: str | None = None,
     started_at_ms: int | None = None,
-) -> TrackingSession:
+) -> Run:
     conn, _ = _open_state_db(db_path)
     try:
         session_id = db_module.create_tracking_session(
@@ -112,7 +120,7 @@ def stop_session(
     session_id: int | None = None,
     *,
     ended_at_ms: int | None = None,
-) -> TrackingSession:
+) -> Run:
     conn, _ = _open_state_db(db_path)
     try:
         selected_session_id = session_id
@@ -150,7 +158,7 @@ def stop_session(
     return public_session
 
 
-def get_active_session(db_path: Path | None) -> TrackingSession | None:
+def get_active_session(db_path: Path | None) -> Run | None:
     conn, _ = _open_state_db(db_path)
     try:
         session_id = db_module.get_active_tracking_session(conn)
@@ -169,7 +177,7 @@ def get_active_session(db_path: Path | None) -> TrackingSession | None:
     return public_session
 
 
-def require_active_session(db_path: Path | None) -> TrackingSession:
+def require_active_session(db_path: Path | None) -> Run:
     session = get_active_session(db_path)
     if session is None:
         msg = "An active tracking session is required, but none exists."
@@ -177,7 +185,7 @@ def require_active_session(db_path: Path | None) -> TrackingSession:
     return session
 
 
-def get_session(db_path: Path | None, session_id: int) -> TrackingSession:
+def get_session(db_path: Path | None, session_id: int) -> Run:
     conn, _ = _open_state_db(db_path)
     try:
         session = db_module.get_tracking_session(conn, session_id)
@@ -198,7 +206,7 @@ def list_sessions(
     *,
     limit: int | None = None,
     include_ended: bool = True,
-) -> tuple[TrackingSession, ...]:
+) -> tuple[Run, ...]:
     conn, _ = _open_state_db(db_path)
     try:
         sessions = db_module.list_tracking_sessions(conn)

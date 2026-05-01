@@ -21,20 +21,20 @@ class ConfigurationError(ToktrailError):
     """The toktrail pricing/configuration file is missing, invalid, or unsupported."""
 
 
-class SessionNotFoundError(ToktrailError):
-    """The requested tracking session does not exist."""
+class RunNotFoundError(ToktrailError):
+    """The requested tracking run does not exist."""
 
 
-class NoActiveSessionError(ToktrailError):
-    """An operation required an active tracking session, but none exists."""
+class NoActiveRunError(ToktrailError):
+    """An operation required an active tracking run, but none exists."""
 
 
-class ActiveSessionExistsError(ToktrailError):
-    """A new tracking session could not be started because another session is active."""
+class ActiveRunExistsError(ToktrailError):
+    """A new tracking run could not be started because another run is active."""
 
 
-class SessionAlreadyEndedError(ToktrailError):
-    """The requested tracking session has already been stopped."""
+class RunAlreadyEndedError(ToktrailError):
+    """The requested tracking run has already been stopped."""
 
 
 class UsageImportError(ToktrailError):
@@ -49,11 +49,11 @@ class InvalidAPIUsageError(ToktrailError):
     """The public API was called with invalid or conflicting arguments."""
 
 
-# Run-named aliases (new primary terminology)
-RunNotFoundError = SessionNotFoundError
-NoActiveRunError = NoActiveSessionError
-ActiveRunExistsError = ActiveSessionExistsError
-RunAlreadyEndedError = SessionAlreadyEndedError
+# Session-named aliases for backward compatibility
+SessionNotFoundError = RunNotFoundError
+NoActiveSessionError = NoActiveRunError
+ActiveSessionExistsError = ActiveRunExistsError
+SessionAlreadyEndedError = RunAlreadyEndedError
 
 
 __all__ = [

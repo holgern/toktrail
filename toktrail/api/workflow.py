@@ -99,18 +99,18 @@ def finalize_manual_run(
         source_session_id=selected_source_session.source_session_id,
         include_raw_json=include_raw_json,
     )
+    run = (
+        stop_tracking_session(db_path, prepared.run.id)
+        if stop_session
+        else get_session(db_path, prepared.run.id)
+    )
     report = session_report(
         db_path,
         prepared.run.id,
         config_path=config_path,
     )
-    tracking_session = (
-        stop_tracking_session(db_path, prepared.run.id)
-        if stop_session
-        else get_session(db_path, prepared.run.id)
-    )
     return FinalizedManualRun(
-        run=tracking_session,
+        run=run,
         source_session=selected_source_session,
         source_diff=source_diff,
         import_result=import_result,

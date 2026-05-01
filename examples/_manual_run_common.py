@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from toktrail.api.models import FinalizedManualRun, TrackingSessionReport
+from toktrail.api.models import FinalizedManualRun, RunReport
 from toktrail.api.workflow import finalize_manual_run, prepare_manual_run
 from toktrail.errors import AmbiguousSourceSessionError, SourcePathError
 
@@ -22,7 +22,7 @@ def _money(value: float) -> str:
     return f"${value:.6f}"
 
 
-def print_report(report: TrackingSessionReport) -> None:
+def print_report(report: RunReport) -> None:
     totals = report.totals
     tokens = totals.tokens
     costs = totals.costs

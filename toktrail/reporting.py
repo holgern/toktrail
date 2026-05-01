@@ -295,7 +295,7 @@ class SimulationSummaryRow:
 
 
 @dataclass(frozen=True)
-class TrackingSessionReport:
+class RunReport:
     session: Run | None
     totals: SessionTotals
     by_harness: list[HarnessSummaryRow]
@@ -323,10 +323,6 @@ class TrackingSessionReport:
             "simulations": [row.as_dict() for row in self.simulations],
             "unconfigured_models": [row.as_dict() for row in self.unconfigured_models],
         }
-
-
-# Type alias for backward compatibility during migration
-RunReport = TrackingSessionReport
 
 
 @dataclass(frozen=True)

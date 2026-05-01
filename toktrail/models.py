@@ -78,10 +78,6 @@ class Run:
     ended_at_ms: int | None
 
 
-# Type alias for backward compatibility during migration
-TrackingSession = Run
-
-
 @dataclass(frozen=True)
 class OpenCodeSessionSummary:
     source_session_id: str
