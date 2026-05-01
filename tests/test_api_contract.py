@@ -5,7 +5,11 @@ from pathlib import Path
 
 import toktrail.api as public_api
 from toktrail.api.harnesses import supported_harnesses
-from toktrail.api.models import CostTotals, TokenBreakdown, UsageEvent
+from toktrail.api.models import (
+    CostTotals,
+    TokenBreakdown,
+    UsageEvent,
+)
 from toktrail.api.paths import (
     default_amp_threads_path,
     default_droid_sessions_path,
@@ -40,6 +44,9 @@ def test_public_models_star_export_includes_documented_models() -> None:
     assert "UnconfiguredModelRow" in namespace
     assert "TrackingSessionReport" in namespace
     assert "FinalizedManualRun" in namespace
+    assert "UsageSeriesBucket" in namespace
+    assert "UsageSeriesInstance" in namespace
+    assert "UsageSeriesReport" in namespace
 
 
 def test_root_api_exports_documented_models_and_functions() -> None:
@@ -63,6 +70,9 @@ def test_root_api_exports_documented_models_and_functions() -> None:
         "TrackingSessionReport",
         "UnconfiguredModelRow",
         "UsageEvent",
+        "UsageSeriesBucket",
+        "UsageSeriesInstance",
+        "UsageSeriesReport",
         "capture_source_snapshot",
         "config_exists",
         "config_summary",
@@ -95,6 +105,7 @@ def test_root_api_exports_documented_models_and_functions() -> None:
         "stop_session",
         "supported_harnesses",
         "usage_report",
+        "usage_series_report",
     }
 
     assert required.issubset(set(public_api.__all__))

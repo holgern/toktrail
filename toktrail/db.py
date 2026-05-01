@@ -18,6 +18,10 @@ from toktrail.reporting import (
     TrackingSessionReport,
     UnconfiguredModelRow,
     UsageReportFilter,
+    UsageSeriesBucket,
+    UsageSeriesFilter,
+    UsageSeriesInstance,
+    UsageSeriesReport,
 )
 
 SCHEMA_VERSION = 3
@@ -659,8 +663,8 @@ def summarize_usage(
                     -item[1].tokens.total,
                     item[0],
                 ),
-             )
-         ],
+            )
+        ],
         unconfigured_models=[
             UnconfiguredModelRow(
                 required=required,
@@ -691,6 +695,219 @@ def summarize_usage(
             )
         ],
         filters=filters,
+    )
+
+
+def summarize_usage_series(
+    conn: sqlite3.Connection,
+    filters: UsageSeriesFilter,
+    *,
+    costing_config: CostingConfig | None = None,
+) -> UsageSeriesReport:
+    from datetime import tzinfo as _tzinfo
+    from zoneinfo import ZoneInfo
+
+    from toktrail.periods import (
+        bucket_for_timestamp,
+    )
+
+    tz: _tzinfo = ZoneInfo("UTC")
+
+    source_clause, where_clause, params = _usage_report_query_parts(
+        filters.to_usage_report_filter()
+    )
+    thinking_select = (
+        "ue.thinking_level AS thinking_level"
+        if filters.split_thinking
+        else "NULL AS thinking_level"
+    )
+    atom_rows = conn.execute(
+        """
+        SELECT
+            ue.created_ms,
+            ue.harness,
+            ue.source_session_id,
+            ue.provider_id,
+            ue.model_id,
+        """
+        + thinking_select
+        + """
+            ,
+            COALESCE(ue.agent, 'unknown') AS agent,
+            COUNT(*) AS message_count,
+            COALESCE(SUM(ue.input_tokens), 0) AS input_tokens,
+            COALESCE(SUM(ue.output_tokens), 0) AS output_tokens,
+            COALESCE(SUM(ue.reasoning_tokens), 0) AS reasoning_tokens,
+            COALESCE(SUM(ue.cache_read_tokens), 0) AS cache_read_tokens,
+            COALESCE(SUM(ue.cache_write_tokens), 0) AS cache_write_tokens,
+            COALESCE(SUM(ue.source_cost_usd), 0.0) AS source_cost_usd
+        """
+        + source_clause
+        + where_clause
+        + """
+        GROUP BY
+            ue.created_ms,
+            ue.harness,
+            ue.source_session_id,
+            ue.provider_id,
+            ue.model_id,
+        """
+        + ("ue.thinking_level," if filters.split_thinking else "")
+        + """
+            COALESCE(ue.agent, 'unknown')
+        """,
+        params,
+    ).fetchall()
+
+    config = costing_config or default_costing_config()
+
+    bucket_data: dict[str, _SeriesBucketAccum] = {}
+    model_bucket_data: dict[tuple[str, str, str | None], _SeriesModelAccum] = {}
+    instance_data: dict[str, _SeriesInstanceAccum] = {}
+
+    for row in atom_rows:
+        created_ms = _required_int(row["created_ms"])
+        harness = str(row["harness"])
+        source_session_id = str(row["source_session_id"])
+
+        bucket = bucket_for_timestamp(
+            created_ms,
+            granularity=filters.granularity,
+            tz=tz,
+            start_of_week=filters.start_of_week,
+        )
+
+        atom = UsageCostAtom(
+            harness=harness,
+            provider_id=str(row["provider_id"]),
+            model_id=str(row["model_id"]),
+            thinking_level=(
+                str(row["thinking_level"])
+                if row["thinking_level"] is not None
+                else None
+            ),
+            agent=str(row["agent"]),
+            message_count=_required_int(row["message_count"]),
+            tokens=_row_tokens(row),
+            source_cost_usd=_required_decimal(row["source_cost_usd"]),
+        )
+        breakdown = atom.compute_costs(config)
+        model_key_str = f"{atom.provider_id}/{atom.model_id}"
+
+        bucket_data.setdefault(bucket.key, _SeriesBucketAccum(bucket=bucket)).add(
+            atom, breakdown, model_key_str
+        )
+
+        if filters.breakdown:
+            model_key = (bucket.key, atom.provider_id, atom.model_id)
+            if atom.thinking_level is not None and filters.split_thinking:
+                model_key = (
+                    bucket.key,
+                    atom.provider_id,
+                    f"{atom.model_id}[{atom.thinking_level}]",
+                )
+            model_bucket_data.setdefault(
+                model_key, _SeriesModelAccum(bucket_key=bucket.key)
+            ).add(atom, breakdown)
+
+        if filters.instances:
+            inst_key = f"{harness}/{source_session_id}"
+            inst_label = source_session_id
+            instance_data.setdefault(
+                inst_key,
+                _SeriesInstanceAccum(
+                    instance_key=inst_key,
+                    instance_label=inst_label,
+                    harness=harness,
+                    source_session_id=source_session_id,
+                ),
+            ).add(atom, breakdown, bucket, model_key_str, filters, config)
+
+    totals_tokens = TokenBreakdown()
+    totals_costs = CostTotals()
+    for acc in bucket_data.values():
+        totals_tokens = _add_tokens(totals_tokens, acc.tokens)
+        totals_costs = totals_costs.add(
+            source_cost_usd=acc.costs.source_cost_usd,
+            actual_cost_usd=acc.costs.actual_cost_usd,
+            virtual_cost_usd=acc.costs.virtual_cost_usd,
+            unpriced_count=acc.costs.unpriced_count,
+        )
+
+    buckets_list = sorted(
+        bucket_data.values(),
+        key=lambda a: a.bucket.since_ms,
+        reverse=(filters.order == "desc"),
+    )
+    buckets: list[UsageSeriesBucket] = []
+    for acc in buckets_list:
+        by_model_rows: list[ModelSummaryRow] = []
+        if filters.breakdown:
+            for (bkey, prov, mid), macc in sorted(model_bucket_data.items()):
+                if bkey != acc.bucket.key:
+                    continue
+                by_model_rows.append(macc.to_model_row(prov, mid or ""))
+        buckets.append(
+            UsageSeriesBucket(
+                key=acc.bucket.key,
+                label=acc.bucket.label,
+                since_ms=acc.bucket.since_ms,
+                until_ms=acc.bucket.until_ms,
+                message_count=acc.message_count,
+                tokens=acc.tokens,
+                costs=acc.costs,
+                models=tuple(sorted(acc.model_keys)),
+                by_model=tuple(by_model_rows),
+            )
+        )
+
+    instances: list[UsageSeriesInstance] = []
+    for inst in sorted(instance_data.values(), key=lambda i: i.instance_key):
+        inst_buckets = inst.build_buckets(model_bucket_data, filters)
+        instances.append(
+            UsageSeriesInstance(
+                instance_key=inst.instance_key,
+                instance_label=inst.instance_label,
+                harness=inst.harness,
+                source_session_id=inst.source_session_id,
+                buckets=tuple(
+                    sorted(
+                        inst_buckets,
+                        key=lambda b: b.since_ms,
+                        reverse=(filters.order == "desc"),
+                    )
+                ),
+                totals=SessionTotals(
+                    tokens=inst.tokens,
+                    costs=inst.costs,
+                ),
+            )
+        )
+
+    report_filters: dict[str, object] = {
+        "since_ms": filters.since_ms,
+        "until_ms": filters.until_ms,
+        "harness": filters.harness,
+        "provider_id": filters.provider_id,
+        "model_id": filters.model_id,
+        "thinking_level": filters.thinking_level,
+        "agent": filters.agent,
+        "project": filters.project,
+        "instances": filters.instances,
+        "breakdown": filters.breakdown,
+        "split_thinking": filters.split_thinking,
+        "order": filters.order,
+    }
+
+    return UsageSeriesReport(
+        granularity=filters.granularity,
+        timezone=str(tz),
+        locale=filters.locale,
+        start_of_week=filters.start_of_week,
+        filters=report_filters,
+        buckets=tuple(buckets),
+        instances=tuple(instances),
+        totals=SessionTotals(tokens=totals_tokens, costs=totals_costs),
     )
 
 
@@ -864,3 +1081,137 @@ def _required_lastrowid(value: int | None) -> int:
         msg = "SQLite insert did not return a row id."
         raise TypeError(msg)
     return value
+
+
+class _SeriesBucketAccum:
+    __slots__ = ("bucket", "message_count", "tokens", "costs", "model_keys")
+
+    def __init__(self, bucket: object) -> None:
+        from toktrail.periods import TimeBucket
+
+        assert isinstance(bucket, TimeBucket)
+        self.bucket = bucket
+        self.message_count = 0
+        self.tokens = TokenBreakdown()
+        self.costs = CostTotals()
+        self.model_keys: set[str] = set()
+
+    def add(
+        self,
+        atom: UsageCostAtom,
+        breakdown: CostBreakdown,
+        model_key: str,
+    ) -> None:
+        self.message_count += atom.message_count
+        self.tokens = _add_tokens(self.tokens, atom.tokens)
+        self.costs = _add_cost_breakdown(self.costs, breakdown)
+        self.model_keys.add(model_key)
+
+
+class _SeriesModelAccum:
+    __slots__ = ("bucket_key", "message_count", "tokens", "costs")
+
+    def __init__(self, bucket_key: str) -> None:
+        self.bucket_key = bucket_key
+        self.message_count = 0
+        self.tokens = TokenBreakdown()
+        self.costs = CostTotals()
+
+    def add(self, atom: UsageCostAtom, breakdown: CostBreakdown) -> None:
+        self.message_count += atom.message_count
+        self.tokens = _add_tokens(self.tokens, atom.tokens)
+        self.costs = _add_cost_breakdown(self.costs, breakdown)
+
+    def to_model_row(
+        self,
+        provider_id: str,
+        model_id: str,
+    ) -> ModelSummaryRow:
+        return ModelSummaryRow(
+            provider_id=provider_id,
+            model_id=model_id,
+            thinking_level=None,
+            message_count=self.message_count,
+            tokens=self.tokens,
+            costs=self.costs,
+        )
+
+
+class _SeriesInstanceAccum:
+    __slots__ = (
+        "instance_key",
+        "instance_label",
+        "harness",
+        "source_session_id",
+        "message_count",
+        "tokens",
+        "costs",
+        "bucket_data",
+        "model_keys",
+    )
+
+    def __init__(
+        self,
+        instance_key: str,
+        instance_label: str,
+        harness: str,
+        source_session_id: str,
+    ) -> None:
+        self.instance_key = instance_key
+        self.instance_label = instance_label
+        self.harness = harness
+        self.source_session_id = source_session_id
+        self.message_count = 0
+        self.tokens = TokenBreakdown()
+        self.costs = CostTotals()
+        self.bucket_data: dict[str, _SeriesBucketAccum] = {}
+        self.model_keys: set[str] = set()
+
+    def add(
+        self,
+        atom: UsageCostAtom,
+        breakdown: CostBreakdown,
+        bucket: object,
+        model_key: str,
+        filters: UsageSeriesFilter,
+        config: CostingConfig,
+    ) -> None:
+        from toktrail.periods import TimeBucket
+
+        assert isinstance(bucket, TimeBucket)
+        self.message_count += atom.message_count
+        self.tokens = _add_tokens(self.tokens, atom.tokens)
+        self.costs = _add_cost_breakdown(self.costs, breakdown)
+        self.model_keys.add(model_key)
+        bacc = self.bucket_data.setdefault(
+            bucket.key, _SeriesBucketAccum(bucket=bucket)
+        )
+        bacc.add(atom, breakdown, model_key)
+
+    def build_buckets(
+        self,
+        model_bucket_data: dict[tuple[str, str, str | None], _SeriesModelAccum],
+        filters: UsageSeriesFilter,
+    ) -> list[UsageSeriesBucket]:
+        result: list[UsageSeriesBucket] = []
+        for acc in self.bucket_data.values():
+            by_model_rows: list[ModelSummaryRow] = []
+            if filters.breakdown:
+                for (bkey, prov, mid), macc in sorted(model_bucket_data.items()):
+                    if bkey != acc.bucket.key:
+                        continue
+                    by_model_rows.append(macc.to_model_row(prov, mid or ""))
+            result.append(
+                UsageSeriesBucket(
+                    key=acc.bucket.key,
+                    label=acc.bucket.label,
+                    since_ms=acc.bucket.since_ms,
+                    until_ms=acc.bucket.until_ms,
+                    message_count=acc.message_count,
+                    tokens=acc.tokens,
+                    costs=acc.costs,
+                    models=tuple(sorted(acc.model_keys)),
+                    by_model=tuple(by_model_rows),
+                )
+            )
+        return result

@@ -1,8 +1,8 @@
 """Source file cache for avoiding reparsing large event files.
 
-Caches normalized events and parser metadata by (harness, path, parser_version, fingerprint).
-Cache is validated by exact fingerprint match. If fingerprint, parser version, or file
-metadata changes, cache is invalidated and file is reparsed.
+Caches normalized events and parser metadata by harness, path, parser version, and
+fingerprint. Cache is validated by exact fingerprint match. If fingerprint,
+parser version, or file metadata changes, cache is invalidated and reparsed.
 """
 
 from __future__ import annotations

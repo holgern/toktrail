@@ -13,6 +13,9 @@ from toktrail.api.models import (
     TrackingSessionReport,
     UnconfiguredModelRow,
     UsageEvent,
+    UsageSeriesBucket,
+    UsageSeriesInstance,
+    UsageSeriesReport,
 )
 from toktrail.models import (
     TokenBreakdown as InternalTokenBreakdown,
@@ -197,6 +200,65 @@ def _to_public_report(value: InternalTrackingSessionReport) -> TrackingSessionRe
     )
 
 
+def _to_public_series_report(
+    value: object,
+) -> UsageSeriesReport:
+    from toktrail.reporting import UsageSeriesReport as InternalUsageSeriesReport
+
+    assert isinstance(value, InternalUsageSeriesReport)
+    return UsageSeriesReport(
+        granularity=value.granularity,
+        timezone=value.timezone,
+        locale=value.locale,
+        start_of_week=value.start_of_week,
+        filters=value.filters,
+        buckets=tuple(_to_public_series_bucket(b) for b in value.buckets),
+        instances=tuple(_to_public_series_instance(i) for i in value.instances),
+        totals=_to_public_session_totals(
+            value.totals,
+            message_count=sum(bucket.message_count for bucket in value.buckets),
+        ),
+    )
+
+
+def _to_public_series_bucket(
+    value: object,
+) -> UsageSeriesBucket:
+    from toktrail.reporting import UsageSeriesBucket as InternalUsageSeriesBucket
+
+    assert isinstance(value, InternalUsageSeriesBucket)
+    return UsageSeriesBucket(
+        key=value.key,
+        label=value.label,
+        since_ms=value.since_ms,
+        until_ms=value.until_ms,
+        message_count=value.message_count,
+        tokens=_to_public_token_breakdown(value.tokens),
+        costs=_to_public_cost_totals(value.costs),
+        models=value.models,
+        by_model=tuple(_to_public_model_row(m) for m in value.by_model),
+    )
+
+
+def _to_public_series_instance(
+    value: object,
+) -> UsageSeriesInstance:
+    from toktrail.reporting import UsageSeriesInstance as InternalUsageSeriesInstance
+
+    assert isinstance(value, InternalUsageSeriesInstance)
+    return UsageSeriesInstance(
+        instance_key=value.instance_key,
+        instance_label=value.instance_label,
+        harness=value.harness,
+        source_session_id=value.source_session_id,
+        buckets=tuple(_to_public_series_bucket(b) for b in value.buckets),
+        totals=_to_public_session_totals(
+            value.totals,
+            message_count=sum(bucket.message_count for bucket in value.buckets),
+        ),
+    )
+
+
 __all__ = [
     "_to_public_agent_row",
     "_to_public_cost_totals",
@@ -209,4 +271,5 @@ __all__ = [
     "_to_public_tracking_session",
     "_to_public_unconfigured_model_row",
     "_to_public_usage_event",
+    "_to_public_series_report",
 ]

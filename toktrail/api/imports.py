@@ -135,11 +135,14 @@ def import_configured_usage(
     results: list[ImportUsageResult] = []
     for harness_name in selected_harnesses:
         sources = import_config.sources or {}
-        configured_source = (
-            source_path
-            if source_path is not None
-            else sources.get(harness_name)
+        raw_source = (
+            source_path if source_path is not None else sources.get(harness_name)
         )
+        configured_source = (
+            raw_source[0] if isinstance(raw_source, list) and raw_source else raw_source
+        )
+        if isinstance(configured_source, list):
+            configured_source = None
         resolved = resolve_source_path(harness_name, configured_source)
         if resolved is None or not resolved.exists():
             if source_path is not None or import_config.missing_source == "error":

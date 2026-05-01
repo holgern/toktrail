@@ -5,7 +5,7 @@ import json
 import math
 import re
 import string
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -387,6 +387,7 @@ def _parse_regular_jsonl(
 
         message_id = _as_str(message.get("id"))
         request_id = _as_str(entry.get("requestId"))
+        source_message_id: str | None
 
         source_row_id = f"{path.as_posix()}:{line_number}"
 
@@ -444,7 +445,7 @@ def _parse_regular_jsonl(
 
 def _parse_headless_json_file(
     path: Path,
-    lines_or_entries: list[str | dict[str, object]],
+    lines_or_entries: Sequence[str | dict[str, object]],
     *,
     file_mtime_ms: int,
     include_raw_json: bool,
@@ -503,8 +504,6 @@ def _parse_headless_json_file(
                 continue
         elif isinstance(item, dict):
             entry = item
-        else:
-            continue
 
         rows_seen += 1
         entry_type = _as_str(entry.get("type"))
@@ -545,8 +544,8 @@ def _parse_headless_json_file(
         else:
             # Try direct usage row
             model = _extract_model(entry)
-            usage = _extract_usage(entry)
-            if model is not None and usage is not None:
+            usage_tokens = _extract_usage(entry)
+            if model is not None and usage_tokens is not None:
                 finalize_state()
                 state = _ClaudeHeadlessState()
                 line_idx = rows_seen
@@ -556,7 +555,7 @@ def _parse_headless_json_file(
                     source_message_id=None,
                     source_dedup_key=f"{path.as_posix()}:{line_idx}",
                     model=model,
-                    tokens=usage,
+                    tokens=usage_tokens,
                     created_ms=_extract_timestamp(entry) or file_mtime_ms,
                     agent=agent if is_sidechain else None,
                     raw_json=None,

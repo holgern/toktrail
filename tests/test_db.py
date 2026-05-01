@@ -12,9 +12,10 @@ from toktrail.db import (
     migrate,
     summarize_tracking_session,
     summarize_usage,
+    summarize_usage_series,
 )
 from toktrail.models import TokenBreakdown, UsageEvent
-from toktrail.reporting import UsageReportFilter
+from toktrail.reporting import UsageReportFilter, UsageSeriesFilter
 
 
 def make_price(
@@ -47,6 +48,7 @@ def make_usage_event(
     model_id: str = "claude-sonnet-4",
     thinking_level: str | None = None,
     agent: str | None = "build",
+    created_ms: int | None = None,
 ) -> UsageEvent:
     token_breakdown = tokens or TokenBreakdown(
         input=10,
@@ -67,10 +69,14 @@ def make_usage_event(
         model_id=model_id,
         thinking_level=thinking_level,
         agent=agent,
-        created_ms=1700000000000 + int(dedup_suffix[-1]) * 100,
+        created_ms=created_ms
+        if created_ms is not None
+        else 1700000000000 + int(dedup_suffix[-1]) * 100,
         completed_ms=1700000000100 + int(dedup_suffix[-1]) * 100,
         tokens=token_breakdown,
-        source_cost_usd=Decimal(str(source_cost_usd)) if not isinstance(source_cost_usd, Decimal) else source_cost_usd,
+        source_cost_usd=Decimal(str(source_cost_usd))
+        if not isinstance(source_cost_usd, Decimal)
+        else source_cost_usd,
         raw_json="{}",
     )
 
@@ -279,6 +285,92 @@ def test_summarize_usage_supports_unscoped_period_ranges(tmp_path) -> None:
     assert report.totals.source_cost_usd == first.source_cost_usd
 
 
+def test_summarize_usage_series_daily_buckets_and_breakdown(tmp_path) -> None:
+    conn = connect(tmp_path / "toktrail.db")
+    migrate(conn)
+    day1 = 1748131200000
+    day2 = 1748217600000
+
+    insert_usage_events(
+        conn,
+        None,
+        [
+            make_usage_event(
+                dedup_suffix="1",
+                model_id="claude-sonnet-4",
+                source_session_id="session-a",
+                created_ms=day1,
+                tokens=TokenBreakdown(input=10, output=2),
+            ),
+            make_usage_event(
+                dedup_suffix="2",
+                model_id="gpt-5.1",
+                source_session_id="session-b",
+                created_ms=day2,
+                tokens=TokenBreakdown(input=20, output=3),
+            ),
+        ],
+    )
+
+    report = summarize_usage_series(
+        conn,
+        UsageSeriesFilter(
+            granularity="daily",
+            breakdown=True,
+            since_ms=day1,
+            until_ms=day2 + 86_400_000,
+        ),
+    )
+
+    assert [bucket.key for bucket in report.buckets] == ["2025-05-26", "2025-05-25"]
+    assert report.totals.tokens.total == 35
+    assert report.buckets[0].by_model[0].model_id == "gpt-5.1"
+    assert report.buckets[1].by_model[0].model_id == "claude-sonnet-4"
+
+
+def test_summarize_usage_series_weekly_monthly_instances_project(tmp_path) -> None:
+    conn = connect(tmp_path / "toktrail.db")
+    migrate(conn)
+    day1 = 1748131200000
+    day2 = 1748649600000
+
+    insert_usage_events(
+        conn,
+        None,
+        [
+            make_usage_event(
+                dedup_suffix="1",
+                source_session_id="project-a",
+                created_ms=day1,
+                tokens=TokenBreakdown(input=10),
+            ),
+            make_usage_event(
+                dedup_suffix="2",
+                source_session_id="project-b",
+                created_ms=day2,
+                tokens=TokenBreakdown(input=20),
+            ),
+        ],
+    )
+
+    weekly = summarize_usage_series(
+        conn,
+        UsageSeriesFilter(granularity="weekly", order="asc"),
+    )
+    monthly = summarize_usage_series(conn, UsageSeriesFilter(granularity="monthly"))
+    instances = summarize_usage_series(
+        conn,
+        UsageSeriesFilter(granularity="daily", instances=True, order="asc"),
+    )
+
+    assert [bucket.key for bucket in weekly.buckets] == ["2025-05-19", "2025-05-26"]
+    assert [bucket.key for bucket in monthly.buckets] == ["2025-05"]
+    assert [instance.instance_key for instance in instances.instances] == [
+        "opencode/project-a",
+        "opencode/project-b",
+    ]
+
+
 def test_summarize_usage_can_split_and_collapse_thinking_levels(tmp_path) -> None:
     conn = connect(tmp_path / "toktrail.db")
     migrate(conn)
@@ -329,8 +421,7 @@ def test_summarize_usage_can_split_and_collapse_thinking_levels(tmp_path) -> Non
     ] == [("openai", "gpt-5.4", None, 42)]
     assert split_report.totals.tokens.total == collapsed_report.totals.tokens.total
     assert (
-        split_report.totals.actual_cost_usd
-        == collapsed_report.totals.actual_cost_usd
+        split_report.totals.actual_cost_usd == collapsed_report.totals.actual_cost_usd
     )
 
 

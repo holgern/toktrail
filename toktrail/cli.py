@@ -9,9 +9,12 @@ import time
 from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
-from typing import Annotated, NoReturn
+from typing import TYPE_CHECKING, Annotated, NoReturn, cast
 
 import typer
+
+if TYPE_CHECKING:
+    from toktrail.reporting import UsageSeriesBucket
 
 from toktrail.adapters.base import SourceSessionSummary
 from toktrail.adapters.registry import get_harness
@@ -275,10 +278,10 @@ DryRunOption = Annotated[
     bool, typer.Option("--dry-run", help="Simulate import without persisting changes.")
 ]
 RequiredHarnessOption = Annotated[
-    str, typer.Option("--harness", help="Name of the harness to import from.")
+    str | None, typer.Option("--harness", help="Name of the harness to import from.")
 ]
 RequiredSourceOption = Annotated[
-    Path, typer.Option("--source", help="Path to source data.")
+    Path | None, typer.Option("--source", help="Path to source data.")
 ]
 
 
@@ -438,7 +441,15 @@ def status(
 @app.command()
 def usage(
     ctx: typer.Context,
-    period: Annotated[str | None, typer.Argument()] = None,
+    view: Annotated[
+        str | None,
+        typer.Argument(
+            help=(
+                "daily, weekly, monthly, summary, today, yesterday, "
+                "this-week, last-week, this-month, last-month"
+            )
+        ),
+    ] = None,
     json_output: JsonOption = False,
     harness: HarnessOption = None,
     source_session_id: SourceSessionOption = None,
@@ -457,6 +468,293 @@ def usage(
     min_tokens: MinTokensOption = None,
     sort: ReportSortOption = "actual",
     limit: ReportLimitOption = None,
+    breakdown: BreakdownOption = False,
+    compact: Annotated[bool, typer.Option("--compact")] = False,
+    instances: Annotated[bool, typer.Option("--instances")] = False,
+    project: Annotated[str | None, typer.Option("--project", "-p")] = None,
+    order: Annotated[str, typer.Option("--order")] = "desc",
+    locale: Annotated[str | None, typer.Option("--locale")] = None,
+    start_of_week: Annotated[str, typer.Option("--start-of-week")] = "monday",
+) -> None:
+    if timezone_name is not None and utc:
+        _exit_with_error("Use either --timezone or --utc, not both.")
+
+    normalized_view = (view or "daily").strip().lower()
+    series_views = {"daily", "weekly", "monthly"}
+    named_periods = {
+        "today",
+        "yesterday",
+        "this-week",
+        "last-week",
+        "this-month",
+        "last-month",
+    }
+
+    if normalized_view in series_views:
+        _usage_series(
+            ctx=ctx,
+            view=normalized_view,
+            json_output=json_output,
+            harness=harness,
+            source_session_id=source_session_id,
+            provider_id=provider_id,
+            model_id=model_id,
+            thinking_level=thinking_level,
+            agent=agent,
+            since=since,
+            until=until,
+            timezone_name=timezone_name,
+            utc=utc,
+            split_thinking=split_thinking,
+            breakdown=breakdown,
+            compact=compact,
+            instances=instances,
+            project=project,
+            order=order,
+            locale=locale,
+            start_of_week=start_of_week,
+            price_state=price_state,
+            min_messages=min_messages,
+            min_tokens=min_tokens,
+            sort=sort,
+            limit=limit,
+        )
+        return
+
+    if normalized_view == "summary" or normalized_view in named_periods:
+        _usage_aggregate(
+            ctx=ctx,
+            period=None if normalized_view == "summary" else normalized_view,
+            json_output=json_output,
+            harness=harness,
+            source_session_id=source_session_id,
+            provider_id=provider_id,
+            model_id=model_id,
+            thinking_level=thinking_level,
+            agent=agent,
+            since=since,
+            until=until,
+            timezone_name=timezone_name,
+            utc=utc,
+            rich_output=rich_output,
+            split_thinking=split_thinking,
+            price_state=price_state,
+            min_messages=min_messages,
+            min_tokens=min_tokens,
+            sort=sort,
+            limit=limit,
+        )
+        return
+
+    _exit_with_error(
+        "Unsupported usage view. Use daily, weekly, monthly, summary, "
+        "today, yesterday, this-week, last-week, this-month, or last-month."
+    )
+
+
+def _usage_series(
+    *,
+    ctx: typer.Context,
+    view: str,
+    json_output: bool,
+    harness: str | None,
+    source_session_id: str | None,
+    provider_id: str | None,
+    model_id: str | None,
+    thinking_level: str | None,
+    agent: str | None,
+    since: str | None,
+    until: str | None,
+    timezone_name: str | None,
+    utc: bool,
+    split_thinking: bool,
+    breakdown: bool,
+    compact: bool,
+    instances: bool,
+    project: str | None,
+    order: str,
+    locale: str | None,
+    start_of_week: str,
+    price_state: str,
+    min_messages: int | None,
+    min_tokens: int | None,
+    sort: str,
+    limit: int | None,
+) -> None:
+    from toktrail.db import summarize_usage_series
+    from toktrail.periods import _resolve_timezone, parse_cli_boundary
+    from toktrail.reporting import UsageSeriesFilter
+
+    tz = _resolve_timezone(timezone_name=timezone_name, utc=utc)
+    since_ms = parse_cli_boundary(since, tz=tz, is_until=False)
+    until_ms = parse_cli_boundary(until, tz=tz, is_until=True)
+
+    costing_config = _load_costing_config_or_exit(ctx)
+    conn = _open_toktrail_connection(ctx)
+    try:
+        series_report = summarize_usage_series(
+            conn,
+            UsageSeriesFilter(
+                granularity=view,
+                tracking_session_id=None,
+                harness=harness,
+                source_session_id=source_session_id,
+                provider_id=provider_id,
+                model_id=model_id,
+                thinking_level=thinking_level,
+                agent=agent,
+                since_ms=since_ms,
+                until_ms=until_ms,
+                split_thinking=split_thinking,
+                project=project,
+                instances=instances,
+                breakdown=breakdown,
+                start_of_week=start_of_week,
+                locale=locale,
+                order=order,
+            ),
+            costing_config=costing_config,
+        )
+    finally:
+        conn.close()
+
+    if json_output:
+        typer.echo(json.dumps(series_report.as_dict(), indent=2))
+        return
+
+    _print_usage_series(
+        series_report,
+        compact=compact,
+        breakdown=breakdown,
+        instances=instances,
+        price_state=price_state,
+        min_messages=min_messages,
+        min_tokens=min_tokens,
+        sort=sort,
+        limit=limit,
+    )
+
+
+def _print_usage_series(
+    report: object,
+    *,
+    compact: bool,
+    breakdown: bool,
+    instances: bool,
+    price_state: str,
+    min_messages: int | None,
+    min_tokens: int | None,
+    sort: str,
+    limit: int | None,
+) -> None:
+    from toktrail.reporting import UsageSeriesReport
+
+    if not isinstance(report, UsageSeriesReport):
+        msg = "Expected UsageSeriesReport."
+        raise TypeError(msg)
+
+    typer.echo(f"toktrail usage {report.granularity}")
+    if instances:
+        for instance in report.instances:
+            typer.echo(f"\nInstance: {instance.instance_label}")
+            _print_usage_series_bucket_table(
+                instance.buckets,
+                compact=compact,
+                breakdown=breakdown,
+            )
+        return
+    _print_usage_series_bucket_table(
+        report.buckets,
+        compact=compact,
+        breakdown=breakdown,
+    )
+
+
+def _print_usage_series_bucket_table(
+    buckets: tuple[UsageSeriesBucket, ...],
+    *,
+    compact: bool,
+    breakdown: bool,
+) -> None:
+    if compact:
+        typer.echo("period  msgs  total  actual  virtual  savings  models")
+    elif breakdown:
+        header = (
+            "period  provider/model  msgs  input  output  reasoning  cache_r  "
+            "cache_w  total  actual  virtual"
+        )
+        typer.echo(header)
+    else:
+        header = (
+            "period  msgs  models  input  output  reasoning  cache_r  cache_w  "
+            "total  source  actual  virtual  savings  unpriced"
+        )
+        typer.echo(header)
+    for bucket in buckets:
+        tokens = bucket.tokens
+        costs = bucket.costs
+        models = ", ".join(bucket.models)
+        if compact:
+            line = (
+                f"{bucket.label}  {bucket.message_count}  "
+                f"{_format_int(tokens.total)}  "
+                f"{_format_cost(costs.actual_cost_usd)}  "
+                f"{_format_cost(costs.virtual_cost_usd)}  "
+                f"{_format_cost(costs.savings_usd)}  {models}"
+            )
+            typer.echo(line)
+        else:
+            line = (
+                f"{bucket.label}  {bucket.message_count}  {models}  "
+                f"{_format_int(tokens.input)}  {_format_int(tokens.output)}  "
+                f"{_format_int(tokens.reasoning)}  "
+                f"{_format_int(tokens.cache_read)}  "
+                f"{_format_int(tokens.cache_write)}  {_format_int(tokens.total)}  "
+                f"{_format_cost(costs.source_cost_usd)}  "
+                f"{_format_cost(costs.actual_cost_usd)}  "
+                f"{_format_cost(costs.virtual_cost_usd)}  "
+                f"{_format_cost(costs.savings_usd)}  {costs.unpriced_count}"
+            )
+            typer.echo(line)
+        if breakdown:
+            for row in bucket.by_model:
+                label = f"{row.provider_id}/{row.model_id}"
+                line = (
+                    f"  └─  {label}  {row.message_count}  "
+                    f"{_format_int(row.tokens.input)}  "
+                    f"{_format_int(row.tokens.output)}  "
+                    f"{_format_int(row.tokens.reasoning)}  "
+                    f"{_format_int(row.tokens.cache_read)}  "
+                    f"{_format_int(row.tokens.cache_write)}  "
+                    f"{_format_int(row.tokens.total)}  "
+                    f"{_format_cost(row.costs.actual_cost_usd)}  "
+                    f"{_format_cost(row.costs.virtual_cost_usd)}"
+                )
+                typer.echo(line)
+
+
+def _usage_aggregate(
+    *,
+    ctx: typer.Context,
+    period: str | None,
+    json_output: bool,
+    harness: str | None,
+    source_session_id: str | None,
+    provider_id: str | None,
+    model_id: str | None,
+    thinking_level: str | None,
+    agent: str | None,
+    since: str | None,
+    until: str | None,
+    timezone_name: str | None,
+    utc: bool,
+    rich_output: bool,
+    split_thinking: bool,
+    price_state: str,
+    min_messages: int | None,
+    min_tokens: int | None,
+    sort: str,
+    limit: int | None,
 ) -> None:
     try:
         resolved_range = resolve_time_range(
@@ -737,9 +1035,15 @@ def sources(
     rows: list[dict[str, object]] = []
     for harness in sorted(selected_harnesses):
         try:
+            configured_source = configured_sources.get(harness)
+            selected_source = (
+                source_path if source_path is not None else configured_source
+            )
+            if isinstance(selected_source, list):
+                selected_source = selected_source[0] if selected_source else None
             snapshot = capture_source_snapshot(
                 harness,
-                source_path=source_path or configured_sources.get(harness),
+                source_path=selected_source,
                 config_path=loaded.path,
             )
         except (OSError, ValueError, ToktrailError) as exc:
@@ -778,10 +1082,10 @@ def sources(
     payload_rows = [
         {
             "harness": str(row["harness"]),
-            "exists": "yes" if row["exists"] else "no",
-            "sessions": _format_int(int(row["sessions"])),
-            "messages": _format_int(int(row["messages"])),
-            "tokens": _format_int(int(row["tokens"])),
+            "exists": "yes" if bool(row["exists"]) else "no",
+            "sessions": _format_int(cast(int, row["sessions"])),
+            "messages": _format_int(cast(int, row["messages"])),
+            "tokens": _format_int(cast(int, row["tokens"])),
             "source_path": str(row["source_path"]),
             "warning": str(row["warning"]),
         }
@@ -878,11 +1182,11 @@ def pricing_list(
         sort=sort,
         limit=limit,
     )
-    rows = _filter_price_rows(_price_rows(loaded.config, filters.table), filters)
+    price_rows = _filter_price_rows(_price_rows(loaded.config, filters.table), filters)
     if json_output:
-        typer.echo(json.dumps(rows, indent=2))
+        typer.echo(json.dumps(price_rows, indent=2))
         return
-    _print_price_table(rows, aliases=aliases, rich_output=rich_output)
+    _print_price_table(price_rows, aliases=aliases, rich_output=rich_output)
 
 
 @sessions_app.callback(invoke_without_command=True)

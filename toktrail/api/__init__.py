@@ -1,4 +1,5 @@
 """Stable public toktrail API."""
+
 from __future__ import annotations
 
 from toktrail.api.config import (
@@ -37,6 +38,9 @@ from toktrail.api.models import (
     TrackingSessionReport,
     UnconfiguredModelRow,
     UsageEvent,
+    UsageSeriesBucket,
+    UsageSeriesInstance,
+    UsageSeriesReport,
 )
 from toktrail.api.paths import (
     default_source_path,
@@ -44,7 +48,7 @@ from toktrail.api.paths import (
     resolve_source_path,
     resolve_toktrail_db_path,
 )
-from toktrail.api.reports import session_report, usage_report
+from toktrail.api.reports import session_report, usage_report, usage_series_report
 from toktrail.api.sessions import (
     get_active_session,
     get_session,
@@ -82,6 +86,9 @@ __all__ = [
     "TrackingSessionReport",
     "UnconfiguredModelRow",
     "UsageEvent",
+    "UsageSeriesBucket",
+    "UsageSeriesInstance",
+    "UsageSeriesReport",
     "capture_source_snapshot",
     "config_exists",
     "config_summary",
@@ -114,4 +121,5 @@ __all__ = [
     "stop_session",
     "supported_harnesses",
     "usage_report",
+    "usage_series_report",
 ]

@@ -65,7 +65,9 @@ DEFAULT_CONFIG_TEXT = """\
 config_version = 1
 
 [imports]
-harnesses = ["opencode", "pi", "copilot", "codex", "goose", "droid", "amp", "claude", "vibe"]
+harnesses = [
+  "opencode", "pi", "copilot", "codex", "goose", "droid", "amp", "claude", "vibe"
+]
 missing_source = "warn"
 include_raw_json = false
 
@@ -126,7 +128,9 @@ COPILOT_TEMPLATE_TEXT = """\
 config_version = 1
 
 [imports]
-harnesses = ["opencode", "pi", "copilot", "codex", "goose", "droid", "amp", "claude", "vibe"]
+harnesses = [
+  "opencode", "pi", "copilot", "codex", "goose", "droid", "amp", "claude", "vibe"
+]
 missing_source = "warn"
 include_raw_json = false
 
@@ -843,12 +847,18 @@ def _parse_import_sources(
             paths: list[Path] = []
             for idx, item in enumerate(raw_path, start=1):
                 if not isinstance(item, str):
-                    msg = f"{context}.{raw_harness}[{idx}] must be a string path, got {type(item).__name__}."
+                    msg = (
+                        f"{context}.{raw_harness}[{idx}] must be a string path, "
+                        f"got {type(item).__name__}."
+                    )
                     raise ValueError(msg)
                 paths.append(Path(item).expanduser())
             sources[harness] = paths
         else:
-            msg = f"{context}.{raw_harness} must be a string or list of strings, got {type(raw_path).__name__}."
+            msg = (
+                f"{context}.{raw_harness} must be a string or list of strings, "
+                f"got {type(raw_path).__name__}."
+            )
             raise ValueError(msg)
     return sources
 

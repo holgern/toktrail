@@ -5,8 +5,8 @@ from pathlib import Path
 
 from toktrail import db as db_module
 from toktrail.api._common import _load_costing_config, _open_state_db
-from toktrail.api._conversions import _to_public_report
-from toktrail.api.models import TrackingSessionReport
+from toktrail.api._conversions import _to_public_report, _to_public_series_report
+from toktrail.api.models import TrackingSessionReport, UsageSeriesReport
 from toktrail.errors import (
     InvalidAPIUsageError,
     NoActiveSessionError,
@@ -137,4 +137,67 @@ def usage_report(
     return replace(public_report, filters=filters)
 
 
-__all__ = ["session_report", "usage_report"]
+def usage_series_report(
+    db_path: Path | None = None,
+    *,
+    granularity: str = "daily",
+    session_id: int | None = None,
+    since_ms: int | None = None,
+    until_ms: int | None = None,
+    timezone: str | None = None,
+    utc: bool = False,
+    start_of_week: str = "monday",
+    harness: str | None = None,
+    source_session_id: str | None = None,
+    provider_id: str | None = None,
+    model_id: str | None = None,
+    thinking_level: str | None = None,
+    agent: str | None = None,
+    project: str | None = None,
+    instances: bool = False,
+    breakdown: bool = False,
+    split_thinking: bool = False,
+    config_path: Path | None = None,
+) -> UsageSeriesReport:
+    if granularity not in ("daily", "weekly", "monthly"):
+        msg = f"Invalid granularity: {granularity}. Use daily, weekly, or monthly."
+        raise InvalidAPIUsageError(msg)
+
+    from toktrail.db import migrate, summarize_usage_series
+    from toktrail.periods import _resolve_timezone
+    from toktrail.reporting import UsageSeriesFilter
+
+    conn, _ = _open_state_db(db_path)
+    try:
+        migrate(conn)
+        costing_config = _load_costing_config(config_path)
+        _resolve_timezone(timezone_name=timezone, utc=utc)  # validate timezone
+        report = summarize_usage_series(
+            conn,
+            UsageSeriesFilter(
+                granularity=granularity,
+                tracking_session_id=session_id,
+                harness=harness,
+                source_session_id=source_session_id,
+                provider_id=provider_id,
+                model_id=model_id,
+                thinking_level=thinking_level,
+                agent=agent,
+                since_ms=since_ms,
+                until_ms=until_ms,
+                split_thinking=split_thinking,
+                project=project,
+                instances=instances,
+                breakdown=breakdown,
+                start_of_week=start_of_week,
+                locale=None,
+            ),
+            costing_config=costing_config,
+        )
+    finally:
+        conn.close()
+
+    return _to_public_series_report(report)
+
+
+__all__ = ["session_report", "usage_report", "usage_series_report"]

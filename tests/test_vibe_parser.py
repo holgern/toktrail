@@ -234,7 +234,7 @@ def test_parse_vibe_raw_json_is_optional(tmp_path: Path) -> None:
 
 def test_scan_vibe_path_reads_nested_session_dirs_and_filters(tmp_path: Path) -> None:
     # Create multiple sessions
-    session1 = write_vibe_session(tmp_path)
+    write_vibe_session(tmp_path)
     session2_id = "test-session-5"
     session2_dir = tmp_path / f"session_{session2_id}"
     session2_dir.mkdir(parents=True, exist_ok=True)
@@ -274,7 +274,7 @@ def test_scan_vibe_path_accepts_meta_json_file(tmp_path: Path) -> None:
 
 
 def test_list_vibe_sessions_aggregates_sessions(tmp_path: Path) -> None:
-    session = write_vibe_session(tmp_path)
+    write_vibe_session(tmp_path)
 
     sessions = list_vibe_sessions(tmp_path)
     assert len(sessions) == 1
@@ -287,7 +287,9 @@ def test_list_vibe_sessions_aggregates_sessions(tmp_path: Path) -> None:
     assert summary.tokens.output == 62
 
 
-def test_vibe_model_identity_uses_provider_record_for_local_model(tmp_path: Path) -> None:
+def test_vibe_model_identity_uses_provider_record_for_local_model(
+    tmp_path: Path,
+) -> None:
     session_id = "test-session-llamacpp"
     session_dir = tmp_path / f"session_{session_id}"
     session_dir.mkdir(parents=True, exist_ok=True)

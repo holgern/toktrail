@@ -14,7 +14,7 @@ from tests.helpers import (
 )
 from toktrail.api.config import init_config
 from toktrail.api.imports import import_usage
-from toktrail.api.reports import session_report, usage_report
+from toktrail.api.reports import session_report, usage_report, usage_series_report
 from toktrail.api.sessions import init_state, start_session
 from toktrail.errors import InvalidAPIUsageError, NoActiveSessionError
 
@@ -104,6 +104,36 @@ def test_usage_report_supports_periods_without_tracking_session(
     assert report.totals.tokens.total == 1850
 
 
+def test_usage_series_report_daily_json_shape(tmp_path) -> None:
+    state_db = tmp_path / "toktrail.db"
+    source_db = tmp_path / "opencode.db"
+    conn = create_opencode_db(source_db)
+    insert_message(conn, row_id="row-1", session_id="ses-1", data=VALID_ASSISTANT)
+    conn.commit()
+    conn.close()
+    init_state(state_db)
+    import_usage(state_db, "opencode", source_path=source_db)
+
+    report = usage_series_report(
+        state_db,
+        granularity="daily",
+        timezone="UTC",
+        breakdown=True,
+        config_path=tmp_path / "missing-config.toml",
+    )
+    payload = report.as_dict()
+
+    assert payload["type"] == "usage_series"
+    assert payload["granularity"] == "daily"
+    assert payload["timezone"] == "UTC"
+    assert payload["buckets"][0]["by_model"][0]["model_id"] == "claude-sonnet-4"
+
+
+def test_usage_series_report_rejects_invalid_granularity(tmp_path) -> None:
+    with pytest.raises(InvalidAPIUsageError, match="Invalid granularity"):
+        usage_series_report(tmp_path / "toktrail.db", granularity="hourly")
+
+
 def test_usage_report_rejects_period_and_since_until_together(tmp_path) -> None:
     with pytest.raises(InvalidAPIUsageError, match="either period or since/until"):
         usage_report(
@@ -142,10 +172,13 @@ def test_session_report_supports_thinking_filter_and_collapse(tmp_path) -> None:
     assert [(row.model_id, row.thinking_level) for row in filtered_split.by_model] == [
         ("claude-sonnet-4", "high")
     ]
-    assert sorted([
-        (row.model_id, row.thinking_level, row.message_count)
-        for row in split_all.by_model
-    ], key=lambda x: x[1] or "") == [
+    assert sorted(
+        [
+            (row.model_id, row.thinking_level, row.message_count)
+            for row in split_all.by_model
+        ],
+        key=lambda x: x[1] or "",
+    ) == [
         ("claude-sonnet-4", "high", 1),
         ("claude-sonnet-4", "low", 1),
     ]

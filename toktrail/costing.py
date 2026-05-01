@@ -82,12 +82,13 @@ def cost_from_price(tokens: TokenBreakdown, price: Price) -> Decimal:
         if price.reasoning_usd_per_1m is not None
         else price.output_usd_per_1m
     )
+    million = Decimal(1_000_000)
     return (
-        Decimal(tokens.input) * Decimal(str(price.input_usd_per_1m)) / Decimal(1_000_000)
-        + Decimal(tokens.cache_read) * Decimal(str(cached_input_price)) / Decimal(1_000_000)
-        + Decimal(tokens.cache_write) * Decimal(str(cache_write_price)) / Decimal(1_000_000)
-        + Decimal(tokens.output) * Decimal(str(price.output_usd_per_1m)) / Decimal(1_000_000)
-        + Decimal(tokens.reasoning) * Decimal(str(reasoning_price)) / Decimal(1_000_000)
+        Decimal(tokens.input) * Decimal(str(price.input_usd_per_1m)) / million
+        + Decimal(tokens.cache_read) * Decimal(str(cached_input_price)) / million
+        + Decimal(tokens.cache_write) * Decimal(str(cache_write_price)) / million
+        + Decimal(tokens.output) * Decimal(str(price.output_usd_per_1m)) / million
+        + Decimal(tokens.reasoning) * Decimal(str(reasoning_price)) / million
     )
 
 

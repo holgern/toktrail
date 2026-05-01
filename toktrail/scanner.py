@@ -100,7 +100,7 @@ def _compute_fingerprint(path: Path) -> SourceFingerprint:
     )
 
 
-def discover_sources(
+def discover_sources(  # noqa: C901
     *,
     harnesses: list[str] | None = None,
     config: ToktrailConfig | None = None,
@@ -137,7 +137,10 @@ def discover_sources(
                     ScanWarning(
                         harness="",
                         path=explicit_source,
-                        message=f"Explicit source requires exactly one harness; got {len(harnesses)}",
+                        message=(
+                            "Explicit source requires exactly one harness; "
+                            f"got {len(harnesses)}"
+                        ),
                     ),
                 ),
             )
@@ -164,12 +167,10 @@ def discover_sources(
             configured = None
             if config.imports.sources and harness_name in config.imports.sources:
                 configured = config.imports.sources[harness_name]
-            
+
             if configured:
                 if isinstance(configured, Path):
                     source_paths = [configured]
-                elif isinstance(configured, str):
-                    source_paths = [Path(configured).expanduser()]
                 elif isinstance(configured, list):
                     source_paths = [
                         p if isinstance(p, Path) else Path(p).expanduser()

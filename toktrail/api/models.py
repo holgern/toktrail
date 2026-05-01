@@ -251,7 +251,7 @@ class SourceSessionDiff:
                 f"{candidate_ids}"
             )
             raise AmbiguousSourceSessionError(msg)
-        return candidates[0]
+        return next(iter(candidates))
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -450,9 +450,7 @@ class TrackingSessionReport:
             "by_harness": [row.as_dict() for row in self.by_harness],
             "by_model": [row.as_dict() for row in self.by_model],
             "by_agent": [row.as_dict() for row in self.by_agent],
-            "unconfigured_models": [
-                row.as_dict() for row in self.unconfigured_models
-            ],
+            "unconfigured_models": [row.as_dict() for row in self.unconfigured_models],
         }
 
 
@@ -538,6 +536,88 @@ class FinalizedManualRun:
         }
 
 
+@dataclass(frozen=True)
+class UsageSeriesBucket:
+    key: str
+    label: str
+    since_ms: int
+    until_ms: int
+    message_count: int
+    tokens: TokenBreakdown
+    costs: CostTotals
+    models: tuple[str, ...] = ()
+    by_model: tuple[ModelSummaryRow, ...] = ()
+
+    def as_dict(self) -> dict[str, object]:
+        result: dict[str, object] = {
+            "key": self.key,
+            "label": self.label,
+            "since_ms": self.since_ms,
+            "until_ms": self.until_ms,
+            "message_count": self.message_count,
+            "models": list(self.models),
+            "tokens": self.tokens.as_dict(),
+            "costs": self.costs.as_dict(),
+        }
+        if self.by_model:
+            result["by_model"] = [row.as_dict() for row in self.by_model]
+        return result
+
+
+@dataclass(frozen=True)
+class UsageSeriesInstance:
+    instance_key: str
+    instance_label: str
+    harness: str | None
+    source_session_id: str | None
+    buckets: tuple[UsageSeriesBucket, ...]
+    totals: SessionTotals
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "instance_key": self.instance_key,
+            "instance_label": self.instance_label,
+            "harness": self.harness,
+            "source_session_id": self.source_session_id,
+            "buckets": [b.as_dict() for b in self.buckets],
+            "totals": self.totals.as_dict(),
+        }
+
+
+@dataclass(frozen=True)
+class UsageSeriesReport:
+    granularity: str
+    timezone: str
+    locale: str | None
+    start_of_week: str | None
+    filters: dict[str, object]
+    buckets: tuple[UsageSeriesBucket, ...] = ()
+    instances: tuple[UsageSeriesInstance, ...] = ()
+    totals: SessionTotals = field(
+        default_factory=lambda: SessionTotals(
+            tokens=TokenBreakdown(),
+            costs=CostTotals(),
+        )
+    )
+
+    def as_dict(self) -> dict[str, object]:
+        result: dict[str, object] = {
+            "type": "usage_series",
+            "granularity": self.granularity,
+            "timezone": self.timezone,
+            "locale": self.locale,
+            "start_of_week": self.start_of_week,
+            "order": self.filters.get("order", "desc"),
+            "filters": dict(self.filters),
+        }
+        if self.instances:
+            result["instances"] = [inst.as_dict() for inst in self.instances]
+        else:
+            result["buckets"] = [b.as_dict() for b in self.buckets]
+        result["totals"] = self.totals.as_dict()
+        return result
+
+
 __all__ = [
     "AgentSummaryRow",
     "CostTotals",
@@ -558,4 +638,7 @@ __all__ = [
     "TrackingSessionReport",
     "UnconfiguredModelRow",
     "UsageEvent",
+    "UsageSeriesBucket",
+    "UsageSeriesInstance",
+    "UsageSeriesReport",
 ]
