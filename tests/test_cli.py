@@ -17,6 +17,7 @@ from tests.helpers import (
     create_opencode_db,
     insert_message,
 )
+from toktrail.api.sessions import init_state, start_session
 from toktrail.cli import app
 
 
@@ -460,38 +461,10 @@ opencode = "{missing_db}"
     assert "OpenCode database not found" in payload[0]["warning"]
 
 
-def test_cli_watch_opencode_exits_cleanly_on_ctrl_c(tmp_path, monkeypatch) -> None:
-    runner = CliRunner()
-    state_db = tmp_path / "toktrail.db"
-    source_db = tmp_path / "opencode.db"
-    create_source_db(source_db)
 
-    runner.invoke(app, ["--db", str(state_db), "init"])
-    runner.invoke(
-        app, ["--db", str(state_db), "run", "start", "--name", "test-session"]
-    )
 
-    def interrupt_after_first_sleep(_interval: float) -> None:
-        raise KeyboardInterrupt
 
-    monkeypatch.setattr("toktrail.cli.time.sleep", interrupt_after_first_sleep)
-    result = runner.invoke(
-        app,
-        [
-            "--db",
-            str(state_db),
-            "watch",
-            "opencode",
-            "--opencode-db",
-            str(source_db),
-            "--interval",
-            "0.1",
-        ],
-    )
 
-    assert result.exit_code == 0, result.output
-    assert "Stopped watching OpenCode." in result.output
-    assert "rows imported: 1" in result.output
 
 
 def test_cli_import_copilot_status(tmp_path) -> None:
@@ -697,14 +670,6 @@ def test_cli_sessions_droid_breakdown_shows_token_columns(tmp_path) -> None:
     assert "reasoning:" in result.output
     assert "cache read:" in result.output
     assert "cache write:" in result.output
-
-
-def test_cli_watch_droid_is_not_registered() -> None:
-    runner = CliRunner()
-
-    result = runner.invoke(app, ["watch", "droid"])
-
-    assert result.exit_code != 0
 
 
 def test_cli_status_supports_thinking_filter_and_collapse(tmp_path) -> None:
@@ -1220,38 +1185,6 @@ def test_cli_import_copilot_without_file_or_env_fails(tmp_path) -> None:
     assert "Copilot telemetry file not found" in result.output
 
 
-def test_cli_watch_copilot_exits_cleanly_on_ctrl_c(tmp_path, monkeypatch) -> None:
-    runner = CliRunner()
-    state_db = tmp_path / "toktrail.db"
-    copilot_file = tmp_path / "copilot.jsonl"
-    create_copilot_file(copilot_file)
-
-    runner.invoke(app, ["--db", str(state_db), "init"])
-    runner.invoke(
-        app, ["--db", str(state_db), "run", "start", "--name", "test-session"]
-    )
-
-    def interrupt_after_first_sleep(_interval: float) -> None:
-        raise KeyboardInterrupt
-
-    monkeypatch.setattr("toktrail.cli.time.sleep", interrupt_after_first_sleep)
-    result = runner.invoke(
-        app,
-        [
-            "--db",
-            str(state_db),
-            "watch",
-            "copilot",
-            "--copilot-file",
-            str(copilot_file),
-            "--interval",
-            "0.1",
-        ],
-    )
-
-    assert result.exit_code == 0, result.output
-    assert "Stopped watching Copilot." in result.output
-    assert "rows imported: 1" in result.output
 
 
 def test_cli_import_pi_status(tmp_path) -> None:
@@ -2025,13 +1958,6 @@ def test_cli_sessions_amp_breakdown_shows_token_columns(tmp_path) -> None:
     assert "claude-sonnet-4-0" in result.output
 
 
-def test_cli_watch_goose_is_not_registered() -> None:
-    runner = CliRunner()
-
-    result = runner.invoke(app, ["watch", "goose"])
-
-    assert result.exit_code != 0
-    assert "No such command" in result.output
 
 
 def test_cli_sessions_codex_supports_limit_sort_and_columns(tmp_path) -> None:
@@ -2212,106 +2138,10 @@ def test_cli_sessions_copilot_supports_virtual_and_savings_sort(tmp_path) -> Non
         assert "conv-1" not in result.output
 
 
-def test_cli_watch_pi_exits_cleanly_on_ctrl_c(tmp_path, monkeypatch) -> None:
-    runner = CliRunner()
-    state_db = tmp_path / "toktrail.db"
-    session_file = tmp_path / "sessions" / "encoded-cwd" / "session.jsonl"
-    create_pi_session_file(session_file)
-
-    runner.invoke(app, ["--db", str(state_db), "init"])
-    runner.invoke(
-        app, ["--db", str(state_db), "run", "start", "--name", "test-session"]
-    )
-
-    def interrupt_after_first_sleep(_interval: float) -> None:
-        raise KeyboardInterrupt
-
-    monkeypatch.setattr("toktrail.cli.time.sleep", interrupt_after_first_sleep)
-    result = runner.invoke(
-        app,
-        [
-            "--db",
-            str(state_db),
-            "watch",
-            "pi",
-            "--pi-path",
-            str(session_file),
-            "--interval",
-            "0.1",
-        ],
-    )
-
-    assert result.exit_code == 0, result.output
-    assert "Stopped watching Pi." in result.output
-    assert "rows imported: 1" in result.output
 
 
-def test_cli_watch_codex_exits_cleanly_on_ctrl_c(tmp_path, monkeypatch) -> None:
-    runner = CliRunner()
-    state_db = tmp_path / "toktrail.db"
-    codex_file = tmp_path / "codex" / "session-001.jsonl"
-    create_codex_session_file(codex_file)
-
-    runner.invoke(app, ["--db", str(state_db), "init"])
-    runner.invoke(
-        app, ["--db", str(state_db), "run", "start", "--name", "test-session"]
-    )
-
-    def interrupt_after_first_sleep(_interval: float) -> None:
-        raise KeyboardInterrupt
-
-    monkeypatch.setattr("toktrail.cli.time.sleep", interrupt_after_first_sleep)
-    result = runner.invoke(
-        app,
-        [
-            "--db",
-            str(state_db),
-            "watch",
-            "codex",
-            "--codex-path",
-            str(codex_file),
-            "--interval",
-            "0.1",
-        ],
-    )
-
-    assert result.exit_code == 0, result.output
-    assert "Stopped watching Codex." in result.output
-    assert "rows imported: 1" in result.output
 
 
-def test_cli_watch_amp_exits_cleanly_on_ctrl_c(tmp_path, monkeypatch) -> None:
-    runner = CliRunner()
-    state_db = tmp_path / "toktrail.db"
-    source_path = tmp_path / "amp" / "threads"
-    create_amp_source(source_path)
-
-    runner.invoke(app, ["--db", str(state_db), "init"])
-    runner.invoke(
-        app, ["--db", str(state_db), "run", "start", "--name", "test-session"]
-    )
-
-    def interrupt_after_first_sleep(_interval: float) -> None:
-        raise KeyboardInterrupt
-
-    monkeypatch.setattr("toktrail.cli.time.sleep", interrupt_after_first_sleep)
-    result = runner.invoke(
-        app,
-        [
-            "--db",
-            str(state_db),
-            "watch",
-            "amp",
-            "--amp-path",
-            str(source_path),
-            "--interval",
-            "0.1",
-        ],
-    )
-
-    assert result.exit_code == 0, result.output
-    assert "Stopped watching Amp." in result.output
-    assert "rows imported: 1" in result.output
 
 
 def test_cli_import_pi_without_path_or_env_fails(tmp_path, monkeypatch) -> None:
@@ -2495,3 +2325,177 @@ def test_cli_copilot_env_json_does_not_affect_default_output(tmp_path) -> None:
     assert lines[0].startswith("$env.COPILOT_OTEL_ENABLED")
     # Must not be valid JSON object output
     assert not result.output.strip().startswith("{")
+def test_cli_watch_imports_configured_harnesses_and_prints_token_delta(
+    tmp_path, monkeypatch,
+) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    opencode_db = tmp_path / "opencode.db"
+    pi_file = tmp_path / "sessions" / "encoded-cwd" / "session.jsonl"
+    config_path = tmp_path / "toktrail.toml"
+
+    conn = create_opencode_db(opencode_db)
+    insert_message(
+        conn, row_id="row-1", session_id="ses-1",
+        data=deepcopy(VALID_ASSISTANT),
+    )
+    conn.commit()
+    conn.close()
+
+    create_pi_session_file(pi_file)
+    config_path.write_text(
+        f"""
+config_version = 1
+
+[imports]
+harnesses = ["opencode", "pi"]
+missing_source = "error"
+include_raw_json = false
+
+[imports.sources]
+opencode = "{opencode_db}"
+pi = "{pi_file}"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    init_state(state_db)
+    start_session(state_db, name="watch-test", started_at_ms=0)
+
+    def interrupt_after_first_sleep(_interval: float) -> None:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("toktrail.cli.time.sleep", interrupt_after_first_sleep)
+    result = runner.invoke(
+        app,
+        [
+            "--db", str(state_db),
+            "--config", str(config_path),
+            "watch",
+            "--interval", "0.1",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Watching configured harnesses" in result.output
+    assert "tokens" in result.output
+    assert "input" in result.output or "in=" in result.output
+    assert "output" in result.output or "out=" in result.output
+    assert "opencode" in result.output.lower()
+    assert "rows imported" not in result.output
+    assert "rows seen" not in result.output
+
+
+def test_cli_watch_does_not_print_idle_duplicate_imports(
+    tmp_path, monkeypatch,
+) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    opencode_db = tmp_path / "opencode.db"
+    config_path = tmp_path / "toktrail.toml"
+
+    conn = create_opencode_db(opencode_db)
+    insert_message(
+        conn, row_id="row-1", session_id="ses-1",
+        data=deepcopy(VALID_ASSISTANT),
+    )
+    conn.commit()
+    conn.close()
+
+    config_path.write_text(
+        f"""
+config_version = 1
+
+[imports]
+harnesses = ["opencode"]
+missing_source = "error"
+include_raw_json = false
+
+[imports.sources]
+opencode = "{opencode_db}"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    init_state(state_db)
+    start_session(state_db, name="watch-idle", started_at_ms=0)
+
+    sleep_calls = 0
+
+    def sleep_then_interrupt(_interval: float) -> None:
+        nonlocal sleep_calls
+        sleep_calls += 1
+        if sleep_calls >= 2:
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr("toktrail.cli.time.sleep", sleep_then_interrupt)
+    result = runner.invoke(
+        app,
+        [
+            "--db", str(state_db),
+            "--config", str(config_path),
+            "watch",
+            "--interval", "0.1",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert result.output.count("+1 msgs") == 1, result.output
+    assert "rows imported" not in result.output
+
+
+def test_cli_watch_json_outputs_delta_events_only(
+    tmp_path, monkeypatch,
+) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    opencode_db = tmp_path / "opencode.db"
+    config_path = tmp_path / "toktrail.toml"
+
+    conn = create_opencode_db(opencode_db)
+    insert_message(
+        conn, row_id="row-1", session_id="ses-1",
+        data=deepcopy(VALID_ASSISTANT),
+    )
+    conn.commit()
+    conn.close()
+
+    config_path.write_text(
+        f"""
+config_version = 1
+
+[imports]
+harnesses = ["opencode"]
+missing_source = "error"
+include_raw_json = false
+
+[imports.sources]
+opencode = "{opencode_db}"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    init_state(state_db)
+    start_session(state_db, name="watch-json", started_at_ms=0)
+
+    def interrupt_after_first_sleep(_interval: float) -> None:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("toktrail.cli.time.sleep", interrupt_after_first_sleep)
+    result = runner.invoke(
+        app,
+        [
+            "--db", str(state_db),
+            "--config", str(config_path),
+            "watch",
+            "--json",
+            "--interval", "0.1",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    lines = [line for line in result.output.splitlines() if line.strip()]
+    events = [json.loads(line) for line in lines]
+    assert len(events) >= 1
+    assert all(event["type"] == "usage_delta" for event in events)
+    assert events[0]["delta"]["total"] > 0

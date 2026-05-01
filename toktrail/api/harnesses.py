@@ -79,7 +79,7 @@ _HARNESSES: tuple[HarnessDefinition, ...] = (
     HarnessDefinition(
         name="goose",
         display_name="Goose",
-        supports_watch=False,
+        supports_watch=True,
         supports_environment=False,
         default_source_path=default_goose_sessions_db_path(),
         source_path_env_vars=(TOKTRAIL_GOOSE_SESSIONS_ENV, GOOSE_PATH_ROOT_ENV),
@@ -88,7 +88,7 @@ _HARNESSES: tuple[HarnessDefinition, ...] = (
     HarnessDefinition(
         name="droid",
         display_name="Droid",
-        supports_watch=False,
+        supports_watch=True,
         supports_environment=False,
         default_source_path=default_droid_sessions_path(),
         source_path_env_vars=(TOKTRAIL_DROID_SESSIONS_ENV,),
@@ -106,7 +106,7 @@ _HARNESSES: tuple[HarnessDefinition, ...] = (
     HarnessDefinition(
         name="vibe",
         display_name="Vibe",
-        supports_watch=False,
+        supports_watch=True,
         supports_environment=False,
         default_source_path=default_vibe_logs_path(),
         source_path_env_vars=(TOKTRAIL_VIBE_LOGS_ENV,),

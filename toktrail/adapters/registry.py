@@ -158,7 +158,7 @@ HARNESS_REGISTRY: dict[str, HarnessDefinition] = {
         resolve_source_path=resolve_goose_sessions_path,
         scan=scan_goose_sqlite,
         list_sessions=list_goose_sessions,
-        supports_watch=False,
+        supports_watch=True,
     ),
     "droid": HarnessDefinition(
         name="droid",
@@ -170,7 +170,7 @@ HARNESS_REGISTRY: dict[str, HarnessDefinition] = {
         resolve_source_path=resolve_droid_sessions_path,
         scan=scan_droid_path,
         list_sessions=list_droid_sessions,
-        supports_watch=False,
+        supports_watch=True,
     ),
     "claude": HarnessDefinition(
         name="claude",
@@ -195,7 +195,7 @@ HARNESS_REGISTRY: dict[str, HarnessDefinition] = {
         resolve_source_path=resolve_vibe_logs_path,
         scan=scan_vibe_path,
         list_sessions=list_vibe_sessions,
-        supports_watch=False,
+        supports_watch=True,
     ),
 }
 

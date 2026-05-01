@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime
 import json
 import os
 import shlex
@@ -53,7 +54,7 @@ from toktrail.db import (
 )
 from toktrail.errors import InvalidAPIUsageError, ToktrailError
 from toktrail.formatting import format_epoch_ms_compact
-from toktrail.models import UsageEvent
+from toktrail.models import TokenBreakdown, UsageEvent
 from toktrail.paths import (
     new_copilot_otel_file_path,
     resolve_toktrail_config_path,
@@ -61,6 +62,7 @@ from toktrail.paths import (
 )
 from toktrail.periods import resolve_time_range
 from toktrail.reporting import (
+    CostTotals,
     ModelSummaryRow,
     UnconfiguredModelRow,
     UsageReportFilter,
@@ -1324,9 +1326,10 @@ def import_usage(
                 harnesses=None,
                 source_path=None,
                 session_id=session_id,
-                use_active_session=True,
+                use_active_session=not no_session,
                 include_raw_json=not no_raw,
                 config_path=_resolve_config_path(ctx),
+                since_start=since_start,
             )
         except (OSError, ValueError, ToktrailError) as exc:
             _exit_with_error(str(exc))
@@ -1343,136 +1346,28 @@ def import_usage(
         )
 
 
-@watch_app.command("opencode")
-def watch_opencode(
+@watch_app.callback(invoke_without_command=True)
+def watch(
     ctx: typer.Context,
     session_id: SessionOption = None,
-    source_session_id: SourceSessionOption = None,
-    opencode_db: OpenCodeDbOption = None,
+    harnesses: HarnessesOption = None,
     interval: IntervalOption = 2.0,
-    since_start: SinceStartOption = False,
     no_raw: NoRawOption = False,
+    json_output: JsonOption = False,
 ) -> None:
-    _watch_harness(
-        ctx,
-        harness_name="opencode",
-        source_path=opencode_db,
-        tracking_session_id=session_id,
-        source_session_id=source_session_id,
-        interval=interval,
-        since_start=since_start,
-        no_raw=no_raw,
-    )
-
-
-@watch_app.command("copilot")
-def watch_copilot(
-    ctx: typer.Context,
-    session_id: SessionOption = None,
-    source_session_id: SourceSessionOption = None,
-    copilot_path: CopilotPathOption = None,
-    interval: IntervalOption = 2.0,
-    since_start: SinceStartOption = False,
-    no_raw: NoRawOption = False,
-) -> None:
-    _watch_harness(
-        ctx,
-        harness_name="copilot",
-        source_path=copilot_path,
-        tracking_session_id=session_id,
-        source_session_id=source_session_id,
-        interval=interval,
-        since_start=since_start,
-        no_raw=no_raw,
-    )
-
-
-@watch_app.command("pi")
-def watch_pi(
-    ctx: typer.Context,
-    session_id: SessionOption = None,
-    source_session_id: SourceSessionOption = None,
-    pi_path: PiPathOption = None,
-    interval: IntervalOption = 2.0,
-    since_start: SinceStartOption = False,
-    no_raw: NoRawOption = False,
-) -> None:
-    _watch_harness(
-        ctx,
-        harness_name="pi",
-        source_path=pi_path,
-        tracking_session_id=session_id,
-        source_session_id=source_session_id,
-        interval=interval,
-        since_start=since_start,
-        no_raw=no_raw,
-    )
-
-
-@watch_app.command("codex")
-def watch_codex(
-    ctx: typer.Context,
-    session_id: SessionOption = None,
-    source_session_id: SourceSessionOption = None,
-    codex_path: CodexPathOption = None,
-    interval: IntervalOption = 2.0,
-    since_start: SinceStartOption = False,
-    no_raw: NoRawOption = False,
-) -> None:
-    _watch_harness(
-        ctx,
-        harness_name="codex",
-        source_path=codex_path,
-        tracking_session_id=session_id,
-        source_session_id=source_session_id,
-        interval=interval,
-        since_start=since_start,
-        no_raw=no_raw,
-    )
-
-
-@watch_app.command("amp")
-def watch_amp(
-    ctx: typer.Context,
-    session_id: SessionOption = None,
-    source_session_id: SourceSessionOption = None,
-    amp_path: AmpPathOption = None,
-    interval: IntervalOption = 2.0,
-    since_start: SinceStartOption = False,
-    no_raw: NoRawOption = False,
-) -> None:
-    _watch_harness(
-        ctx,
-        harness_name="amp",
-        source_path=amp_path,
-        tracking_session_id=session_id,
-        source_session_id=source_session_id,
-        interval=interval,
-        since_start=since_start,
-        no_raw=no_raw,
-    )
-
-
-@watch_app.command("claude")
-def watch_claude(
-    ctx: typer.Context,
-    session_id: SessionOption = None,
-    source_session_id: SourceSessionOption = None,
-    claude_path: ClaudePathOption = None,
-    interval: IntervalOption = 2.0,
-    since_start: SinceStartOption = False,
-    no_raw: NoRawOption = False,
-) -> None:
-    _watch_harness(
-        ctx,
-        harness_name="claude",
-        source_path=claude_path,
-        tracking_session_id=session_id,
-        source_session_id=source_session_id,
-        interval=interval,
-        since_start=since_start,
-        no_raw=no_raw,
-    )
+    """Watch configured harnesses and print token usage deltas for the active run."""
+    harness_list: list[str] | None = harnesses  # type: ignore[assignment]
+    try:
+        _watch_configured(
+            ctx,
+            tracking_session_id=session_id,
+            harnesses=harness_list,
+            interval=interval,
+            no_raw=no_raw,
+            json_output=json_output,
+        )
+    except (ToktrailError, OSError, ValueError) as exc:
+        _exit_with_error(str(exc))
 
 
 @source_sessions_app.command("opencode")
@@ -2014,43 +1909,335 @@ def _run_harness_import_with_dry_run(
     )
 
 
-def _watch_harness(
+@dataclass(frozen=True)
+class WatchTotals:
+    message_count: int
+    tokens: TokenBreakdown
+    costs: CostTotals
+
+
+@dataclass(frozen=True)
+class WatchDelta:
+    totals: WatchTotals
+    by_harness: dict[str, WatchTotals]
+
+
+def _resolve_watch_session_id(
+    ctx: typer.Context,
+    tracking_session_id: int | None,
+) -> int:
+    conn = _open_toktrail_connection(ctx)
+    try:
+        selected = tracking_session_id
+        if selected is None:
+            selected = get_active_tracking_session(conn)
+        if selected is None:
+            _exit_with_error(
+                "No active tracking session found. "
+                "Start one with `toktrail run start --name <name>`."
+            )
+        session = get_tracking_session(conn, selected)
+        if session is None:
+            _exit_with_error(f"Tracking session not found: {selected}")
+        if session.ended_at_ms is not None:
+            _exit_with_error(f"Tracking session is already stopped: {selected}")
+        return selected
+    finally:
+        conn.close()
+
+
+def _watch_report(
     ctx: typer.Context,
     *,
-    harness_name: str,
-    source_path: Path | None,
-    tracking_session_id: int | None,
-    source_session_id: str | None,
-    interval: float,
-    since_start: bool,
-    no_raw: bool,
+    session_id: int,
+    costing_config: CostingConfig,
+) -> InternalRunReport:
+    conn = _open_toktrail_connection(ctx)
+    try:
+        return summarize_usage(
+            conn,
+            UsageReportFilter(tracking_session_id=session_id),
+            costing_config=costing_config,
+        )
+    finally:
+        conn.close()
+
+
+def _message_count(report: InternalRunReport) -> int:
+    return sum(row.message_count for row in report.by_harness)
+
+
+def _watch_totals_from_report(report: InternalRunReport) -> WatchTotals:
+    return WatchTotals(
+        message_count=_message_count(report),
+        tokens=report.totals.tokens,
+        costs=report.totals.costs,
+    )
+
+
+def _subtract_tokens(after: TokenBreakdown, before: TokenBreakdown) -> TokenBreakdown:
+    return TokenBreakdown(
+        input=after.input - before.input,
+        output=after.output - before.output,
+        reasoning=after.reasoning - before.reasoning,
+        cache_read=after.cache_read - before.cache_read,
+        cache_write=after.cache_write - before.cache_write,
+    )
+
+
+def _subtract_costs(after: CostTotals, before: CostTotals) -> CostTotals:
+    return CostTotals(
+        source_cost_usd=after.source_cost_usd - before.source_cost_usd,
+        actual_cost_usd=after.actual_cost_usd - before.actual_cost_usd,
+        virtual_cost_usd=after.virtual_cost_usd - before.virtual_cost_usd,
+        unpriced_count=after.unpriced_count - before.unpriced_count,
+    )
+
+
+def _subtract_totals(after: WatchTotals, before: WatchTotals) -> WatchTotals:
+    return WatchTotals(
+        message_count=after.message_count - before.message_count,
+        tokens=_subtract_tokens(after.tokens, before.tokens),
+        costs=_subtract_costs(after.costs, before.costs),
+    )
+
+
+def _watch_delta_has_activity(delta: WatchDelta) -> bool:
+    totals = delta.totals
+    return any(
+        [
+            totals.message_count != 0,
+            totals.tokens.input != 0,
+            totals.tokens.output != 0,
+            totals.tokens.reasoning != 0,
+            totals.tokens.cache_read != 0,
+            totals.tokens.cache_write != 0,
+            totals.costs.source_cost_usd != 0,
+            totals.costs.actual_cost_usd != 0,
+            totals.costs.virtual_cost_usd != 0,
+            totals.costs.unpriced_count != 0,
+        ]
+    )
+
+
+def _by_harness_totals(report: InternalRunReport) -> dict[str, WatchTotals]:
+    return {
+        row.harness: WatchTotals(
+            message_count=row.message_count,
+            tokens=TokenBreakdown(
+                input=0,
+                output=0,
+                reasoning=0,
+                cache_read=0,
+                cache_write=row.total_tokens,
+            ),
+            costs=row.costs,
+        )
+        for row in report.by_harness
+    }
+
+
+def _watch_delta(previous: InternalRunReport, current: InternalRunReport) -> WatchDelta:
+    before_totals = _watch_totals_from_report(previous)
+    after_totals = _watch_totals_from_report(current)
+    before_by_harness = _by_harness_totals(previous)
+    after_by_harness = _by_harness_totals(current)
+
+    by_harness_delta: dict[str, WatchTotals] = {}
+    for harness_name in {*before_by_harness, *after_by_harness}:
+        before_h = before_by_harness.get(
+            harness_name,
+            WatchTotals(message_count=0, tokens=TokenBreakdown(), costs=CostTotals()),
+        )
+        after_h = after_by_harness.get(
+            harness_name,
+            WatchTotals(message_count=0, tokens=TokenBreakdown(), costs=CostTotals()),
+        )
+        delta = _subtract_totals(after_h, before_h)
+        if _watch_delta_has_activity(WatchDelta(totals=delta, by_harness={})):
+            by_harness_delta[harness_name] = delta
+
+    return WatchDelta(
+        totals=_subtract_totals(after_totals, before_totals),
+        by_harness=by_harness_delta,
+    )
+
+
+def _format_signed_int(value: int) -> str:
+    sign = "+" if value >= 0 else "-"
+    return f"{sign}{_format_int(abs(value))}"
+
+
+def _format_token_delta(tokens: TokenBreakdown) -> str:
+    return (
+        f"{_format_signed_int(tokens.total)} tokens "
+        f"in={_format_int(tokens.input)} "
+        f"out={_format_int(tokens.output)} "
+        f"reasoning={_format_int(tokens.reasoning)} "
+        f"cache_r={_format_int(tokens.cache_read)} "
+        f"cache_w={_format_int(tokens.cache_write)}"
+    )
+
+
+def _print_watch_start(
+    ctx: typer.Context,
+    session_id: int,
+    harnesses: list[str] | None,
 ) -> None:
-    harness = get_harness(harness_name)
-    total_seen = 0
-    total_imported = 0
-    total_skipped = 0
+    conn = _open_toktrail_connection(ctx)
+    try:
+        session = get_tracking_session(conn, session_id)
+    finally:
+        conn.close()
+    name = session.name if session and session.name else str(session_id)
+    typer.echo(f"Watching configured harnesses for run {session_id}: {name}")
+
+    if harnesses is not None:
+        harness_names = sorted(set(harnesses))
+    else:
+        from toktrail.config import load_resolved_toktrail_config
+
+        loaded = load_resolved_toktrail_config(_resolve_config_path(ctx))
+        harness_names = sorted(loaded.config.imports.harnesses)
+    typer.echo(f"Sources: {', '.join(harness_names)}")
+    typer.echo("")
+
+
+def _print_watch_delta(
+    delta: WatchDelta,
+    current_report: InternalRunReport,
+) -> None:
+    now = datetime.datetime.now().strftime("%H:%M:%S")
+    totals = delta.totals
+    line = (
+        f"{now}  "
+        f"{_format_signed_int(totals.message_count)} msgs  "
+        f"{_format_token_delta(totals.tokens)}  "
+        f"actual={_format_cost(totals.costs.actual_cost_usd)} "
+        f"virtual={_format_cost(totals.costs.virtual_cost_usd)} "
+        f"savings={_format_cost(totals.costs.savings_usd)}"
+    )
+    typer.echo(line)
+
+    for harness_name in sorted(delta.by_harness):
+        h_total = delta.by_harness[harness_name]
+        h_line = (
+            f"  {harness_name:<10} "
+            f"{_format_signed_int(h_total.message_count)} msg   "
+            f"{_format_signed_int(h_total.tokens.total)} tokens  "
+            f"actual={_format_cost(h_total.costs.actual_cost_usd)} "
+            f"virtual={_format_cost(h_total.costs.virtual_cost_usd)}"
+        )
+        typer.echo(h_line)
+
+
+def _print_watch_delta_json(
+    session_id: int,
+    delta: WatchDelta,
+    current_report: InternalRunReport,
+) -> None:
+    totals = delta.totals
+    event: dict[str, object] = {
+        "type": "usage_delta",
+        "run_id": session_id,
+        "created_ms": int(time.time() * 1000),
+        "delta": {
+            "message_count": totals.message_count,
+            **totals.tokens.as_dict(),
+            **totals.costs.as_dict(),
+        },
+        "cumulative": {
+            "message_count": _message_count(current_report),
+            **current_report.totals.tokens.as_dict(),
+            **current_report.totals.costs.as_dict(),
+        },
+        "by_harness": [
+            {
+                "harness": harness_name,
+                "message_count": h_total.message_count,
+                "total_tokens": h_total.tokens.total,
+                **h_total.costs.as_dict(),
+            }
+            for harness_name in sorted(delta.by_harness)
+            for h_total in [delta.by_harness[harness_name]]
+        ],
+    }
+    typer.echo(json.dumps(event))
+
+
+def _print_watch_stop(observed: WatchDelta) -> None:
+    typer.echo("Stopped watching.")
+    typer.echo("Observed during watch:")
+    totals = observed.totals
+    typer.echo(f"  messages:   {_format_int(totals.message_count)}")
+    typer.echo(f"  tokens:     {_format_int(totals.tokens.total)}")
+    typer.echo(f"  input:      {_format_int(totals.tokens.input)}")
+    typer.echo(f"  output:     {_format_int(totals.tokens.output)}")
+    typer.echo(f"  reasoning:  {_format_int(totals.tokens.reasoning)}")
+    typer.echo(f"  cache_r:    {_format_int(totals.tokens.cache_read)}")
+    typer.echo(f"  cache_w:    {_format_int(totals.tokens.cache_write)}")
+    typer.echo(f"  actual:     {_format_cost(totals.costs.actual_cost_usd)}")
+    typer.echo(f"  virtual:    {_format_cost(totals.costs.virtual_cost_usd)}")
+    typer.echo(f"  savings:    {_format_cost(totals.costs.savings_usd)}")
+
+
+def _watch_configured(
+    ctx: typer.Context,
+    *,
+    tracking_session_id: int | None,
+    harnesses: list[str] | None,
+    interval: float,
+    no_raw: bool,
+    json_output: bool,
+) -> None:
+    selected_session_id = _resolve_watch_session_id(ctx, tracking_session_id)
+    costing_config = _load_costing_config_or_exit(ctx)
+
+    previous_report = _watch_report(
+        ctx,
+        session_id=selected_session_id,
+        costing_config=costing_config,
+    )
+    baseline_report = previous_report
+
+    if not json_output:
+        _print_watch_start(ctx, selected_session_id, harnesses)
+
     try:
         while True:
-            result = _run_harness_import(
-                ctx,
-                harness_name=harness_name,
-                source_path=source_path,
-                tracking_session_id=tracking_session_id,
-                source_session_id=source_session_id,
-                since_start=since_start,
-                no_raw=no_raw,
+            import_configured_usage_api(
+                _resolve_state_db(ctx),
+                harnesses=harnesses,
+                source_path=None,
+                session_id=selected_session_id,
+                use_active_session=False,
+                include_raw_json=not no_raw,
+                config_path=_resolve_config_path(ctx),
+                since_start=True,
             )
-            total_seen += result.rows_seen
-            total_imported += result.rows_imported
-            total_skipped += result.rows_skipped
-            _print_import_result(result)
+            current_report = _watch_report(
+                ctx,
+                session_id=selected_session_id,
+                costing_config=costing_config,
+            )
+            delta = _watch_delta(previous_report, current_report)
+            if _watch_delta_has_activity(delta):
+                if json_output:
+                    _print_watch_delta_json(selected_session_id, delta, current_report)
+                else:
+                    _print_watch_delta(delta, current_report)
+            previous_report = current_report
             time.sleep(interval)
     except KeyboardInterrupt:
-        typer.echo("")
-        typer.echo(f"Stopped watching {harness.display_name}.")
-        typer.echo(f"  rows seen:     {total_seen}")
-        typer.echo(f"  rows imported: {total_imported}")
-        typer.echo(f"  rows skipped:  {total_skipped}")
+        final_report = _watch_report(
+            ctx,
+            session_id=selected_session_id,
+            costing_config=costing_config,
+        )
+        observed = _watch_delta(baseline_report, final_report)
+        if not json_output:
+            typer.echo("")
+            _print_watch_stop(observed)
 
 
 def _run_source_sessions_command(

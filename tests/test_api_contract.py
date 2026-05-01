@@ -216,42 +216,32 @@ def test_public_harness_metadata_and_paths_include_codex_goose_and_droid(
     assert resolve_source_path("amp") == amp_env_path
 
 
-def test_harness_watch_metadata_aligns_with_cli_registration() -> None:
-    """Verify that harness registry watch support matches CLI-registered watch commands.
+def test_harness_watch_metadata_all_importable_harnesses_support_watch() -> None:
+    """Verify all importable harnesses have supports_watch=True.
 
-    This test prevents drift between:
-    - harness_registry metadata (supports_watch flags)
-    - CLI-registered watch commands
-    - Public API harness definitions
-
-    Watch commands registered in CLI: opencode, copilot, pi, codex, amp, claude
-    Harnesses marked supports_watch=True in registry: must match CLI
-    Harnesses marked supports_watch=False: must NOT have CLI watch commands
+    With the generic watch command, every importable harness is watchable.
     """
     from toktrail.adapters.registry import HARNESS_REGISTRY
 
-    # Known watch harnesses from CLI registration (grep @watch_app.command in cli.py)
-    cli_watch_harnesses = {"opencode", "copilot", "pi", "codex", "amp", "claude"}
+    importable_harnesses = {
+        "opencode",
+        "pi",
+        "copilot",
+        "codex",
+        "goose",
+        "droid",
+        "amp",
+        "claude",
+        "vibe",
+    }
 
-    # Verify registry metadata matches CLI registration
-    for harness_name, definition in HARNESS_REGISTRY.items():
-        if definition.supports_watch:
-            assert harness_name in cli_watch_harnesses, (
-                f"Harness {harness_name} marked supports_watch=True "
-                "but no CLI watch command registered"
-            )
-        else:
-            assert harness_name not in cli_watch_harnesses, (
-                f"Harness {harness_name} marked supports_watch=False "
-                "but CLI watch command exists"
-            )
+    for name in importable_harnesses:
+        assert name in HARNESS_REGISTRY, f"Harness {name} not in registry"
+        assert HARNESS_REGISTRY[name].supports_watch, (
+            f"Harness {name} has supports_watch=False; "
+            "all importable harnesses should be True"
+        )
 
-    # Verify all CLI watch commands have supports_watch=True
-    for watch_harness in cli_watch_harnesses:
-        assert watch_harness in HARNESS_REGISTRY, (
-            f"CLI watch command for {watch_harness} but not in registry"
-        )
-        assert HARNESS_REGISTRY[watch_harness].supports_watch, (
-            f"CLI watch command for {watch_harness} "
-            "but registry has supports_watch=False"
-        )
+    # Verify no extra harnesses in registry marked supports_watch
+    supported_watch = {h.name for h in supported_harnesses() if h.supports_watch}
+    assert supported_watch == importable_harnesses

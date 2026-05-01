@@ -122,7 +122,12 @@ def import_configured_usage(
     use_active_session: bool = True,
     include_raw_json: bool | None = None,
     config_path: Path | None = None,
+    since_start: bool = False,
+    since_ms: int | None = None,
 ) -> tuple[ImportUsageResult, ...]:
+    if since_start and since_ms is not None:
+        msg = "since_start=True and since_ms cannot be used together."
+        raise InvalidAPIUsageError(msg)
     loaded = load_resolved_toktrail_config(config_path)
     import_config = loaded.config.imports
     selected_harnesses = (
@@ -164,6 +169,8 @@ def import_configured_usage(
                             if include_raw_json is None
                             else include_raw_json
                         ),
+                        since_start=since_start,
+                        since_ms=since_ms,
                     )
                     results.append(result)
                     continue
@@ -200,6 +207,8 @@ def import_configured_usage(
                         if include_raw_json is None
                         else include_raw_json
                     ),
+                    since_start=since_start,
+                    since_ms=since_ms,
                 )
             )
     return tuple(results)

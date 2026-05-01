@@ -97,6 +97,65 @@ def test_import_usage_rejects_conflicting_since_options(tmp_path) -> None:
         )
 
 
+def test_import_configured_usage_since_start_filters_events(tmp_path) -> None:
+    """import_configured_usage with since_start=True filters events before run start."""
+    state_db = tmp_path / "toktrail.db"
+    source_db = tmp_path / "opencode.db"
+    config_path = tmp_path / "toktrail.toml"
+
+    conn = create_opencode_db(source_db)
+    early = deepcopy(VALID_ASSISTANT)
+    early["time"] = {"created": 10.0, "completed": 11.0}
+    insert_message(conn, row_id="row-1", session_id="ses-1", data=early)
+    later = deepcopy(VALID_ASSISTANT)
+    later["id"] = "msg_999"
+    later["time"] = {"created": 200.0, "completed": 201.0}
+    insert_message(conn, row_id="row-2", session_id="ses-2", data=later)
+    conn.commit()
+    conn.close()
+
+    config_path.write_text(
+        f"""
+config_version = 1
+
+[imports]
+harnesses = ["opencode"]
+missing_source = "error"
+
+[imports.sources]
+opencode = "{source_db}"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    init_state(state_db)
+    session = start_session(state_db, name="cfg-since", started_at_ms=100)
+    results = import_configured_usage(
+        state_db,
+        session_id=session.id,
+        use_active_session=False,
+        config_path=config_path,
+        since_start=True,
+    )
+    report = session_report(state_db, session.id)
+
+    assert results[0].since_ms == 100
+    assert results[0].rows_imported == 1
+    assert report.by_harness[0].message_count == 1
+
+
+def test_import_configured_usage_rejects_since_start_and_since_ms(
+    tmp_path,
+) -> None:
+    with pytest.raises(InvalidAPIUsageError, match="cannot be used together"):
+        import_configured_usage(
+            tmp_path / "toktrail.db",
+            config_path=tmp_path / "toktrail.toml",
+            since_start=True,
+            since_ms=123,
+        )
+
+
 def test_import_usage_include_raw_json_false_stores_no_raw_json(tmp_path) -> None:
     state_db = tmp_path / "toktrail.db"
     source_db = tmp_path / "opencode.db"

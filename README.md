@@ -250,11 +250,10 @@ toktrail import --harness amp --source ~/.local/share/amp/threads
 toktrail import --harness claude --source ~/.claude/projects
 toktrail import --harness vibe --source ~/.vibe/logs/session
 
-toktrail watch opencode
-toktrail watch pi
-toktrail watch codex
-toktrail watch amp
-toktrail watch claude
+toktrail watch
+
+toktrail watch --harness opencode
+toktrail watch --harness opencode --harness codex
 
 toktrail copilot env bash
 toktrail copilot env zsh
