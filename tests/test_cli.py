@@ -1401,7 +1401,7 @@ def test_cli_status_filters_by_harness_and_source_session(tmp_path) -> None:
             "cache_read": 10,
             "cache_write": 5,
             "total": 165,
-            "source_cost_usd": "0.0",
+            "source_cost_usd": "0",
             "actual_cost_usd": "0",
             "virtual_cost_usd": "0",
             "savings_usd": "0",

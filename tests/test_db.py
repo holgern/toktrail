@@ -106,7 +106,35 @@ def test_migrate_creates_tables_and_is_idempotent(tmp_path: Path) -> None:
         "usage_events",
         "run_events",
     } <= table_names
-    assert user_version == 1
+    assert user_version == 2
+
+
+def test_source_costs_are_stored_and_aggregated_as_exact_decimals(
+    tmp_path: Path,
+) -> None:
+    conn = connect(tmp_path / "toktrail.db")
+    migrate(conn)
+    session_id = create_tracking_session(conn, "test")
+
+    insert_usage_events(
+        conn,
+        session_id,
+        [
+            make_usage_event(dedup_suffix="1", source_cost_usd=Decimal("0.10")),
+            make_usage_event(dedup_suffix="2", source_cost_usd=Decimal("0.20")),
+        ],
+    )
+
+    stored_costs = [
+        row["source_cost_usd"]
+        for row in conn.execute(
+            "SELECT source_cost_usd FROM usage_events ORDER BY id"
+        ).fetchall()
+    ]
+    report = summarize_tracking_session(conn, session_id)
+
+    assert stored_costs == ["0.10", "0.20"]
+    assert report.totals.source_cost_usd == Decimal("0.30")
 
 
 def test_create_tracking_session_and_end_session(tmp_path: Path) -> None:

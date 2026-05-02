@@ -54,6 +54,7 @@ def connect(path: Path) -> sqlite3.Connection:
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
+    conn.create_aggregate("DECIMAL_SUM", 1, _DecimalSum)
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA synchronous = NORMAL")
@@ -176,6 +177,10 @@ def _create_schema(conn: sqlite3.Connection) -> None:
         ON run_events(usage_event_id);
         """
     )
+
+
+def _migrate_v1_to_v2(conn: sqlite3.Connection) -> None:
+    _create_schema(conn)
 
 
 def create_tracking_session(
@@ -429,7 +434,7 @@ def insert_usage_events(
                     event.tokens.reasoning,
                     event.tokens.cache_read,
                     event.tokens.cache_write,
-                    float(event.source_cost_usd),
+                    _source_cost_to_storage(event.source_cost_usd),
                     event.raw_json,
                     imported_at_ms,
                 ),
@@ -524,7 +529,7 @@ def summarize_usage(
             COALESCE(SUM(ue.reasoning_tokens), 0) AS reasoning_tokens,
             COALESCE(SUM(ue.cache_read_tokens), 0) AS cache_read_tokens,
             COALESCE(SUM(ue.cache_write_tokens), 0) AS cache_write_tokens,
-            COALESCE(SUM(ue.source_cost_usd), 0.0) AS source_cost_usd
+            COALESCE(DECIMAL_SUM(ue.source_cost_usd), '0') AS source_cost_usd
         """
         + source_clause
         + where_clause
@@ -860,7 +865,7 @@ def summarize_usage_series(
             COALESCE(SUM(ue.reasoning_tokens), 0) AS reasoning_tokens,
             COALESCE(SUM(ue.cache_read_tokens), 0) AS cache_read_tokens,
             COALESCE(SUM(ue.cache_write_tokens), 0) AS cache_write_tokens,
-            COALESCE(SUM(ue.source_cost_usd), 0.0) AS source_cost_usd
+            COALESCE(DECIMAL_SUM(ue.source_cost_usd), '0') AS source_cost_usd
         """
         + source_clause
         + where_clause
@@ -1176,10 +1181,29 @@ def _required_decimal(value: object) -> Decimal:
         raise TypeError(msg)
     if isinstance(value, (int, float)):
         return Decimal(str(value))
+    if isinstance(value, str):
+        return Decimal(value)
     if isinstance(value, Decimal):
         return value
     msg = f"Expected numeric value, got {value!r}"
     raise TypeError(msg)
+
+
+def _source_cost_to_storage(value: Decimal) -> str:
+    return str(value)
+
+
+class _DecimalSum:
+    def __init__(self) -> None:
+        self.total = Decimal(0)
+
+    def step(self, value: object) -> None:
+        if value is None:
+            return
+        self.total += _required_decimal(value)
+
+    def finalize(self) -> str:
+        return str(self.total)
 
 
 @dataclass
