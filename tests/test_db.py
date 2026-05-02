@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 from pathlib import Path
+from time import time
 
 from toktrail.config import ActualCostRule, CostingConfig, Price, SubscriptionConfig
 from toktrail.db import (
@@ -73,8 +74,10 @@ def make_usage_event(
         agent=agent,
         created_ms=created_ms
         if created_ms is not None
-        else 1700000000000 + int(dedup_suffix[-1]) * 100,
-        completed_ms=1700000000100 + int(dedup_suffix[-1]) * 100,
+        else int(time() * 1000) + int(dedup_suffix[-1]) * 100,
+        completed_ms=(created_ms + 100)
+        if created_ms is not None
+        else int(time() * 1000) + int(dedup_suffix[-1]) * 100 + 100,
         tokens=token_breakdown,
         source_cost_usd=Decimal(str(source_cost_usd))
         if not isinstance(source_cost_usd, Decimal)
@@ -241,15 +244,16 @@ def test_summarize_usage_applies_filters_and_echoes_them(tmp_path: Path) -> None
         ),
     )
 
-    assert report.filters.as_dict() == {
-        "harness": "pi",
-        "source_session_id": "pi-1",
-        "provider_id": "anthropic",
-        "model_id": "claude-sonnet-4",
-        "thinking_level": "high",
-        "agent": "plan",
-        "split_thinking": True,
-    }
+    assert report.filters.harness == "pi"
+    assert report.filters.source_session_id == "pi-1"
+    assert report.filters.provider_id == "anthropic"
+    assert report.filters.model_id == "claude-sonnet-4"
+    assert report.filters.thinking_level == "high"
+    assert report.filters.agent == "plan"
+    assert report.filters.split_thinking is True
+    assert isinstance(report.filters.since_ms, int)
+    assert report.session is not None
+    assert report.filters.since_ms == report.session.started_at_ms
     assert report.totals.tokens.input == 100
     assert report.totals.tokens.output == 5
     assert report.totals.tokens.total == 105
@@ -866,3 +870,153 @@ def test_summarize_subscription_usage_over_limit_and_missing_source_cost(
     assert anthropic.periods[0].remaining_usd == Decimal("10.0")
     assert opencode_go.periods[0].remaining_usd == Decimal("0")
     assert opencode_go.periods[0].over_limit_usd == Decimal("5.0")
+
+
+def test_summarize_usage_bounds_tracking_session_by_run_lifetime(
+    tmp_path: Path,
+) -> None:
+    conn = connect(tmp_path / "toktrail.db")
+    try:
+        migrate(conn)
+        session_id = create_tracking_session(
+            conn,
+            "bounded-run",
+            started_at_ms=1_000,
+        )
+        insert_usage_events(
+            conn,
+            session_id,
+            [
+                make_usage_event(
+                    dedup_suffix="before1",
+                    created_ms=999,
+                    tokens=TokenBreakdown(input=100),
+                ),
+                make_usage_event(
+                    dedup_suffix="during2",
+                    created_ms=1_000,
+                    tokens=TokenBreakdown(input=10, output=5),
+                ),
+                make_usage_event(
+                    dedup_suffix="after3",
+                    created_ms=2_000,
+                    tokens=TokenBreakdown(output=77),
+                ),
+            ],
+        )
+        end_tracking_session(conn, session_id, ended_at_ms=1_500)
+
+        report = summarize_usage(
+            conn,
+            UsageReportFilter(tracking_session_id=session_id),
+        )
+    finally:
+        conn.close()
+
+    assert report.totals.tokens.input == 10
+    assert report.totals.tokens.output == 5
+    assert report.totals.tokens.total == 15
+    assert report.filters.since_ms == 1_000
+    assert report.filters.until_ms == 1_500
+
+
+def test_summarize_usage_explicit_bounds_cannot_widen_tracking_session(
+    tmp_path: Path,
+) -> None:
+    conn = connect(tmp_path / "toktrail.db")
+    try:
+        migrate(conn)
+        session_id = create_tracking_session(
+            conn,
+            "bounded-run",
+            started_at_ms=1_000,
+        )
+        end_tracking_session(conn, session_id, ended_at_ms=2_000)
+        insert_usage_events(
+            conn,
+            session_id,
+            [
+                make_usage_event(
+                    dedup_suffix="before1",
+                    created_ms=500,
+                    tokens=TokenBreakdown(input=100),
+                ),
+                make_usage_event(
+                    dedup_suffix="during2",
+                    created_ms=1_500,
+                    tokens=TokenBreakdown(output=20),
+                ),
+                make_usage_event(
+                    dedup_suffix="after3",
+                    created_ms=2_500,
+                    tokens=TokenBreakdown(reasoning=30),
+                ),
+            ],
+        )
+
+        report = summarize_usage(
+            conn,
+            UsageReportFilter(
+                tracking_session_id=session_id,
+                since_ms=0,
+                until_ms=9_999,
+            ),
+        )
+    finally:
+        conn.close()
+
+    assert report.totals.tokens.output == 20
+    assert report.totals.tokens.total == 20
+    assert report.filters.since_ms == 1_000
+    assert report.filters.until_ms == 2_000
+
+
+def test_summarize_usage_series_bounds_tracking_session_by_run_lifetime(
+    tmp_path: Path,
+) -> None:
+    conn = connect(tmp_path / "toktrail.db")
+    try:
+        migrate(conn)
+        session_id = create_tracking_session(
+            conn,
+            "bounded-series",
+            started_at_ms=1_000,
+        )
+        insert_usage_events(
+            conn,
+            session_id,
+            [
+                make_usage_event(
+                    dedup_suffix="before1",
+                    created_ms=999,
+                    tokens=TokenBreakdown(input=100),
+                ),
+                make_usage_event(
+                    dedup_suffix="during2",
+                    created_ms=1_000,
+                    tokens=TokenBreakdown(input=7, output=3),
+                ),
+                make_usage_event(
+                    dedup_suffix="after3",
+                    created_ms=2_000,
+                    tokens=TokenBreakdown(output=10),
+                ),
+            ],
+        )
+        end_tracking_session(conn, session_id, ended_at_ms=1_500)
+
+        report = summarize_usage_series(
+            conn,
+            UsageSeriesFilter(
+                granularity="daily",
+                tracking_session_id=session_id,
+            ),
+        )
+    finally:
+        conn.close()
+
+    assert report.totals.tokens.input == 7
+    assert report.totals.tokens.output == 3
+    assert report.totals.tokens.total == 10
+    assert report.filters["since_ms"] == 1_000
+    assert report.filters["until_ms"] == 1_500

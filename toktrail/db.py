@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from decimal import Decimal
 from pathlib import Path
 from time import time
@@ -491,13 +491,7 @@ def summarize_usage(
     costing_config: CostingConfig | None = None,
     simulation_targets: tuple[SimulationTarget, ...] = (),
 ) -> RunReport:
-    session = None
-    if filters.tracking_session_id is not None:
-        session = get_tracking_session(conn, filters.tracking_session_id)
-        if session is None:
-            msg = f"Tracking session not found: {filters.tracking_session_id}"
-            raise ValueError(msg)
-
+    filters, session = _apply_tracking_session_time_window(conn, filters)
     source_clause, where_clause, params = _usage_report_query_parts(filters)
     group_by_columns = ["ue.harness", "ue.provider_id", "ue.model_id"]
     if filters.split_thinking:
@@ -832,9 +826,11 @@ def summarize_usage_series(
 
     tz: _tzinfo = ZoneInfo("UTC")
 
-    source_clause, where_clause, params = _usage_report_query_parts(
-        filters.to_usage_report_filter()
+    usage_filters, _ = _apply_tracking_session_time_window(
+        conn,
+        filters.to_usage_report_filter(),
     )
+    source_clause, where_clause, params = _usage_report_query_parts(usage_filters)
     thinking_select = (
         "ue.thinking_level AS thinking_level"
         if filters.split_thinking
@@ -1004,8 +1000,8 @@ def summarize_usage_series(
         )
 
     report_filters: dict[str, object] = {
-        "since_ms": filters.since_ms,
-        "until_ms": filters.until_ms,
+        "since_ms": usage_filters.since_ms,
+        "until_ms": usage_filters.until_ms,
         "harness": filters.harness,
         "provider_id": filters.provider_id,
         "model_id": filters.model_id,
@@ -1028,6 +1024,35 @@ def summarize_usage_series(
         instances=tuple(instances),
         totals=SessionTotals(tokens=totals_tokens, costs=totals_costs),
     )
+
+
+def _apply_tracking_session_time_window(
+    conn: sqlite3.Connection,
+    filters: UsageReportFilter,
+) -> tuple[UsageReportFilter, TrackingSession | None]:
+    """Apply the run lifetime as the default report window for run-scoped reports."""
+    if filters.tracking_session_id is None:
+        return filters, None
+
+    session = get_tracking_session(conn, filters.tracking_session_id)
+    if session is None:
+        msg = f"Tracking session not found: {filters.tracking_session_id}"
+        raise ValueError(msg)
+
+    since_ms = (
+        max(filters.since_ms, session.started_at_ms)
+        if filters.since_ms is not None
+        else session.started_at_ms
+    )
+    until_ms = filters.until_ms
+    if session.ended_at_ms is not None:
+        until_ms = (
+            min(until_ms, session.ended_at_ms)
+            if until_ms is not None
+            else session.ended_at_ms
+        )
+
+    return replace(filters, since_ms=since_ms, until_ms=until_ms), session
 
 
 def _usage_report_query_parts(

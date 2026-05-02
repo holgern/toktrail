@@ -138,9 +138,17 @@ def usage_report(
     public_report = _to_public_report(report)
     filters = dict(public_report.filters)
     if effective_since_ms is not None:
-        filters["since_ms"] = effective_since_ms
+        existing_since = filters.get("since_ms")
+        if isinstance(existing_since, int):
+            filters["since_ms"] = max(existing_since, effective_since_ms)
+        else:
+            filters["since_ms"] = effective_since_ms
     if effective_until_ms is not None:
-        filters["until_ms"] = effective_until_ms
+        existing_until = filters.get("until_ms")
+        if isinstance(existing_until, int):
+            filters["until_ms"] = min(existing_until, effective_until_ms)
+        else:
+            filters["until_ms"] = effective_until_ms
     if period is not None:
         filters["period"] = resolved_range.period
     if period is not None or timezone is not None or utc:

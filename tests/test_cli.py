@@ -5,7 +5,8 @@ import shlex
 import sqlite3
 import subprocess
 from copy import deepcopy
-from datetime import datetime
+from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -13,12 +14,13 @@ from typer.testing import CliRunner
 
 from tests.helpers import (
     VALID_ASSISTANT,
-    create_codex_session_file,
     create_opencode_db,
     insert_message,
 )
 from toktrail.api.sessions import init_state, start_session
 from toktrail.cli import app
+from toktrail.db import connect, create_tracking_session, insert_usage_events, migrate
+from toktrail.models import TokenBreakdown, UsageEvent
 
 
 @pytest.fixture(autouse=True)
@@ -34,16 +36,64 @@ def write_jsonl_rows(path: Path, rows: list[dict[str, object]]) -> None:
     )
 
 
+def _future_ms() -> int:
+    return int(datetime.now(timezone.utc).timestamp() * 1000) + 60_000
+
+
+def _future_iso() -> str:
+    return (
+        datetime.fromtimestamp(_future_ms() / 1000, tz=timezone.utc)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+
+
+def _stamp_opencode_message(message: dict[str, object]) -> dict[str, object]:
+    stamped = deepcopy(message)
+    created = float(_future_ms())
+    stamped["time"] = {
+        "created": created,
+        "completed": created + 500.0,
+    }
+    return stamped
+
+
 def create_source_db(path: Path) -> None:
     conn = create_opencode_db(path)
     insert_message(
         conn,
         row_id="row-1",
         session_id="ses-1",
-        data=deepcopy(VALID_ASSISTANT),
+        data=_stamp_opencode_message(VALID_ASSISTANT),
     )
     conn.commit()
     conn.close()
+
+
+def make_cli_usage_event(
+    dedup_suffix: str,
+    *,
+    created_ms: int,
+    tokens: TokenBreakdown,
+) -> UsageEvent:
+    return UsageEvent(
+        harness="opencode",
+        source_session_id="ses-1",
+        source_row_id=f"row-{dedup_suffix}",
+        source_message_id=f"msg-{dedup_suffix}",
+        source_dedup_key=f"dedup-{dedup_suffix}",
+        global_dedup_key=f"global-{dedup_suffix}",
+        fingerprint_hash=f"fp-{dedup_suffix}",
+        provider_id="anthropic",
+        model_id="claude-sonnet-4",
+        thinking_level=None,
+        agent="build",
+        created_ms=created_ms,
+        completed_ms=created_ms + 1,
+        tokens=tokens,
+        source_cost_usd=Decimal("0"),
+        raw_json=None,
+    )
 
 
 def create_goose_source_db(path: Path) -> None:
@@ -85,7 +135,7 @@ def create_goose_source_db(path: Path) -> None:
             "goose-1",
             '{"model_name":"claude-sonnet-4-20250514"}',
             "anthropic",
-            "2026-04-14T16:18:53Z",
+            _future_iso(),
             100,
             60,
             30,
@@ -105,7 +155,7 @@ def create_droid_source(path: Path) -> None:
             {
                 "model": "custom:Claude-Opus-4.5-Thinking-[Anthropic]-0",
                 "providerLock": "anthropic",
-                "providerLockTimestamp": "2024-12-26T12:00:00Z",
+                "providerLockTimestamp": _future_iso(),
                 "tokenUsage": {
                     "inputTokens": 1234,
                     "outputTokens": 567,
@@ -125,7 +175,7 @@ def create_amp_source(path: Path) -> None:
         json.dumps(
             {
                 "id": "thread-1",
-                "created": 1775649600000,
+                "created": _future_ms(),
                 "messages": [
                     {
                         "role": "assistant",
@@ -148,10 +198,10 @@ def create_amp_source(path: Path) -> None:
 
 def create_thinking_source_db(path: Path) -> None:
     conn = create_opencode_db(path)
-    high = deepcopy(VALID_ASSISTANT)
+    high = _stamp_opencode_message(VALID_ASSISTANT)
     high["thinkingLevel"] = "high"
     insert_message(conn, row_id="row-1", session_id="ses-1", data=high)
-    low = deepcopy(VALID_ASSISTANT)
+    low = _stamp_opencode_message(VALID_ASSISTANT)
     low["id"] = "msg-low"
     low["thinkingLevel"] = "low"
     insert_message(conn, row_id="row-2", session_id="ses-1", data=low)
@@ -165,9 +215,9 @@ def create_pricing_source_db(path: Path) -> None:
         conn,
         row_id="row-1",
         session_id="ses-1",
-        data=deepcopy(VALID_ASSISTANT),
+        data=_stamp_opencode_message(VALID_ASSISTANT),
     )
-    unpriced = deepcopy(VALID_ASSISTANT)
+    unpriced = _stamp_opencode_message(VALID_ASSISTANT)
     unpriced["id"] = "msg-unpriced"
     unpriced["modelID"] = "gpt-5.2-codex"
     unpriced["providerID"] = "openai-codex"
@@ -249,6 +299,7 @@ def setup_pricing_status_fixture(tmp_path: Path) -> tuple[CliRunner, Path, Path]
 
 
 def create_copilot_file(path: Path) -> None:
+    future_ms = _future_ms()
     write_jsonl_rows(
         path,
         [
@@ -257,7 +308,7 @@ def create_copilot_file(path: Path) -> None:
                 "traceId": "trace-1",
                 "spanId": "span-1",
                 "name": "chat claude-sonnet-4",
-                "endTime": [1775934264, 967317833],
+                "endTime": [future_ms // 1000, (future_ms % 1000) * 1_000_000],
                 "attributes": {
                     "gen_ai.operation.name": "chat",
                     "gen_ai.response.model": "claude-sonnet-4",
@@ -270,21 +321,72 @@ def create_copilot_file(path: Path) -> None:
     )
 
 
+def create_codex_session_file(path: Path) -> None:
+    future_iso = (
+        datetime.fromtimestamp(_future_ms() / 1000, tz=timezone.utc)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+    write_jsonl_rows(
+        path,
+        [
+            {
+                "type": "session_meta",
+                "payload": {
+                    "source": "interactive",
+                    "model_provider": "openai",
+                    "agent_nickname": "builder",
+                },
+            },
+            {
+                "type": "turn_context",
+                "payload": {
+                    "model": "gpt-5.2-codex",
+                },
+            },
+            {
+                "timestamp": future_iso,
+                "type": "event_msg",
+                "payload": {
+                    "type": "token_count",
+                    "info": {
+                        "total_token_usage": {
+                            "input_tokens": 120,
+                            "cached_input_tokens": 20,
+                            "output_tokens": 30,
+                            "reasoning_output_tokens": 5,
+                        },
+                        "last_token_usage": {
+                            "input_tokens": 120,
+                            "cached_input_tokens": 20,
+                            "output_tokens": 30,
+                            "reasoning_output_tokens": 5,
+                        },
+                    },
+                },
+            },
+        ],
+    )
+
+
 def create_pi_session_file(path: Path) -> None:
+    future = datetime.fromtimestamp(_future_ms() / 1000, tz=timezone.utc)
+    session_ts = future.isoformat().replace("+00:00", "Z")
+    message_ts = (future.replace(microsecond=0)).isoformat().replace("+00:00", "Z")
     write_jsonl_rows(
         path,
         [
             {
                 "type": "session",
                 "id": "pi_ses_001",
-                "timestamp": "2026-01-01T00:00:00.000Z",
+                "timestamp": session_ts,
                 "cwd": "/tmp",
             },
             {
                 "type": "message",
                 "id": "msg_001",
                 "parentId": None,
-                "timestamp": "2026-01-01T00:00:01.000Z",
+                "timestamp": message_ts,
                 "message": {
                     "role": "assistant",
                     "model": "claude-3-5-sonnet",
@@ -306,11 +408,16 @@ def test_cli_init_start_import_status_stop(tmp_path) -> None:
     runner = CliRunner()
     state_db = tmp_path / "toktrail.db"
     source_db = tmp_path / "opencode.db"
-    create_source_db(source_db)
-
     for args in (
         ["--db", str(state_db), "init"],
         ["--db", str(state_db), "run", "start", "--name", "test-session"],
+    ):
+        result = runner.invoke(app, args)
+        assert result.exit_code == 0, result.output
+
+    create_source_db(source_db)
+
+    for args in (
         [
             "--db",
             str(state_db),
@@ -321,7 +428,6 @@ def test_cli_init_start_import_status_stop(tmp_path) -> None:
             str(source_db),
         ],
         ["--db", str(state_db), "sessions"],
-        ["--db", str(state_db), "run", "stop"],
     ):
         result = runner.invoke(app, args)
         assert result.exit_code == 0, result.output
@@ -339,6 +445,9 @@ def test_cli_init_start_import_status_stop(tmp_path) -> None:
     assert payload["totals"]["virtual_cost_usd"] in ("0", "0.0")
     assert payload["totals"]["savings_usd"] == "-0.05"
     assert payload["totals"]["unpriced_count"] == 1
+
+    stop_result = runner.invoke(app, ["--db", str(state_db), "run", "stop"])
+    assert stop_result.exit_code == 0, stop_result.output
 
 
 def test_cli_sessions_without_subcommand_lists_tracking_sessions(tmp_path) -> None:
@@ -396,7 +505,7 @@ def test_cli_opencode_sessions_lists_source_sessions(tmp_path) -> None:
     assert "source_session_id" in result.output
     assert "ses-1" in result.output
     assert "1,850" in result.output
-    assert "2023-" in result.output
+    assert "202" in result.output
 
 
 def test_cli_sources_lists_filtered_source(tmp_path) -> None:
@@ -459,12 +568,6 @@ opencode = "{missing_db}"
     assert payload[0]["exists"] is False
     assert payload[0]["sessions"] == 0
     assert "OpenCode database not found" in payload[0]["warning"]
-
-
-
-
-
-
 
 
 def test_cli_import_copilot_status(tmp_path) -> None:
@@ -801,7 +904,7 @@ opencode = "{source_db}"
     )
     monkeypatch.setattr(
         "toktrail.periods.current_time_in_zone",
-        lambda tz: datetime(2023, 11, 14, 23, 0, tzinfo=tz),
+        lambda tz: datetime.now(tz=tz),
     )
 
     runner.invoke(app, ["--db", str(state_db), "init"])
@@ -850,9 +953,9 @@ opencode = "{source_db}"
             "usage",
             "summary",
             "--since",
-            "2023-11-14T00:00:00Z",
+            "2000-01-01T00:00:00Z",
             "--until",
-            "2023-11-15T00:00:00Z",
+            "2100-01-01T00:00:00Z",
             "--utc",
             "--json",
         ],
@@ -860,8 +963,8 @@ opencode = "{source_db}"
     payload = json.loads(result.output)
 
     assert result.exit_code == 0, result.output
-    assert payload["filters"]["since_ms"] == 1699920000000
-    assert payload["filters"]["until_ms"] == 1700006400000
+    assert payload["filters"]["since_ms"] == 946684800000
+    assert payload["filters"]["until_ms"] == 4102444800000
     assert payload["filters"]["timezone"] == "UTC"
     assert payload["totals"]["total"] == 1850
 
@@ -1185,8 +1288,6 @@ def test_cli_import_copilot_without_file_or_env_fails(tmp_path) -> None:
     assert "Copilot telemetry file not found" in result.output
 
 
-
-
 def test_cli_import_pi_status(tmp_path) -> None:
     runner = CliRunner()
     state_db = tmp_path / "toktrail.db"
@@ -1284,10 +1385,10 @@ def test_cli_status_filters_by_harness_and_source_session(tmp_path) -> None:
 
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
-    assert payload["filters"] == {
-        "harness": "pi",
-        "source_session_id": "pi_ses_001",
-    }
+    assert payload["filters"]["harness"] == "pi"
+    assert payload["filters"]["source_session_id"] == "pi_ses_001"
+    assert isinstance(payload["filters"]["since_ms"], int)
+    assert payload["filters"]["since_ms"] == payload["session"]["started_at_ms"]
     assert payload["totals"]["input"] == 100
     assert payload["totals"]["output"] == 50
     assert payload["by_harness"] == [
@@ -1302,6 +1403,45 @@ def test_cli_status_filters_by_harness_and_source_session(tmp_path) -> None:
             "unpriced_count": 1,
         }
     ]
+
+
+def test_cli_run_status_reports_only_usage_since_run_started(tmp_path: Path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    conn = connect(state_db)
+    try:
+        migrate(conn)
+        session_id = create_tracking_session(conn, "bounded", started_at_ms=1_000)
+        insert_usage_events(
+            conn,
+            session_id,
+            [
+                make_cli_usage_event(
+                    "old",
+                    created_ms=999,
+                    tokens=TokenBreakdown(input=100),
+                ),
+                make_cli_usage_event(
+                    "new",
+                    created_ms=1_001,
+                    tokens=TokenBreakdown(input=7, output=3),
+                ),
+            ],
+        )
+    finally:
+        conn.close()
+
+    result = runner.invoke(
+        app,
+        ["--db", str(state_db), "run", "status", str(session_id), "--json"],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["totals"]["input"] == 7
+    assert payload["totals"]["output"] == 3
+    assert payload["totals"]["total"] == 10
+    assert payload["filters"]["since_ms"] == 1_000
 
 
 def test_cli_config_path_init_and_validate(tmp_path) -> None:
@@ -1958,8 +2098,6 @@ def test_cli_sessions_amp_breakdown_shows_token_columns(tmp_path) -> None:
     assert "claude-sonnet-4-0" in result.output
 
 
-
-
 def test_cli_sessions_codex_supports_limit_sort_and_columns(tmp_path) -> None:
     runner = CliRunner()
     codex_dir = tmp_path / "codex"
@@ -2136,12 +2274,6 @@ def test_cli_sessions_copilot_supports_virtual_and_savings_sort(tmp_path) -> Non
         assert "savings" in result.output
         assert "conv-2" in result.output
         assert "conv-1" not in result.output
-
-
-
-
-
-
 
 
 def test_cli_import_pi_without_path_or_env_fails(tmp_path, monkeypatch) -> None:
@@ -2325,8 +2457,11 @@ def test_cli_copilot_env_json_does_not_affect_default_output(tmp_path) -> None:
     assert lines[0].startswith("$env.COPILOT_OTEL_ENABLED")
     # Must not be valid JSON object output
     assert not result.output.strip().startswith("{")
+
+
 def test_cli_watch_imports_configured_harnesses_and_prints_token_delta(
-    tmp_path, monkeypatch,
+    tmp_path,
+    monkeypatch,
 ) -> None:
     runner = CliRunner()
     state_db = tmp_path / "toktrail.db"
@@ -2336,7 +2471,9 @@ def test_cli_watch_imports_configured_harnesses_and_prints_token_delta(
 
     conn = create_opencode_db(opencode_db)
     insert_message(
-        conn, row_id="row-1", session_id="ses-1",
+        conn,
+        row_id="row-1",
+        session_id="ses-1",
         data=deepcopy(VALID_ASSISTANT),
     )
     conn.commit()
@@ -2369,10 +2506,13 @@ pi = "{pi_file}"
     result = runner.invoke(
         app,
         [
-            "--db", str(state_db),
-            "--config", str(config_path),
+            "--db",
+            str(state_db),
+            "--config",
+            str(config_path),
             "watch",
-            "--interval", "0.1",
+            "--interval",
+            "0.1",
         ],
     )
 
@@ -2387,7 +2527,8 @@ pi = "{pi_file}"
 
 
 def test_cli_watch_does_not_print_idle_duplicate_imports(
-    tmp_path, monkeypatch,
+    tmp_path,
+    monkeypatch,
 ) -> None:
     runner = CliRunner()
     state_db = tmp_path / "toktrail.db"
@@ -2396,7 +2537,9 @@ def test_cli_watch_does_not_print_idle_duplicate_imports(
 
     conn = create_opencode_db(opencode_db)
     insert_message(
-        conn, row_id="row-1", session_id="ses-1",
+        conn,
+        row_id="row-1",
+        session_id="ses-1",
         data=deepcopy(VALID_ASSISTANT),
     )
     conn.commit()
@@ -2432,10 +2575,13 @@ opencode = "{opencode_db}"
     result = runner.invoke(
         app,
         [
-            "--db", str(state_db),
-            "--config", str(config_path),
+            "--db",
+            str(state_db),
+            "--config",
+            str(config_path),
             "watch",
-            "--interval", "0.1",
+            "--interval",
+            "0.1",
         ],
     )
 
@@ -2445,7 +2591,8 @@ opencode = "{opencode_db}"
 
 
 def test_cli_watch_json_outputs_delta_events_only(
-    tmp_path, monkeypatch,
+    tmp_path,
+    monkeypatch,
 ) -> None:
     runner = CliRunner()
     state_db = tmp_path / "toktrail.db"
@@ -2454,7 +2601,9 @@ def test_cli_watch_json_outputs_delta_events_only(
 
     conn = create_opencode_db(opencode_db)
     insert_message(
-        conn, row_id="row-1", session_id="ses-1",
+        conn,
+        row_id="row-1",
+        session_id="ses-1",
         data=deepcopy(VALID_ASSISTANT),
     )
     conn.commit()
@@ -2485,11 +2634,14 @@ opencode = "{opencode_db}"
     result = runner.invoke(
         app,
         [
-            "--db", str(state_db),
-            "--config", str(config_path),
+            "--db",
+            str(state_db),
+            "--config",
+            str(config_path),
             "watch",
             "--json",
-            "--interval", "0.1",
+            "--interval",
+            "0.1",
         ],
     )
 
@@ -2499,7 +2651,6 @@ opencode = "{opencode_db}"
     assert len(events) >= 1
     assert all(event["type"] == "usage_delta" for event in events)
     assert events[0]["delta"]["total"] > 0
-
 
 
 def create_opencode_go_source_db(path: Path) -> None:
