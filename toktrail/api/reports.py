@@ -13,13 +13,9 @@ from toktrail.api._conversions import (
 from toktrail.api.models import RunReport, SubscriptionUsageReport, UsageSeriesReport
 from toktrail.errors import (
     InvalidAPIUsageError,
+    NoActiveRunError,
+    RunNotFoundError,
     StateDatabaseError,
-)
-from toktrail.errors import (
-    NoActiveRunError as NoActiveSessionError,
-)
-from toktrail.errors import (
-    RunNotFoundError as SessionNotFoundError,
 )
 from toktrail.periods import resolve_time_range
 from toktrail.reporting import UsageReportFilter
@@ -46,13 +42,11 @@ def session_report(
         if selected_session_id is None:
             active = db_module.get_active_tracking_session(conn)
             if active is None:
-                raise NoActiveSessionError(
-                    "An active tracking session is required, but none exists."
-                )
+                raise NoActiveRunError("An active run is required, but none exists.")
             selected_session_id = active
         if db_module.get_tracking_session(conn, selected_session_id) is None:
-            msg = f"Tracking session not found: {selected_session_id}"
-            raise SessionNotFoundError(msg)
+            msg = f"Run not found: {selected_session_id}"
+            raise RunNotFoundError(msg)
         report = db_module.summarize_usage(
             conn,
             UsageReportFilter(

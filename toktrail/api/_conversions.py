@@ -84,7 +84,7 @@ def _to_public_cost_totals(value: InternalCostTotals) -> CostTotals:
     )
 
 
-def _to_public_tracking_session(
+def _to_public_run(
     value: InternalTrackingSession | None,
 ) -> Run | None:
     if value is None:
@@ -95,13 +95,6 @@ def _to_public_tracking_session(
         started_at_ms=value.started_at_ms,
         ended_at_ms=value.ended_at_ms,
     )
-
-
-def _to_public_run(
-    value: InternalTrackingSession | None,
-) -> Run | None:
-    """Alias for _to_public_tracking_session for the new Run terminology."""
-    return _to_public_tracking_session(value)
 
 
 def _to_public_usage_event(
@@ -162,7 +155,7 @@ def _to_public_harness_row(value: InternalHarnessSummaryRow) -> HarnessSummaryRo
     return HarnessSummaryRow(
         harness=value.harness,
         message_count=value.message_count,
-        total_tokens=value.total_tokens,
+        tokens=_to_public_token_breakdown(value.tokens),
         costs=_to_public_cost_totals(value.costs),
     )
 
@@ -223,7 +216,7 @@ def _to_public_report(value: InternalRunReport) -> RunReport:
         key: filter_value for key, filter_value in value.filters.as_dict().items()
     }
     return RunReport(
-        session=_to_public_tracking_session(value.session),
+        session=_to_public_run(value.session),
         totals=_to_public_session_totals(value.totals, message_count=message_count),
         by_provider=by_provider,
         by_harness=by_harness,
@@ -349,7 +342,7 @@ __all__ = [
     "_to_public_source_summary",
     "_to_public_subscription_report",
     "_to_public_token_breakdown",
-    "_to_public_tracking_session",
+    "_to_public_run",
     "_to_public_unconfigured_model_row",
     "_to_public_usage_event",
     "_to_public_series_report",

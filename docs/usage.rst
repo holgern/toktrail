@@ -11,13 +11,13 @@ The preferred CLI workflow is:
    toktrail init
    toktrail config init
    toktrail sources
-   toktrail start --name <name>
+   toktrail run start --name <name>
    toktrail import
-   toktrail status
+   toktrail run status
    toktrail usage today
    toktrail subscriptions
    toktrail sessions
-   toktrail stop
+   toktrail run stop
 
 Use ``toktrail import`` for normal operation. It reads enabled harnesses and
 source paths from ``config.toml``:
@@ -48,9 +48,9 @@ Core commands
 
 .. code-block:: bash
 
-   toktrail status
-   toktrail status --json
-   toktrail status --split-thinking
+   toktrail run status
+   toktrail run status --json
+   toktrail run status --split-thinking
    toktrail usage today
    toktrail usage last-week --utc --json
    toktrail subscriptions --provider opencode-go --json

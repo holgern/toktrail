@@ -11,10 +11,8 @@ from toktrail.api.paths import resolve_source_path
 from toktrail.config import load_resolved_toktrail_config
 from toktrail.errors import (
     InvalidAPIUsageError,
+    RunNotFoundError,
     UsageImportError,
-)
-from toktrail.errors import (
-    RunNotFoundError as SessionNotFoundError,
 )
 
 
@@ -53,15 +51,21 @@ def import_usage(
         if selected_session_id is not None:
             tracking_session = db_module.get_tracking_session(conn, selected_session_id)
             if tracking_session is None:
-                msg = f"Tracking session not found: {selected_session_id}"
-                raise SessionNotFoundError(msg)
+                msg = f"Run not found: {selected_session_id}"
+                raise RunNotFoundError(msg)
         elif since_start:
-            msg = "since_start=True requires an explicit or active tracking session."
+            msg = "since_start=True requires an explicit or active run."
             raise InvalidAPIUsageError(msg)
 
         effective_since_ms = since_ms
-        if since_start and tracking_session is not None:
-            effective_since_ms = tracking_session.started_at_ms
+        if tracking_session is not None:
+            if effective_since_ms is None:
+                effective_since_ms = tracking_session.started_at_ms
+            else:
+                effective_since_ms = max(
+                    effective_since_ms,
+                    tracking_session.started_at_ms,
+                )
 
         scan = definition.scan(
             resolved,

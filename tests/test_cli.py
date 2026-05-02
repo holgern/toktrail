@@ -17,7 +17,7 @@ from tests.helpers import (
     create_opencode_db,
     insert_message,
 )
-from toktrail.api.sessions import init_state, start_session
+from toktrail.api.sessions import init_state, start_run
 from toktrail.cli import app
 from toktrail.db import connect, create_tracking_session, insert_usage_events, migrate
 from toktrail.models import TokenBreakdown, UsageEvent
@@ -1395,7 +1395,12 @@ def test_cli_status_filters_by_harness_and_source_session(tmp_path) -> None:
         {
             "harness": "pi",
             "message_count": 1,
-            "total_tokens": 165,
+            "input": 100,
+            "output": 50,
+            "reasoning": 0,
+            "cache_read": 10,
+            "cache_write": 5,
+            "total": 165,
             "source_cost_usd": "0.0",
             "actual_cost_usd": "0",
             "virtual_cost_usd": "0",
@@ -2497,7 +2502,7 @@ pi = "{pi_file}"
     )
 
     init_state(state_db)
-    start_session(state_db, name="watch-test", started_at_ms=0)
+    start_run(state_db, name="watch-test", started_at_ms=0)
 
     def interrupt_after_first_sleep(_interval: float) -> None:
         raise KeyboardInterrupt
@@ -2561,7 +2566,7 @@ opencode = "{opencode_db}"
     )
 
     init_state(state_db)
-    start_session(state_db, name="watch-idle", started_at_ms=0)
+    start_run(state_db, name="watch-idle", started_at_ms=0)
 
     sleep_calls = 0
 
@@ -2625,7 +2630,7 @@ opencode = "{opencode_db}"
     )
 
     init_state(state_db)
-    start_session(state_db, name="watch-json", started_at_ms=0)
+    start_run(state_db, name="watch-json", started_at_ms=0)
 
     def interrupt_after_first_sleep(_interval: float) -> None:
         raise KeyboardInterrupt
@@ -2651,6 +2656,12 @@ opencode = "{opencode_db}"
     assert len(events) >= 1
     assert all(event["type"] == "usage_delta" for event in events)
     assert events[0]["delta"]["total"] > 0
+    by_harness = events[0]["by_harness"]
+    assert len(by_harness) == 1
+    assert by_harness[0]["harness"] == "opencode"
+    assert by_harness[0]["input"] > 0
+    assert by_harness[0]["output"] > 0
+    assert by_harness[0]["cache_read"] > 0
 
 
 def create_opencode_go_source_db(path: Path) -> None:

@@ -5,23 +5,13 @@ from pathlib import Path
 
 from toktrail import db as db_module
 from toktrail.api._common import _open_state_db
-from toktrail.api._conversions import (
-    _to_public_tracking_session,
-)
+from toktrail.api._conversions import _to_public_run
 from toktrail.api.models import Run
 from toktrail.errors import (
-    ActiveRunExistsError as ActiveSessionExistsError,
-)
-from toktrail.errors import (
-    NoActiveRunError as NoActiveSessionError,
-)
-from toktrail.errors import (
-    RunAlreadyEndedError as SessionAlreadyEndedError,
-)
-from toktrail.errors import (
-    RunNotFoundError as SessionNotFoundError,
-)
-from toktrail.errors import (
+    ActiveRunExistsError,
+    NoActiveRunError,
+    RunAlreadyEndedError,
+    RunNotFoundError,
     StateDatabaseError,
 )
 
@@ -38,36 +28,114 @@ def start_run(
     name: str | None = None,
     started_at_ms: int | None = None,
 ) -> Run:
-    return start_session(
-        db_path=db_path,
-        name=name,
-        started_at_ms=started_at_ms,
-    )
+    conn, _ = _open_state_db(db_path)
+    try:
+        run_id = db_module.create_tracking_session(
+            conn,
+            name,
+            started_at_ms=started_at_ms,
+        )
+        run = db_module.get_tracking_session(conn, run_id)
+    except ValueError as exc:
+        if "already active" in str(exc):
+            raise ActiveRunExistsError(str(exc)) from exc
+        raise StateDatabaseError(str(exc)) from exc
+    except sqlite3.Error as exc:
+        raise StateDatabaseError(str(exc)) from exc
+    finally:
+        conn.close()
+    if run is None:
+        msg = f"Run not found after creation: {run_id}"
+        raise StateDatabaseError(msg)
+    public_run = _to_public_run(run)
+    if public_run is None:
+        msg = f"Run not found after creation: {run_id}"
+        raise StateDatabaseError(msg)
+    return public_run
 
 
 def stop_run(
     db_path: Path | None,
-    session_id: int | None = None,
+    run_id: int | None = None,
     *,
     ended_at_ms: int | None = None,
 ) -> Run:
-    return stop_session(
-        db_path=db_path,
-        session_id=session_id,
-        ended_at_ms=ended_at_ms,
-    )
+    conn, _ = _open_state_db(db_path)
+    try:
+        selected_run_id = run_id
+        if selected_run_id is None:
+            active = db_module.get_active_tracking_session(conn)
+            if active is None:
+                raise NoActiveRunError("An active run is required, but none exists.")
+            selected_run_id = active
+        run = db_module.get_tracking_session(conn, selected_run_id)
+        if run is None:
+            msg = f"Run not found: {selected_run_id}"
+            raise RunNotFoundError(msg)
+        if run.ended_at_ms is not None:
+            msg = f"Run {selected_run_id} has already ended."
+            raise RunAlreadyEndedError(msg)
+        db_module.end_tracking_session(
+            conn,
+            selected_run_id,
+            ended_at_ms=ended_at_ms,
+        )
+        updated = db_module.get_tracking_session(conn, selected_run_id)
+    except sqlite3.Error as exc:
+        raise StateDatabaseError(str(exc)) from exc
+    finally:
+        conn.close()
+    if updated is None:
+        msg = f"Run not found after stop: {selected_run_id}"
+        raise StateDatabaseError(msg)
+    public_run = _to_public_run(updated)
+    if public_run is None:
+        msg = f"Run not found after stop: {selected_run_id}"
+        raise StateDatabaseError(msg)
+    return public_run
 
 
 def get_active_run(db_path: Path | None) -> Run | None:
-    return get_active_session(db_path)
+    conn, _ = _open_state_db(db_path)
+    try:
+        run_id = db_module.get_active_tracking_session(conn)
+        if run_id is None:
+            return None
+        run = db_module.get_tracking_session(conn, run_id)
+    finally:
+        conn.close()
+    if run is None:
+        msg = f"Run not found: {run_id}"
+        raise StateDatabaseError(msg)
+    public_run = _to_public_run(run)
+    if public_run is None:
+        msg = f"Run not found: {run_id}"
+        raise StateDatabaseError(msg)
+    return public_run
 
 
 def require_active_run(db_path: Path | None) -> Run:
-    return require_active_session(db_path)
+    run = get_active_run(db_path)
+    if run is None:
+        msg = "An active run is required, but none exists."
+        raise NoActiveRunError(msg)
+    return run
 
 
-def get_run(db_path: Path | None, session_id: int) -> Run:
-    return get_session(db_path=db_path, session_id=session_id)
+def get_run(db_path: Path | None, run_id: int) -> Run:
+    conn, _ = _open_state_db(db_path)
+    try:
+        run = db_module.get_tracking_session(conn, run_id)
+    finally:
+        conn.close()
+    if run is None:
+        msg = f"Run not found: {run_id}"
+        raise RunNotFoundError(msg)
+    public_run = _to_public_run(run)
+    if public_run is None:
+        msg = f"Run not found: {run_id}"
+        raise StateDatabaseError(msg)
+    return public_run
 
 
 def list_runs(
@@ -76,171 +144,30 @@ def list_runs(
     limit: int | None = None,
     include_ended: bool = True,
 ) -> tuple[Run, ...]:
-    return list_sessions(
-        db_path=db_path,
-        limit=limit,
-        include_ended=include_ended,
-    )
-
-
-def start_session(
-    db_path: Path | None,
-    *,
-    name: str | None = None,
-    started_at_ms: int | None = None,
-) -> Run:
     conn, _ = _open_state_db(db_path)
     try:
-        session_id = db_module.create_tracking_session(
-            conn,
-            name,
-            started_at_ms=started_at_ms,
-        )
-        session = db_module.get_tracking_session(conn, session_id)
-    except ValueError as exc:
-        if "already active" in str(exc):
-            raise ActiveSessionExistsError(str(exc)) from exc
-        raise StateDatabaseError(str(exc)) from exc
-    except sqlite3.Error as exc:
-        raise StateDatabaseError(str(exc)) from exc
+        runs = db_module.list_tracking_sessions(conn)
     finally:
         conn.close()
-    if session is None:
-        msg = f"Tracking session not found after creation: {session_id}"
-        raise StateDatabaseError(msg)
-    public_session = _to_public_tracking_session(session)
-    if public_session is None:
-        msg = f"Tracking session not found after creation: {session_id}"
-        raise StateDatabaseError(msg)
-    return public_session
-
-
-def stop_session(
-    db_path: Path | None,
-    session_id: int | None = None,
-    *,
-    ended_at_ms: int | None = None,
-) -> Run:
-    conn, _ = _open_state_db(db_path)
-    try:
-        selected_session_id = session_id
-        if selected_session_id is None:
-            active = db_module.get_active_tracking_session(conn)
-            if active is None:
-                raise NoActiveSessionError(
-                    "An active tracking session is required, but none exists."
-                )
-            selected_session_id = active
-        session = db_module.get_tracking_session(conn, selected_session_id)
-        if session is None:
-            msg = f"Tracking session not found: {selected_session_id}"
-            raise SessionNotFoundError(msg)
-        if session.ended_at_ms is not None:
-            msg = f"Tracking session {selected_session_id} has already ended."
-            raise SessionAlreadyEndedError(msg)
-        db_module.end_tracking_session(
-            conn,
-            selected_session_id,
-            ended_at_ms=ended_at_ms,
-        )
-        updated = db_module.get_tracking_session(conn, selected_session_id)
-    except sqlite3.Error as exc:
-        raise StateDatabaseError(str(exc)) from exc
-    finally:
-        conn.close()
-    if updated is None:
-        msg = f"Tracking session not found after stop: {selected_session_id}"
-        raise StateDatabaseError(msg)
-    public_session = _to_public_tracking_session(updated)
-    if public_session is None:
-        msg = f"Tracking session not found after stop: {selected_session_id}"
-        raise StateDatabaseError(msg)
-    return public_session
-
-
-def get_active_session(db_path: Path | None) -> Run | None:
-    conn, _ = _open_state_db(db_path)
-    try:
-        session_id = db_module.get_active_tracking_session(conn)
-        if session_id is None:
-            return None
-        session = db_module.get_tracking_session(conn, session_id)
-    finally:
-        conn.close()
-    if session is None:
-        msg = f"Tracking session not found: {session_id}"
-        raise StateDatabaseError(msg)
-    public_session = _to_public_tracking_session(session)
-    if public_session is None:
-        msg = f"Tracking session not found: {session_id}"
-        raise StateDatabaseError(msg)
-    return public_session
-
-
-def require_active_session(db_path: Path | None) -> Run:
-    session = get_active_session(db_path)
-    if session is None:
-        msg = "An active tracking session is required, but none exists."
-        raise NoActiveSessionError(msg)
-    return session
-
-
-def get_session(db_path: Path | None, session_id: int) -> Run:
-    conn, _ = _open_state_db(db_path)
-    try:
-        session = db_module.get_tracking_session(conn, session_id)
-    finally:
-        conn.close()
-    if session is None:
-        msg = f"Tracking session not found: {session_id}"
-        raise SessionNotFoundError(msg)
-    public_session = _to_public_tracking_session(session)
-    if public_session is None:
-        msg = f"Tracking session not found: {session_id}"
-        raise StateDatabaseError(msg)
-    return public_session
-
-
-def list_sessions(
-    db_path: Path | None,
-    *,
-    limit: int | None = None,
-    include_ended: bool = True,
-) -> tuple[Run, ...]:
-    conn, _ = _open_state_db(db_path)
-    try:
-        sessions = db_module.list_tracking_sessions(conn)
-    finally:
-        conn.close()
-    public_sessions = tuple(
-        public_session
-        for session in sessions
-        for public_session in (_to_public_tracking_session(session),)
-        if public_session is not None
+    public_runs = tuple(
+        public_run
+        for run in runs
+        for public_run in (_to_public_run(run),)
+        if public_run is not None
     )
     if not include_ended:
-        public_sessions = tuple(
-            session for session in public_sessions if session.active
-        )
+        public_runs = tuple(run for run in public_runs if run.active)
     if limit is not None:
-        public_sessions = public_sessions[:limit]
-    return public_sessions
+        public_runs = public_runs[:limit]
+    return public_runs
 
 
 __all__ = [
-    # New run terminology
+    "get_active_run",
+    "get_run",
+    "init_state",
+    "list_runs",
+    "require_active_run",
     "start_run",
     "stop_run",
-    "get_active_run",
-    "require_active_run",
-    "get_run",
-    "list_runs",
-    "init_state",
-    # Legacy session terminology (backward compatibility)
-    "start_session",
-    "stop_session",
-    "get_active_session",
-    "require_active_session",
-    "get_session",
-    "list_sessions",
 ]

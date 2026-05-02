@@ -129,7 +129,7 @@ def create_codex_session_file(path: Path) -> None:
                 },
             },
             {
-                "timestamp": "2026-01-01T00:00:01Z",
+                "timestamp": "2099-01-01T00:00:01Z",
                 "type": "event_msg",
                 "payload": {
                     "type": "token_count",

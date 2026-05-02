@@ -65,6 +65,10 @@ def test_finalize_manual_run_detects_updated_source_session_for_opencode(
         "reasoning": 0,
         "cache": {"read": 0, "write": 0},
     }
+    updated["time"] = {
+        "created": float(prepared.run.started_at_ms + 1),
+        "completed": float(prepared.run.started_at_ms + 2),
+    }
     insert_message(conn, row_id="row-2", session_id="ses-1", data=updated)
     conn.commit()
     conn.close()
@@ -72,7 +76,7 @@ def test_finalize_manual_run_detects_updated_source_session_for_opencode(
     finalized = finalize_manual_run(state_db, prepared)
 
     assert finalized.source_session.source_session_id == "ses-1"
-    assert finalized.import_result.rows_imported == 2
+    assert finalized.import_result.rows_imported == 1
     assert finalized.run.active is False
 
 
@@ -90,10 +94,10 @@ def test_prepare_and_finalize_manual_run_for_codex(tmp_path) -> None:
 
     with codex_file.open("a", encoding="utf-8") as handle:
         handle.write(
-            '{"timestamp":"2026-01-01T00:00:02Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":200,"cached_input_tokens":20,"output_tokens":40,"reasoning_output_tokens":5},"last_token_usage":{"input_tokens":80,"output_tokens":10}}}}\n'
+            '{"timestamp":"2099-01-01T00:00:02Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":200,"cached_input_tokens":20,"output_tokens":40,"reasoning_output_tokens":5},"last_token_usage":{"input_tokens":80,"output_tokens":10}}}}\n'
         )
 
-    finalized = finalize_manual_run(state_db, prepared)
+    finalized = finalize_manual_run(state_db, prepared, stop_after_run=False)
 
     assert finalized.source_session.source_session_id == "session-001"
     assert finalized.import_result.rows_imported == 2
@@ -101,7 +105,7 @@ def test_prepare_and_finalize_manual_run_for_codex(tmp_path) -> None:
     assert finalized.report.totals.tokens.cache_read == 20
     assert finalized.report.totals.tokens.output == 40
     assert finalized.report.totals.tokens.reasoning == 5
-    assert finalized.run.active is False
+    assert finalized.run.active is True
 
 
 def test_finalize_manual_run_explicit_source_session_id_bypasses_ambiguity(
@@ -115,6 +119,9 @@ def test_finalize_manual_run_explicit_source_session_id_bypasses_ambiguity(
         name="workflow-copilot",
         source_path=copilot_dir,
     )
+    end_time_sec = prepared.run.started_at_ms // 1000
+    first_nsec = ((prepared.run.started_at_ms % 1000) + 1) * 1_000_000
+    second_nsec = ((prepared.run.started_at_ms % 1000) + 2) * 1_000_000
     write_jsonl_rows(
         copilot_dir / "first.jsonl",
         [
@@ -123,7 +130,7 @@ def test_finalize_manual_run_explicit_source_session_id_bypasses_ambiguity(
                 "traceId": "trace-1",
                 "spanId": "span-1",
                 "name": "chat claude-sonnet-4",
-                "endTime": [1775934264, 967317833],
+                "endTime": [end_time_sec, first_nsec],
                 "attributes": {
                     "gen_ai.operation.name": "chat",
                     "gen_ai.response.model": "claude-sonnet-4",
@@ -142,7 +149,7 @@ def test_finalize_manual_run_explicit_source_session_id_bypasses_ambiguity(
                 "traceId": "trace-2",
                 "spanId": "span-2",
                 "name": "chat claude-sonnet-4",
-                "endTime": [1775934265, 967317833],
+                "endTime": [end_time_sec, second_nsec],
                 "attributes": {
                     "gen_ai.operation.name": "chat",
                     "gen_ai.response.model": "claude-sonnet-4",
@@ -173,6 +180,9 @@ def test_finalize_manual_run_raises_for_ambiguous_or_missing_changes(tmp_path) -
         name="workflow-copilot",
         source_path=copilot_dir,
     )
+    end_time_sec = prepared.run.started_at_ms // 1000
+    first_nsec = ((prepared.run.started_at_ms % 1000) + 1) * 1_000_000
+    second_nsec = ((prepared.run.started_at_ms % 1000) + 2) * 1_000_000
     write_jsonl_rows(
         copilot_dir / "first.jsonl",
         [
@@ -181,7 +191,7 @@ def test_finalize_manual_run_raises_for_ambiguous_or_missing_changes(tmp_path) -
                 "traceId": "trace-1",
                 "spanId": "span-1",
                 "name": "chat claude-sonnet-4",
-                "endTime": [1775934264, 967317833],
+                "endTime": [end_time_sec, first_nsec],
                 "attributes": {
                     "gen_ai.operation.name": "chat",
                     "gen_ai.response.model": "claude-sonnet-4",
@@ -200,7 +210,7 @@ def test_finalize_manual_run_raises_for_ambiguous_or_missing_changes(tmp_path) -
                 "traceId": "trace-2",
                 "spanId": "span-2",
                 "name": "chat claude-sonnet-4",
-                "endTime": [1775934265, 967317833],
+                "endTime": [end_time_sec, second_nsec],
                 "attributes": {
                     "gen_ai.operation.name": "chat",
                     "gen_ai.response.model": "claude-sonnet-4",

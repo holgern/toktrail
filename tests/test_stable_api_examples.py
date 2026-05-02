@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import importlib
+from decimal import Decimal
 from pathlib import Path
 
 from examples import _manual_run_common
@@ -157,9 +158,9 @@ def test_print_report_formats_public_dataclasses(capsys) -> None:
                 cache_write=5,
             ),
             costs=CostTotals(
-                source_cost_usd=0.01,
-                actual_cost_usd=0.02,
-                virtual_cost_usd=0.05,
+                source_cost_usd=Decimal("0.01"),
+                actual_cost_usd=Decimal("0.02"),
+                virtual_cost_usd=Decimal("0.05"),
                 unpriced_count=1,
             ),
             message_count=2,
@@ -171,15 +172,21 @@ def test_print_report_formats_public_dataclasses(capsys) -> None:
                 tokens=TokenBreakdown(
                     input=10, output=20, reasoning=3, cache_read=4, cache_write=5
                 ),
-                costs=CostTotals(actual_cost_usd=0.02, virtual_cost_usd=0.05),
+                costs=CostTotals(
+                    actual_cost_usd=Decimal("0.02"), virtual_cost_usd=Decimal("0.05")
+                ),
             ),
         ),
         by_harness=(
             HarnessSummaryRow(
                 harness="codex",
                 message_count=2,
-                total_tokens=42,
-                costs=CostTotals(actual_cost_usd=0.02, virtual_cost_usd=0.05),
+                tokens=TokenBreakdown(
+                    input=10, output=20, reasoning=3, cache_read=4, cache_write=5
+                ),
+                costs=CostTotals(
+                    actual_cost_usd=Decimal("0.02"), virtual_cost_usd=Decimal("0.05")
+                ),
             ),
         ),
         by_model=(
@@ -189,7 +196,9 @@ def test_print_report_formats_public_dataclasses(capsys) -> None:
                 thinking_level="medium",
                 message_count=2,
                 tokens=TokenBreakdown(input=10, output=20, reasoning=3),
-                costs=CostTotals(actual_cost_usd=0.02, virtual_cost_usd=0.05),
+                costs=CostTotals(
+                    actual_cost_usd=Decimal("0.02"), virtual_cost_usd=Decimal("0.05")
+                ),
             ),
         ),
         by_activity=(
@@ -197,7 +206,9 @@ def test_print_report_formats_public_dataclasses(capsys) -> None:
                 agent="build",
                 message_count=2,
                 total_tokens=42,
-                costs=CostTotals(actual_cost_usd=0.02, virtual_cost_usd=0.05),
+                costs=CostTotals(
+                    actual_cost_usd=Decimal("0.02"), virtual_cost_usd=Decimal("0.05")
+                ),
             ),
         ),
         unconfigured_models=(
@@ -239,7 +250,7 @@ def test_print_finalized_formats_import_and_source_session(capsys) -> None:
         last_created_ms=2000,
         assistant_message_count=1,
         tokens=TokenBreakdown(input=1, output=2),
-        costs=CostTotals(source_cost_usd=0.01),
+        costs=CostTotals(source_cost_usd=Decimal("0.01")),
         models=("gpt-5",),
         providers=("openai",),
     )
@@ -247,7 +258,7 @@ def test_print_finalized_formats_import_and_source_session(capsys) -> None:
         session=None,
         totals=SessionTotals(
             tokens=TokenBreakdown(input=1, output=2),
-            costs=CostTotals(source_cost_usd=0.01),
+            costs=CostTotals(source_cost_usd=Decimal("0.01")),
             message_count=1,
         ),
         by_provider=(),

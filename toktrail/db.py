@@ -36,7 +36,7 @@ from toktrail.reporting import (
     UsageSeriesReport,
 )
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 @dataclass(frozen=True)
@@ -65,6 +65,11 @@ def migrate(conn: sqlite3.Connection) -> None:
     if current_version == 0:
         _create_schema(conn)
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+        conn.commit()
+        return
+    if current_version == 1 and SCHEMA_VERSION == 2:
+        _migrate_v1_to_v2(conn)
+        conn.execute("PRAGMA user_version = 2")
         conn.commit()
         return
     if current_version == SCHEMA_VERSION:
@@ -140,7 +145,7 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             reasoning_tokens INTEGER NOT NULL DEFAULT 0,
             cache_read_tokens INTEGER NOT NULL DEFAULT 0,
             cache_write_tokens INTEGER NOT NULL DEFAULT 0,
-            source_cost_usd REAL NOT NULL DEFAULT 0.0,
+            source_cost_usd TEXT NOT NULL DEFAULT '0',
             raw_json TEXT,
             imported_at_ms INTEGER NOT NULL,
             UNIQUE(harness, global_dedup_key)
@@ -634,7 +639,7 @@ def summarize_usage(
             HarnessSummaryRow(
                 harness=harness,
                 message_count=bucket.message_count,
-                total_tokens=bucket.tokens.total,
+                tokens=bucket.tokens,
                 costs=bucket.costs,
             )
             for harness, bucket in sorted(

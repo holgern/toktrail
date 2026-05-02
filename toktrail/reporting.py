@@ -125,8 +125,12 @@ class SessionTotals:
 class HarnessSummaryRow:
     harness: str
     message_count: int
-    total_tokens: int
+    tokens: TokenBreakdown
     costs: CostTotals
+
+    @property
+    def total_tokens(self) -> int:
+        return self.tokens.total
 
     @property
     def source_cost_usd(self) -> Decimal:
@@ -152,7 +156,7 @@ class HarnessSummaryRow:
         return {
             "harness": self.harness,
             "message_count": self.message_count,
-            "total_tokens": self.total_tokens,
+            **self.tokens.as_dict(),
             **self.costs.as_dict(),
         }
 

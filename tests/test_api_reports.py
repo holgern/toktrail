@@ -23,7 +23,7 @@ from toktrail.api.reports import (
     usage_report,
     usage_series_report,
 )
-from toktrail.api.sessions import init_state, start_session
+from toktrail.api.sessions import init_state, start_run
 from toktrail.db import (
     connect,
     create_tracking_session,
@@ -31,7 +31,7 @@ from toktrail.db import (
     insert_usage_events,
     migrate,
 )
-from toktrail.errors import InvalidAPIUsageError, NoActiveSessionError
+from toktrail.errors import InvalidAPIUsageError, NoActiveRunError
 from toktrail.models import TokenBreakdown, UsageEvent
 
 
@@ -78,7 +78,7 @@ def test_session_report_uses_active_session_by_default(tmp_path: Path) -> None:
     conn.commit()
     conn.close()
     init_state(state_db)
-    start_session(state_db, name="report")
+    start_run(state_db, name="report")
     import_usage(state_db, "opencode", source_path=source_db)
 
     report = session_report(state_db, config_path=tmp_path / "missing-config.toml")
@@ -111,7 +111,7 @@ def test_session_report_without_active_session_raises(tmp_path: Path) -> None:
     state_db = tmp_path / "toktrail.db"
     init_state(state_db)
 
-    with pytest.raises(NoActiveSessionError, match="active tracking session"):
+    with pytest.raises(NoActiveRunError, match="active run"):
         session_report(state_db)
 
 
@@ -219,7 +219,7 @@ def test_session_report_supports_thinking_filter_and_collapse(tmp_path: Path) ->
     conn.close()
 
     init_state(state_db)
-    session = start_session(state_db, name="thinking")
+    session = start_run(state_db, name="thinking")
     import_usage(state_db, "opencode", session_id=session.id, source_path=source_db)
 
     filtered_split = session_report(

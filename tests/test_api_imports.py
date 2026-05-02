@@ -16,10 +16,10 @@ from tests.test_droid_parser import write_droid_settings
 from tests.test_goose_parser import create_goose_db, insert_session
 from toktrail.api.imports import import_configured_usage, import_usage
 from toktrail.api.reports import session_report
-from toktrail.api.sessions import init_state, start_session
+from toktrail.api.sessions import init_state, start_run
 from toktrail.errors import (
     InvalidAPIUsageError,
-    SessionNotFoundError,
+    RunNotFoundError,
 )
 
 
@@ -28,7 +28,7 @@ def test_import_usage_defaults_to_active_session_and_is_idempotent(tmp_path) -> 
     source_db = tmp_path / "opencode.db"
     _create_opencode_messages(source_db)
     init_state(state_db)
-    session = start_session(state_db, name="import-test")
+    session = start_run(state_db, name="import-test", started_at_ms=0)
 
     first = import_usage(state_db, "opencode", source_path=source_db)
     second = import_usage(state_db, "opencode", source_path=source_db)
@@ -51,7 +51,7 @@ def test_import_usage_without_active_session_imports_unscoped_events(tmp_path) -
 
     assert result.tracking_session_id is None
     assert result.rows_imported == 2
-    with pytest.raises(SessionNotFoundError, match="Tracking session not found"):
+    with pytest.raises(RunNotFoundError, match="Run not found"):
         import_usage(state_db, "opencode", session_id=999, source_path=source_db)
 
 
@@ -70,7 +70,7 @@ def test_import_usage_since_start_and_source_session_filters(tmp_path) -> None:
     conn.close()
 
     init_state(state_db)
-    session = start_session(state_db, name="since", started_at_ms=100)
+    session = start_run(state_db, name="since", started_at_ms=100)
     result = import_usage(
         state_db,
         "opencode",
@@ -129,7 +129,7 @@ opencode = "{source_db}"
     )
 
     init_state(state_db)
-    session = start_session(state_db, name="cfg-since", started_at_ms=100)
+    session = start_run(state_db, name="cfg-since", started_at_ms=100)
     results = import_configured_usage(
         state_db,
         session_id=session.id,
@@ -161,7 +161,7 @@ def test_import_usage_include_raw_json_false_stores_no_raw_json(tmp_path) -> Non
     source_db = tmp_path / "opencode.db"
     _create_opencode_messages(source_db)
     init_state(state_db)
-    start_session(state_db, name="raw")
+    start_run(state_db, name="raw", started_at_ms=0)
 
     result = import_usage(
         state_db,
@@ -186,7 +186,7 @@ def test_import_usage_can_ignore_active_session_when_requested(tmp_path) -> None
     source_db = tmp_path / "opencode.db"
     _create_opencode_messages(source_db)
     init_state(state_db)
-    start_session(state_db, name="active")
+    start_run(state_db, name="active")
 
     result = import_usage(
         state_db,
@@ -199,12 +199,61 @@ def test_import_usage_can_ignore_active_session_when_requested(tmp_path) -> None
     assert result.rows_imported == 2
 
 
+def test_import_usage_active_run_filters_historical_rows_by_default(tmp_path) -> None:
+    state_db = tmp_path / "toktrail.db"
+    source_db = tmp_path / "opencode.db"
+    _create_opencode_messages(source_db)
+    init_state(state_db)
+    session = start_run(state_db, name="bounded-default")
+
+    result = import_usage(state_db, "opencode", source_path=source_db)
+    report = session_report(state_db, session.id)
+
+    assert result.tracking_session_id == session.id
+    assert result.rows_seen == 2
+    assert result.rows_imported == 0
+    assert result.rows_skipped == 2
+    assert result.since_ms == session.started_at_ms
+    assert report.totals.tokens.total == 0
+
+
+def test_import_usage_since_ms_cannot_widen_before_run_start(tmp_path) -> None:
+    state_db = tmp_path / "toktrail.db"
+    source_db = tmp_path / "opencode.db"
+    conn = create_opencode_db(source_db)
+    early = deepcopy(VALID_ASSISTANT)
+    early["time"] = {"created": 10.0, "completed": 11.0}
+    insert_message(conn, row_id="row-1", session_id="ses-1", data=early)
+    later = deepcopy(VALID_ASSISTANT)
+    later["id"] = "msg_999"
+    later["time"] = {"created": 200.0, "completed": 201.0}
+    insert_message(conn, row_id="row-2", session_id="ses-2", data=later)
+    conn.commit()
+    conn.close()
+
+    init_state(state_db)
+    session = start_run(state_db, name="since-cap", started_at_ms=100)
+
+    result = import_usage(
+        state_db,
+        "opencode",
+        session_id=session.id,
+        source_path=source_db,
+        since_ms=1,
+    )
+    report = session_report(state_db, session.id)
+
+    assert result.since_ms == 100
+    assert result.rows_imported == 1
+    assert report.by_harness[0].message_count == 1
+
+
 def test_import_usage_supports_codex_source(tmp_path) -> None:
     state_db = tmp_path / "toktrail.db"
     codex_file = tmp_path / "codex" / "session-001.jsonl"
     create_codex_session_file(codex_file)
     init_state(state_db)
-    session = start_session(state_db, name="codex")
+    session = start_run(state_db, name="codex", started_at_ms=0)
 
     first = import_usage(
         state_db,
@@ -234,7 +283,7 @@ def test_import_usage_supports_droid_source(tmp_path) -> None:
     droid_source = tmp_path / "factory" / "sessions"
     write_droid_settings(droid_source / "droid-1.settings.json")
     init_state(state_db)
-    session = start_session(state_db, name="droid")
+    session = start_run(state_db, name="droid", started_at_ms=0)
 
     first = import_usage(
         state_db,
@@ -266,7 +315,7 @@ def test_import_usage_supports_amp_source(tmp_path) -> None:
     amp_source = tmp_path / "amp" / "threads"
     create_amp_source(amp_source / "thread-1.json")
     init_state(state_db)
-    session = start_session(state_db, name="amp")
+    session = start_run(state_db, name="amp", started_at_ms=0)
 
     first = import_usage(
         state_db,
@@ -351,7 +400,7 @@ def test_later_session_import_links_existing_unscoped_events_without_duplicates(
     init_state(state_db)
 
     first = import_usage(state_db, "opencode", source_path=source_db)
-    session = start_session(state_db, name="linked")
+    session = start_run(state_db, name="linked", started_at_ms=0)
     second = import_usage(
         state_db,
         "opencode",

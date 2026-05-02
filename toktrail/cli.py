@@ -42,6 +42,7 @@ from toktrail.config import (
     summarize_costing_config,
 )
 from toktrail.db import (
+    InsertUsageResult,
     connect,
     create_tracking_session,
     end_tracking_session,
@@ -1083,9 +1084,7 @@ def _print_subscription_usage_report(
         for period in subscription.periods:
             left_value = _format_cost(period.remaining_usd)
             if period.over_limit_usd > 0:
-                left_value = (
-                    f"{left_value} over {_format_cost(period.over_limit_usd)}"
-                )
+                left_value = f"{left_value} over {_format_cost(period.over_limit_usd)}"
             rows.append(
                 {
                     "period": period.period,
@@ -1949,7 +1948,9 @@ def _run_harness_import(
             source_session_id=source_session_id,
             include_raw_json=not no_raw,
         )
-        since_ms = tracking_session.started_at_ms if since_start else None
+        since_ms = tracking_session.started_at_ms
+        if since_start:
+            since_ms = tracking_session.started_at_ms
         filtered_events = [
             event
             for event in scan.events
@@ -2024,9 +2025,10 @@ def _run_harness_import_with_dry_run(
             include_raw_json=not no_raw,
         )
 
-        # Only filter by since_start if we have a tracking session
         since_ms = None
-        if tracking_session is not None and since_start:
+        if tracking_session is not None:
+            since_ms = tracking_session.started_at_ms
+        if since_start and tracking_session is not None:
             since_ms = tracking_session.started_at_ms
 
         filtered_events = [
@@ -2042,13 +2044,11 @@ def _run_harness_import_with_dry_run(
                 conn, selected_session_id, filtered_events
             )
         else:
-            # For dry-run, report what we would have inserted
-            data = {
-                "rows_inserted": len(filtered_events),
-                "rows_linked": 0,
-                "rows_skipped": 0,
-            }
-            insert_result = type("obj", (object,), data)()
+            insert_result = InsertUsageResult(
+                rows_inserted=len(filtered_events),
+                rows_linked=0,
+                rows_skipped=0,
+            )
 
         rows_filtered = len(scan.events) - len(filtered_events)
     finally:
@@ -2185,13 +2185,7 @@ def _by_harness_totals(report: InternalRunReport) -> dict[str, WatchTotals]:
     return {
         row.harness: WatchTotals(
             message_count=row.message_count,
-            tokens=TokenBreakdown(
-                input=0,
-                output=0,
-                reasoning=0,
-                cache_read=0,
-                cache_write=row.total_tokens,
-            ),
+            tokens=row.tokens,
             costs=row.costs,
         )
         for row in report.by_harness
@@ -2316,7 +2310,7 @@ def _print_watch_delta_json(
             {
                 "harness": harness_name,
                 "message_count": h_total.message_count,
-                "total_tokens": h_total.tokens.total,
+                **h_total.tokens.as_dict(),
                 **h_total.costs.as_dict(),
             }
             for harness_name in sorted(delta.by_harness)

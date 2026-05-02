@@ -15,12 +15,12 @@ from toktrail.api.models import (
 from toktrail.api.paths import resolve_source_path
 from toktrail.api.reports import session_report
 from toktrail.api.sessions import (
-    get_session,
+    get_run,
     init_state,
-    start_session,
+    start_run,
 )
 from toktrail.api.sessions import (
-    stop_session as stop_tracking_session,
+    stop_run as stop_active_run,
 )
 from toktrail.api.sources import (
     capture_source_snapshot,
@@ -41,7 +41,7 @@ def prepare_manual_run(
     shell: str = "bash",
 ) -> PreparedManualRun:
     init_state(db_path)
-    tracking_session = start_session(db_path, name=name)
+    run = start_run(db_path, name=name)
     selected_source_path = _manual_run_source_path(harness, source_path)
     before_snapshot = capture_source_snapshot(
         harness,
@@ -63,7 +63,7 @@ def prepare_manual_run(
         )
     )
     return PreparedManualRun(
-        run=tracking_session,
+        run=run,
         harness=harness,
         source_path=selected_source_path,
         before_snapshot=before_snapshot,
@@ -78,7 +78,7 @@ def finalize_manual_run(
     source_session_id: str | None = None,
     config_path: Path | None = None,
     include_raw_json: bool = False,
-    stop_session: bool = True,
+    stop_after_run: bool = True,
 ) -> FinalizedManualRun:
     after_snapshot = capture_source_snapshot(
         prepared.harness,
@@ -100,9 +100,9 @@ def finalize_manual_run(
         include_raw_json=include_raw_json,
     )
     run = (
-        stop_tracking_session(db_path, prepared.run.id)
-        if stop_session
-        else get_session(db_path, prepared.run.id)
+        stop_active_run(db_path, prepared.run.id)
+        if stop_after_run
+        else get_run(db_path, prepared.run.id)
     )
     report = session_report(
         db_path,

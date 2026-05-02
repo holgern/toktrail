@@ -31,8 +31,8 @@ from toktrail.api import (
     SourceSessionSnapshot,
     SourceSessionSummary,
     TokenBreakdown,
-    TrackingSession,
-    TrackingSessionReport,
+    Run,
+    RunReport,
     UnconfiguredModelRow,
     UsageEvent,
 )
@@ -62,13 +62,13 @@ from toktrail.api.paths import (
     resolve_toktrail_db_path,
 )
 from toktrail.api.sessions import (
-    get_active_session,
-    get_session,
+    get_active_run,
+    get_run,
     init_state,
-    list_sessions,
-    require_active_session,
-    start_session,
-    stop_session,
+    list_runs,
+    require_active_run,
+    start_run,
+    stop_run,
 )
 from toktrail.api.sources import (
     capture_source_snapshot,
@@ -122,11 +122,11 @@ Key public models:
   `cache_write`, `total`
 - `CostTotals`: `source_cost_usd`, `actual_cost_usd`, `virtual_cost_usd`,
   `savings_usd`, `unpriced_count`
-- `TrackingSession`: uses `started_at_ms` / `ended_at_ms` as the primary field
+- `Run`: uses `started_at_ms` / `ended_at_ms` as the primary field
   names
 - `SourceSessionSummary`, `SourceSessionSnapshot`, `SourceSessionDiff`
 - `ImportUsageResult`
-- `TrackingSessionReport`
+- `RunReport`
 - `UnconfiguredModelRow`
 - `HarnessEnvironment`
 - `PreparedManualRun`, `FinalizedManualRun`
@@ -135,7 +135,7 @@ Key public models:
 harness provides it. This is reporting metadata only; pricing still keys on
 provider and model identity.
 
-`TrackingSessionReport` now includes `by_provider` and `unconfigured_models` so callers can audit provider-level usage and missing pricing rows.
+`RunReport` now includes `by_provider` and `unconfigured_models` so callers can audit provider-level usage and missing pricing rows.
 
 All public dataclasses are frozen.
 
@@ -148,10 +148,10 @@ Canonical public errors:
 - `UnsupportedHarnessError`
 - `SourcePathError`
 - `ConfigurationError`
-- `SessionNotFoundError`
-- `NoActiveSessionError`
-- `ActiveSessionExistsError`
-- `SessionAlreadyEndedError`
+- `RunNotFoundError`
+- `NoActiveRunError`
+- `ActiveRunExistsError`
+- `RunAlreadyEndedError`
 - `UsageImportError`
 - `AmbiguousSourceSessionError`
 - `InvalidAPIUsageError`
@@ -192,14 +192,14 @@ from pathlib import Path
 from toktrail.api.imports import import_configured_usage, import_usage
 from toktrail.api.sources import capture_source_snapshot, list_source_sessions
 from toktrail.api.reports import session_report, subscription_usage_report, usage_report
-from toktrail.api.sessions import init_state, start_session
+from toktrail.api.sessions import init_state, start_run
 
 db_path = Path(".toktrail/toktrail.db")
 source_path = Path("~/.codex/sessions").expanduser()
 
 init_state(db_path)
 snapshot = capture_source_snapshot("codex", source_path=source_path)
-session = start_session(db_path, name="benchmark-1")
+session = start_run(db_path, name="benchmark-1")
 result = import_usage(db_path, "codex", session_id=session.id, source_path=source_path)
 source_sessions = list_source_sessions("codex", source_path=source_path, limit=5)
 report = session_report(db_path, session.id)
@@ -216,7 +216,7 @@ harness set, so Codex, Goose, Droid, and Amp source sessions can be inspected
 before import with the same public API used for OpenCode, Pi, and Copilot.
 
 `usage_report()` no longer requires `session_id`. When used for canonical
-period/time-range reporting, it returns `TrackingSessionReport(session=None, ...)`.
+period/time-range reporting, it returns `RunReport(session=None, ...)`.
 
 ### Subscription usage report
 
@@ -272,11 +272,11 @@ finalized = finalize_manual_run(
     Path(".toktrail/solvecost.db"),
     prepared,
     include_raw_json=False,
-    stop_session=True,
+    stop_after_run=True,
 )
 
 record = {
-    "toktrail_session_id": finalized.tracking_session.id,
+    "toktrail_run_id": finalized.run.id,
     "harness": finalized.source_session.harness,
     "source_session_id": finalized.source_session.source_session_id,
     "tokens": finalized.report.totals.tokens.as_dict(),

@@ -73,7 +73,7 @@ def summarize_events_by_harness(
             HarnessSummaryRow(
                 harness=harness,
                 message_count=bucket.message_count,
-                total_tokens=bucket.tokens.total,
+                tokens=bucket.tokens,
                 costs=bucket.costs,
             )
             for harness, bucket in grouped.items()

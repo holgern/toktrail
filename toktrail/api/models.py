@@ -116,10 +116,6 @@ class Run:
         }
 
 
-# Type alias for backward compatibility during migration
-TrackingSession = Run
-
-
 @dataclass(frozen=True)
 class UsageEvent:
     harness: str
@@ -356,14 +352,18 @@ class SessionTotals:
 class HarnessSummaryRow:
     harness: str
     message_count: int
-    total_tokens: int
+    tokens: TokenBreakdown
     costs: CostTotals
+
+    @property
+    def total_tokens(self) -> int:
+        return self.tokens.total
 
     def as_dict(self) -> dict[str, object]:
         return {
             "harness": self.harness,
             "message_count": self.message_count,
-            "total_tokens": self.total_tokens,
+            **self.tokens.as_dict(),
             **self.costs.as_dict(),
         }
 
@@ -600,16 +600,13 @@ class PreparedManualRun:
     environment: HarnessEnvironment
 
     def as_dict(self) -> dict[str, Any]:
-        result = {
+        return {
             "run": self.run.as_dict(),
             "harness": self.harness,
             "source_path": _path_text(self.source_path),
             "before_snapshot": self.before_snapshot.as_dict(),
             "environment": self.environment.as_dict(),
         }
-        # Expose tracking_session for backward compatibility during migration
-        result["tracking_session"] = result["run"]
-        return result
 
 
 @dataclass(frozen=True)
@@ -621,16 +618,13 @@ class FinalizedManualRun:
     report: RunReport
 
     def as_dict(self) -> dict[str, Any]:
-        result = {
+        return {
             "run": self.run.as_dict(),
             "source_session": self.source_session.as_dict(),
             "source_diff": self.source_diff.as_dict(),
             "import_result": self.import_result.as_dict(),
             "report": self.report.as_dict(),
         }
-        # Expose tracking_session for backward compatibility during migration
-        result["tracking_session"] = result["run"]
-        return result
 
 
 @dataclass(frozen=True)

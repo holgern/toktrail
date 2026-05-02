@@ -51,15 +51,15 @@ from pathlib import Path
 
 from toktrail.api.imports import import_usage
 from toktrail.api.reports import session_report, subscription_usage_report, usage_report
-from toktrail.api.sessions import init_state, start_session
+from toktrail.api.sessions import init_state, start_run
 
 db_path = Path(".toktrail/toktrail.db")
 source_path = Path("tests/fixtures/opencode.db")
 
 init_state(db_path)
 import_usage(db_path, "opencode", source_path=source_path)
-session = start_session(db_path, name="benchmark-run")
-import_usage(db_path, "opencode", session_id=session.id, source_path=source_path)
+run = start_run(db_path, name="benchmark-run")
+import_usage(db_path, "opencode", session_id=run.id, source_path=source_path)
 session_usage = session_report(db_path, session.id)
 today_usage = usage_report(db_path, period="today", timezone="UTC")
 subscription_usage = subscription_usage_report(db_path, provider_id="opencode-go")
@@ -81,7 +81,7 @@ toktrail init
 Start a tracking session:
 
 ```bash
-toktrail start --name refactor-auth-flow
+toktrail run start --name refactor-auth-flow
 ```
 
 Import usage from config or a single harness:
@@ -106,13 +106,13 @@ toktrail import --harness opencode --source tests/fixtures/opencode.db
 Show the current session totals:
 
 ```bash
-toktrail status
-toktrail status --json
-toktrail status --thinking high --json
-toktrail status --split-thinking
-toktrail status --price-state unpriced --sort tokens --limit 20
+toktrail run status
+toktrail run status --json
+toktrail run status --thinking high --json
+toktrail run status --split-thinking
+toktrail run status --price-state unpriced --sort tokens --limit 20
 toktrail --config ~/.config/toktrail/config.toml status --json
-toktrail status --harness pi --source-session pi_ses_001 --json
+toktrail run status --harness pi --source-session pi_ses_001 --json
 ```
 
 Show period-based usage across canonical ledger rows, even without an active
@@ -130,7 +130,7 @@ toktrail subscriptions --provider opencode-go --json
 Stop the active tracking session:
 
 ```bash
-toktrail stop
+toktrail run stop
 ```
 
 ## Command model
@@ -141,13 +141,13 @@ The canonical CLI flow is:
 toktrail init
 toktrail config init
 toktrail sources
-toktrail start --name <name>
+toktrail run start --name <name>
 toktrail import
-toktrail status
+toktrail run status
 toktrail usage today
 toktrail sessions
 toktrail subscriptions
-toktrail stop
+toktrail run stop
 ```
 
 Use `toktrail import` for normal operation. It reads enabled harnesses and
@@ -198,9 +198,9 @@ toktrail --db /path/to/toktrail.db init
 Create and manage tracking sessions:
 
 ```bash
-toktrail start --name refactor-auth-flow
-toktrail stop
-toktrail stop 3
+toktrail run start --name refactor-auth-flow
+toktrail run stop
+toktrail run stop 3
 toktrail sessions
 toktrail subscriptions
 toktrail sessions pi
@@ -338,7 +338,7 @@ CLI output.
 
 ## Reporting
 
-`toktrail status` reports:
+`toktrail run status` reports:
 
 - total input, output, reasoning, cache-read, and cache-write tokens
 - source cost from imported data when the harness provides it
@@ -358,7 +358,7 @@ ledger without requiring a tracking session. Named periods use half-open
 `[since, until)` windows for `today`, `yesterday`, `this-week`, `last-week`,
 `this-month`, and `last-month`.
 
-`toktrail status --json` returns the same information in a machine-readable JSON
+`toktrail run status --json` returns the same information in a machine-readable JSON
 shape for automation, including `unconfigured_models` and `display_filters`.
 
 By default:
@@ -377,7 +377,7 @@ Example workflow:
 toktrail config init --template copilot
 toktrail copilot env bash
 toktrail import --harness copilot --source ~/.copilot/otel/copilot-otel-20260429-090000.jsonl
-toktrail status --price-state unpriced --sort tokens --limit 20
+toktrail run status --price-state unpriced --sort tokens --limit 20
 toktrail pricing list --missing-only
 toktrail sessions copilot
 ```

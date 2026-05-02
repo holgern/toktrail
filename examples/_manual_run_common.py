@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from decimal import Decimal
 from pathlib import Path
 
 from toktrail.api.models import FinalizedManualRun, RunReport
@@ -18,7 +19,7 @@ Do not edit files.
 """
 
 
-def _money(value: float) -> str:
+def _money(value: Decimal) -> str:
     return f"${value:.6f}"
 
 
@@ -42,24 +43,24 @@ def print_report(report: RunReport) -> None:
     print(f"unpriced:     {costs.unpriced_count}")
 
     print("\n== By harness ==")
-    for row in report.by_harness:
+    for harness_row in report.by_harness:
         print(
-            f"{row.harness}: messages={row.message_count} "
-            f"tokens={row.total_tokens} "
-            f"actual={_money(row.costs.actual_cost_usd)} "
-            f"virtual={_money(row.costs.virtual_cost_usd)} "
-            f"savings={_money(row.costs.savings_usd)} "
-            f"unpriced={row.costs.unpriced_count}"
+            f"{harness_row.harness}: messages={harness_row.message_count} "
+            f"tokens={harness_row.total_tokens} "
+            f"actual={_money(harness_row.costs.actual_cost_usd)} "
+            f"virtual={_money(harness_row.costs.virtual_cost_usd)} "
+            f"savings={_money(harness_row.costs.savings_usd)} "
+            f"unpriced={harness_row.costs.unpriced_count}"
         )
 
     print("\n== By model ==")
-    for row in report.by_model:
-        tokens = row.tokens
-        costs = row.costs
-        thinking = row.thinking_level or "-"
+    for model_row in report.by_model:
+        tokens = model_row.tokens
+        costs = model_row.costs
+        thinking = model_row.thinking_level or "-"
         print(
-            f"{row.provider_id}/{row.model_id} thinking={thinking} "
-            f"messages={row.message_count} "
+            f"{model_row.provider_id}/{model_row.model_id} thinking={thinking} "
+            f"messages={model_row.message_count} "
             f"input={tokens.input} output={tokens.output} "
             f"reasoning={tokens.reasoning} "
             f"cache_read={tokens.cache_read} "
@@ -71,24 +72,25 @@ def print_report(report: RunReport) -> None:
         )
 
     print("\n== By activity ==")
-    for row in report.by_activity:
+    for activity_row in report.by_activity:
         print(
-            f"{row.agent}: messages={row.message_count} "
-            f"tokens={row.total_tokens} "
-            f"actual={_money(row.costs.actual_cost_usd)} "
-            f"virtual={_money(row.costs.virtual_cost_usd)}"
+            f"{activity_row.agent}: messages={activity_row.message_count} "
+            f"tokens={activity_row.total_tokens} "
+            f"actual={_money(activity_row.costs.actual_cost_usd)} "
+            f"virtual={_money(activity_row.costs.virtual_cost_usd)}"
         )
 
     if report.unconfigured_models:
         print("\n== Unconfigured pricing ==")
-        for row in report.unconfigured_models:
-            tokens = row.tokens
-            thinking = row.thinking_level or "-"
-            required = ",".join(row.required)
+        for unconfigured_row in report.unconfigured_models:
+            tokens = unconfigured_row.tokens
+            thinking = unconfigured_row.thinking_level or "-"
+            required = ",".join(unconfigured_row.required)
             print(
-                f"{row.harness} {row.provider_id}/{row.model_id} "
+                f"{unconfigured_row.harness} "
+                f"{unconfigured_row.provider_id}/{unconfigured_row.model_id} "
                 f"thinking={thinking} required={required} "
-                f"messages={row.message_count} total={tokens.total}"
+                f"messages={unconfigured_row.message_count} total={tokens.total}"
             )
 
 
@@ -173,7 +175,7 @@ def run_manual_example(
             prepared,
             source_session_id=source_session_id,
             include_raw_json=False,
-            stop_session=True,
+            stop_after_run=True,
         )
     except AmbiguousSourceSessionError:
         print(
