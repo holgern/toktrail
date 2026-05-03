@@ -3,6 +3,9 @@
 config_version = 1
 taskledger_dir = '.taskledger'
 
+# Stable project identity. Commit this with your source tree.
+project_uuid = "8fda718e-f14a-46ec-8adf-39fd1cef8e41"
+
 # Project-local taskledger overrides.
 # The source-budget settings below are the active composition defaults.
 # Lower them for stricter prompts, or raise them when a run needs more context.
