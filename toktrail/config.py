@@ -38,6 +38,7 @@ _PRICE_FIELDS = {
     "input_usd_per_1m",
     "cached_input_usd_per_1m",
     "cache_write_usd_per_1m",
+    "cached_output_usd_per_1m",
     "output_usd_per_1m",
     "reasoning_usd_per_1m",
     "category",
@@ -510,6 +511,7 @@ class Price:
     input_usd_per_1m: float
     cached_input_usd_per_1m: float | None = None
     cache_write_usd_per_1m: float | None = None
+    cached_output_usd_per_1m: float | None = None
     output_usd_per_1m: float = 0.0
     reasoning_usd_per_1m: float | None = None
     category: str | None = None
@@ -1143,6 +1145,11 @@ def _parse_prices(value: object, *, context: str) -> tuple[Price, ...]:
             cache_write_usd_per_1m=_parse_non_negative_float(
                 raw_price.get("cache_write_usd_per_1m"),
                 context=f"{context}[{index}].cache_write_usd_per_1m",
+                required=False,
+            ),
+            cached_output_usd_per_1m=_parse_non_negative_float(
+                raw_price.get("cached_output_usd_per_1m"),
+                context=f"{context}[{index}].cached_output_usd_per_1m",
                 required=False,
             ),
             output_usd_per_1m=output_usd_per_1m,

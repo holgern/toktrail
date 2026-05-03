@@ -89,6 +89,7 @@ class _CodexTotals:
             output=max(self.output, 0),
             cache_read=clamped_cached,
             cache_write=0,
+            cache_output=0,
             reasoning=max(self.reasoning, 0),
         )
 

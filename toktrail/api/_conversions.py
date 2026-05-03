@@ -245,6 +245,7 @@ def _to_public_subscription_period(
         message_count=value.message_count,
         tokens=_to_public_token_breakdown(value.tokens),
         costs=_to_public_cost_totals(value.costs),
+        warnings=value.warnings,
     )
 
 

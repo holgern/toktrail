@@ -77,6 +77,11 @@ def cost_from_price(tokens: TokenBreakdown, price: Price) -> Decimal:
         if price.cache_write_usd_per_1m is not None
         else price.input_usd_per_1m
     )
+    cached_output_price = (
+        price.cached_output_usd_per_1m
+        if price.cached_output_usd_per_1m is not None
+        else price.output_usd_per_1m
+    )
     reasoning_price = (
         price.reasoning_usd_per_1m
         if price.reasoning_usd_per_1m is not None
@@ -88,6 +93,7 @@ def cost_from_price(tokens: TokenBreakdown, price: Price) -> Decimal:
         + Decimal(tokens.cache_read) * Decimal(str(cached_input_price)) / million
         + Decimal(tokens.cache_write) * Decimal(str(cache_write_price)) / million
         + Decimal(tokens.output) * Decimal(str(price.output_usd_per_1m)) / million
+        + Decimal(tokens.cache_output) * Decimal(str(cached_output_price)) / million
         + Decimal(tokens.reasoning) * Decimal(str(reasoning_price)) / million
     )
 

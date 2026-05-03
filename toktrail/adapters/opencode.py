@@ -177,6 +177,7 @@ def _parse_opencode_row(
         reasoning=_as_non_negative_int(tokens_value.get("reasoning")),
         cache_read=_as_non_negative_int(_nested_cache_value(tokens_value, "read")),
         cache_write=_as_non_negative_int(_nested_cache_value(tokens_value, "write")),
+        cache_output=_as_non_negative_int(_nested_cache_value(tokens_value, "output")),
     )
     cost_usd = _as_non_negative_decimal(payload.get("cost"))
     source_dedup_key = source_message_id or row_id

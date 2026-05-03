@@ -32,6 +32,7 @@ class _ClaudeHeadlessState:
     output: int = 0
     cache_read: int = 0
     cache_write: int = 0
+    cache_output: int = 0
     timestamp_ms: int | None = None
 
 
@@ -415,6 +416,7 @@ def _parse_regular_jsonl(
                 reasoning=0,
                 cache_read=max(existing.tokens.cache_read, tokens.cache_read),
                 cache_write=max(existing.tokens.cache_write, tokens.cache_write),
+                cache_output=max(existing.tokens.cache_output, tokens.cache_output),
             )
             updated = replace(existing, tokens=merged_tokens)
             updated = replace(updated, fingerprint_hash=_make_fingerprint(updated))
@@ -485,6 +487,7 @@ def _parse_headless_json_file(
                 reasoning=0,
                 cache_read=state.cache_read,
                 cache_write=state.cache_write,
+                cache_output=state.cache_output,
             ),
             created_ms=state.timestamp_ms or file_mtime_ms,
             agent=agent if is_sidechain else None,
@@ -848,6 +851,7 @@ def _extract_usage_from_mapping(usage: Mapping[str, object]) -> TokenBreakdown:
         reasoning=0,
         cache_read=_as_non_negative_int(usage.get("cache_read_input_tokens")),
         cache_write=_as_non_negative_int(usage.get("cache_creation_input_tokens")),
+        cache_output=_as_non_negative_int(usage.get("cache_read_output_tokens")),
     )
 
 

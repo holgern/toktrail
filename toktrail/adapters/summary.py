@@ -25,6 +25,7 @@ def add_tokens(left: TokenBreakdown, right: TokenBreakdown) -> TokenBreakdown:
         reasoning=left.reasoning + right.reasoning,
         cache_read=left.cache_read + right.cache_read,
         cache_write=left.cache_write + right.cache_write,
+        cache_output=left.cache_output + right.cache_output,
     )
 
 

@@ -779,13 +779,13 @@ def _print_usage_series_bucket_table(
     elif breakdown:
         header = (
             "period  provider/model  msgs  input  output  reasoning  cache_r  "
-            "cache_w  total  actual  virtual"
+            "cache_w  cache_o  total  actual  virtual"
         )
         typer.echo(header)
     else:
         header = (
             "period  msgs  models  input  output  reasoning  cache_r  cache_w  "
-            "total  source  actual  virtual  savings  unpriced"
+            "cache_o  total  source  actual  virtual  savings  unpriced"
         )
         typer.echo(header)
     for bucket in buckets:
@@ -807,7 +807,8 @@ def _print_usage_series_bucket_table(
                 f"{_format_int(tokens.input)}  {_format_int(tokens.output)}  "
                 f"{_format_int(tokens.reasoning)}  "
                 f"{_format_int(tokens.cache_read)}  "
-                f"{_format_int(tokens.cache_write)}  {_format_int(tokens.total)}  "
+                f"{_format_int(tokens.cache_write)}  {_format_int(tokens.cache_output)}  "
+                f"{_format_int(tokens.total)}  "
                 f"{_format_cost(costs.source_cost_usd)}  "
                 f"{_format_cost(costs.actual_cost_usd)}  "
                 f"{_format_cost(costs.virtual_cost_usd)}  "
@@ -824,6 +825,7 @@ def _print_usage_series_bucket_table(
                     f"{_format_int(row.tokens.reasoning)}  "
                     f"{_format_int(row.tokens.cache_read)}  "
                     f"{_format_int(row.tokens.cache_write)}  "
+                    f"{_format_int(row.tokens.cache_output)}  "
                     f"{_format_int(row.tokens.total)}  "
                     f"{_format_cost(row.costs.actual_cost_usd)}  "
                     f"{_format_cost(row.costs.virtual_cost_usd)}"
@@ -962,6 +964,7 @@ def _print_usage_summary(
     typer.echo(f"  reasoning:   {_format_int(totals.tokens.reasoning)}")
     typer.echo(f"  cache read:  {_format_int(totals.tokens.cache_read)}")
     typer.echo(f"  cache write: {_format_int(totals.tokens.cache_write)}")
+    typer.echo(f"  cache output:{_format_int(totals.tokens.cache_output)}")
     typer.echo(f"  total:       {_format_int(totals.tokens.total)}")
 
     typer.echo("")
@@ -1080,6 +1083,7 @@ def _print_subscription_usage_report(
             f"timezone={timezone_label}"
         )
         rows: list[dict[str, str]] = []
+        all_warnings: list[dict[str, object]] = []
         for period in subscription.periods:
             left_value = _format_cost(period.remaining_usd)
             if period.over_limit_usd > 0:
@@ -1101,6 +1105,7 @@ def _print_subscription_usage_report(
                     "used_pct": _format_percent(period.percent_used),
                 }
             )
+            all_warnings.extend(period.warnings)
         _print_table(
             rows,
             [
@@ -1125,6 +1130,19 @@ def _print_subscription_usage_report(
             },
             rich_output=rich_output,
         )
+        if all_warnings:
+            typer.echo("")
+            typer.echo("Warnings")
+            for warning in all_warnings:
+                if warning.get("kind") == "zero_cost_with_tokens":
+                    provider = warning.get("provider_id")
+                    model = warning.get("model_id")
+                    msg_count = warning.get("message_count")
+                    cost_basis = warning.get("cost_basis")
+                    typer.echo(
+                        f"  {provider}/{model} has {msg_count} messages but "
+                        f"zero cost for basis={cost_basis}"
+                    )
 
 
 def _format_subscription_window(
@@ -1146,7 +1164,15 @@ def _format_subscription_window(
     tz = resolve_timezone(timezone_name=timezone_name, utc=False)
     since_dt = datetime.datetime.fromtimestamp(since_ms / 1000, tz=tz)
     until_dt = datetime.datetime.fromtimestamp(until_ms / 1000, tz=tz)
-    return f"{since_dt.date().isoformat()}..{until_dt.date().isoformat()}"
+    
+    # For windows less than 24 hours, include time
+    duration_ms = until_ms - since_ms
+    if duration_ms < 24 * 60 * 60 * 1000:  # Less than 24 hours
+        since_str = since_dt.strftime("%Y-%m-%d %H:%M")
+        until_str = until_dt.strftime("%Y-%m-%d %H:%M")
+        return f"{since_str}..{until_str}"
+    else:
+        return f"{since_dt.date().isoformat()}..{until_dt.date().isoformat()}"
 
 
 def _format_percent(value: Decimal | None) -> str:
@@ -2796,6 +2822,7 @@ def _print_model_table(
         "reasoning": "reasoning",
         "cache_r": "cache_r",
         "cache_w": "cache_w",
+        "cache_o": "cache_o",
         "total": "total",
         "actual": "actual",
         "virtual": "virtual",
@@ -2812,6 +2839,7 @@ def _print_model_table(
             "reasoning": _format_int(row.tokens.reasoning),
             "cache_r": _format_int(row.tokens.cache_read),
             "cache_w": _format_int(row.tokens.cache_write),
+            "cache_o": _format_int(row.tokens.cache_output),
             "total": _format_int(row.total_tokens),
             "actual": _format_cost(row.actual_cost_usd),
             "virtual": _format_cost(row.virtual_cost_usd),
@@ -2830,6 +2858,7 @@ def _print_model_table(
             "reasoning",
             "cache_r",
             "cache_w",
+            "cache_o",
             "total",
             "actual",
             "virtual",
@@ -2860,6 +2889,7 @@ def _print_unconfigured_model_table(
         "reasoning": "reasoning",
         "cache_r": "cache_r",
         "cache_w": "cache_w",
+        "cache_o": "cache_o",
         "total": "total",
     }
     include_thinking = any(row.thinking_level is not None for row in rows)
@@ -2875,6 +2905,7 @@ def _print_unconfigured_model_table(
             "reasoning": _format_int(row.tokens.reasoning),
             "cache_r": _format_int(row.tokens.cache_read),
             "cache_w": _format_int(row.tokens.cache_write),
+            "cache_o": _format_int(row.tokens.cache_output),
             "total": _format_int(row.total_tokens),
         }
         for row in rows
@@ -2890,6 +2921,7 @@ def _print_unconfigured_model_table(
             "reasoning",
             "cache_r",
             "cache_w",
+            "cache_o",
             "total",
         ]
     )

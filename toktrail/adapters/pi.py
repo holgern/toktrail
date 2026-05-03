@@ -220,6 +220,7 @@ def _parse_pi_entry_line(
         reasoning=0,
         cache_read=_as_non_negative_int(usage.get("cacheRead")),
         cache_write=_as_non_negative_int(usage.get("cacheWrite")),
+        cache_output=_first_non_negative_int(usage, "cacheOutput", "cachedOutput", "cachedOutputTokens"),
     )
 
     event = UsageEvent(
@@ -293,6 +294,14 @@ def _as_non_negative_int(value: object, default: int = 0) -> int:
     return max(int(value), 0)
 
 
+def _first_non_negative_int(mapping: dict[str, object], *keys: str) -> int:
+    for key in keys:
+        value = _as_non_negative_int(mapping.get(key))
+        if value:
+            return value
+    return 0
+
+
 def _parse_rfc3339_ms(value: object) -> int | None:
     if not isinstance(value, str):
         return None
@@ -321,6 +330,7 @@ def _make_fingerprint(event: UsageEvent) -> str:
         "reasoning": event.tokens.reasoning,
         "cache_read": event.tokens.cache_read,
         "cache_write": event.tokens.cache_write,
+        "cache_output": event.tokens.cache_output,
         "source_cost_usd": str(event.source_cost_usd),
         "agent": event.agent,
         "thinking_level": event.thinking_level,

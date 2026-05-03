@@ -31,6 +31,7 @@ class TokenBreakdown:
     reasoning: int = 0
     cache_read: int = 0
     cache_write: int = 0
+    cache_output: int = 0
 
     def __post_init__(self) -> None:
         _require_non_negative_int("input", self.input)
@@ -38,6 +39,7 @@ class TokenBreakdown:
         _require_non_negative_int("reasoning", self.reasoning)
         _require_non_negative_int("cache_read", self.cache_read)
         _require_non_negative_int("cache_write", self.cache_write)
+        _require_non_negative_int("cache_output", self.cache_output)
 
     @property
     def total(self) -> int:
@@ -47,6 +49,7 @@ class TokenBreakdown:
             + self.reasoning
             + self.cache_read
             + self.cache_write
+            + self.cache_output
         )
 
     def as_dict(self) -> dict[str, int]:
@@ -56,6 +59,7 @@ class TokenBreakdown:
             "reasoning": self.reasoning,
             "cache_read": self.cache_read,
             "cache_write": self.cache_write,
+            "cache_output": self.cache_output,
             "total": self.total,
         }
 
@@ -497,6 +501,7 @@ class SubscriptionUsagePeriod:
     message_count: int
     tokens: TokenBreakdown
     costs: CostTotals
+    warnings: tuple[dict[str, object], ...] = field(default_factory=tuple)
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -516,6 +521,7 @@ class SubscriptionUsagePeriod:
             "message_count": self.message_count,
             "tokens": self.tokens.as_dict(),
             "costs": self.costs.as_dict(),
+            "warnings": list(self.warnings),
         }
 
 

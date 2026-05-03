@@ -164,6 +164,7 @@ def _parse_goose_row(
         reasoning=reasoning_tokens,
         cache_read=0,
         cache_write=0,
+        cache_output=0,
     )
     provider_id = _resolved_provider(_as_str(row["provider_name"]), model_id)
     raw_json = None

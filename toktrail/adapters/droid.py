@@ -153,6 +153,7 @@ def _parse_droid_settings(
         reasoning=_as_non_negative_int(usage.get("thinkingTokens")),
         cache_read=_as_non_negative_int(usage.get("cacheReadTokens")),
         cache_write=_as_non_negative_int(usage.get("cacheCreationTokens")),
+        cache_output=_as_non_negative_int(usage.get("cacheOutputTokens")),
     )
     if tokens.total == 0:
         return None

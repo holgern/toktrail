@@ -247,6 +247,10 @@ def _parse_amp_ledger_records(
             cache_write=_as_non_negative_int(
                 tokens_raw.get("cacheCreationInputTokens")
             ),
+            cache_output=_as_non_negative_int(
+                tokens_raw.get("cacheReadOutputTokens")
+                or tokens_raw.get("cachedOutputTokens")
+            ),
         )
         explicit_ms = _parse_rfc3339_ms(event.get("timestamp"))
         raw_json = (

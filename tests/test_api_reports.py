@@ -109,6 +109,7 @@ def test_session_report_uses_active_session_by_default(tmp_path: Path) -> None:
             "reasoning": 100,
             "cache_read": 200,
             "cache_write": 50,
+            "cache_output": 0,
             "total": 1850,
         }
     ]

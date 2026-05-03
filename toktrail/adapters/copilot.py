@@ -274,6 +274,7 @@ def _normalize_input_tokens(
     output_tokens: int,
     cache_read: int,
     cache_write: int,
+    cache_output: int = 0,
     reasoning: int,
 ) -> TokenBreakdown:
     cache_read_for_input = min(max(cache_read, 0), max(input_tokens, 0))
@@ -282,6 +283,7 @@ def _normalize_input_tokens(
         output=max(output_tokens, 0),
         cache_read=max(cache_read, 0),
         cache_write=max(cache_write, 0),
+        cache_output=max(cache_output, 0),
         reasoning=max(reasoning, 0),
     )
 

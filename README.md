@@ -175,7 +175,7 @@ claude = "~/.claude/projects"
 provider = "opencode-go"
 display_name = "OpenCode Go"
 timezone = "Europe/Berlin"
-cost_basis = "source"
+cost_basis = "virtual"
 
 [[subscriptions.windows]]
 period = "5h"

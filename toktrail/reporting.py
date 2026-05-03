@@ -317,6 +317,7 @@ class SimulationSummaryRow:
     reasoning_tokens: int
     cache_read_tokens: int
     cache_write_tokens: int
+    cache_output_tokens: int
     total_tokens: int
     cost_usd: Decimal
     baseline_virtual_usd: Decimal
@@ -331,6 +332,7 @@ class SimulationSummaryRow:
             "reasoning_tokens": self.reasoning_tokens,
             "cache_read_tokens": self.cache_read_tokens,
             "cache_write_tokens": self.cache_write_tokens,
+            "cache_output_tokens": self.cache_output_tokens,
             "total_tokens": self.total_tokens,
             "cost_usd": str(self.cost_usd),
             "baseline_virtual_usd": str(self.baseline_virtual_usd),
@@ -387,6 +389,7 @@ class SubscriptionUsagePeriod:
     message_count: int
     tokens: TokenBreakdown
     costs: CostTotals
+    warnings: tuple[dict[str, object], ...] = field(default_factory=tuple)
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -406,6 +409,7 @@ class SubscriptionUsagePeriod:
             "message_count": self.message_count,
             "tokens": self.tokens.as_dict(),
             "costs": self.costs.as_dict(),
+            "warnings": list(self.warnings),
         }
 
 

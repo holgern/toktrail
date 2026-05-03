@@ -28,6 +28,7 @@ class TokenBreakdown:
     reasoning: int = 0
     cache_read: int = 0
     cache_write: int = 0
+    cache_output: int = 0
 
     @property
     def total(self) -> int:
@@ -37,6 +38,7 @@ class TokenBreakdown:
             + self.reasoning
             + self.cache_read
             + self.cache_write
+            + self.cache_output
         )
 
     def as_dict(self) -> dict[str, int]:
@@ -46,6 +48,7 @@ class TokenBreakdown:
             "reasoning": self.reasoning,
             "cache_read": self.cache_read,
             "cache_write": self.cache_write,
+            "cache_output": self.cache_output,
             "total": self.total,
         }
 

@@ -112,7 +112,7 @@ def test_migrate_creates_tables_and_is_idempotent(tmp_path: Path) -> None:
         "usage_events",
         "run_events",
     } <= table_names
-    assert user_version == 3
+    assert user_version == 4
 
 
 def test_source_costs_are_stored_and_aggregated_as_exact_decimals(
@@ -534,6 +534,7 @@ def test_summarize_usage_exposes_unconfigured_models(tmp_path: Path) -> None:
             "reasoning": 0,
             "cache_read": 50,
             "cache_write": 0,
+            "cache_output": 0,
             "total": 170,
         }
     ]

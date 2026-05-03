@@ -1400,6 +1400,7 @@ def test_cli_status_filters_by_harness_and_source_session(tmp_path) -> None:
             "reasoning": 0,
             "cache_read": 10,
             "cache_write": 5,
+            "cache_output": 0,
             "total": 165,
             "source_cost_usd": "0",
             "actual_cost_usd": "0",
@@ -1720,6 +1721,7 @@ def test_cli_status_json_contains_unconfigured_models(tmp_path) -> None:
             "reasoning": 10,
             "cache_read": 0,
             "cache_write": 0,
+            "cache_output": 0,
             "total": 450,
         }
     ]
@@ -1876,6 +1878,7 @@ def test_cli_pricing_list_missing_only_reports_unconfigured_used_models(
             "reasoning": 10,
             "cache_read": 0,
             "cache_write": 0,
+            "cache_output": 0,
             "total": 450,
         }
     ]

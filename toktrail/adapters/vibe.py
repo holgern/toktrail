@@ -158,6 +158,7 @@ def _parse_vibe_meta(
         reasoning=0,
         cache_read=0,
         cache_write=0,
+        cache_output=0,
     )
     if tokens.total == 0:
         return None

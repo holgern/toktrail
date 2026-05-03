@@ -36,7 +36,7 @@ from toktrail.reporting import (
     UsageSeriesReport,
 )
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 _PERIOD_SORT: dict[str, int] = {"5h": 0, "daily": 1, "weekly": 2, "monthly": 3}
 
 
@@ -69,27 +69,26 @@ def migrate(conn: sqlite3.Connection) -> None:
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         conn.commit()
         return
+
+    if current_version < 1 or current_version > SCHEMA_VERSION:
+        msg = (
+            f"Unsupported pre-release toktrail schema version {current_version}; "
+            "delete the state DB or export/import manually before first release."
+        )
+        raise ValueError(msg)
+
     if current_version == 1:
         _migrate_v1_to_v2(conn)
-        if SCHEMA_VERSION >= 3:
-            _migrate_v2_to_v3(conn)
-            conn.execute("PRAGMA user_version = 3")
-        else:
-            conn.execute("PRAGMA user_version = 2")
-        conn.commit()
-        return
-    if current_version == 2 and SCHEMA_VERSION == 3:
+        current_version = 2
+    if current_version == 2:
         _migrate_v2_to_v3(conn)
-        conn.execute("PRAGMA user_version = 3")
-        conn.commit()
-        return
-    if current_version == SCHEMA_VERSION:
-        return
-    msg = (
-        f"Unsupported pre-release toktrail schema version {current_version}; "
-        "delete the state DB or export/import manually before first release."
-    )
-    raise ValueError(msg)
+        current_version = 3
+    if current_version == 3:
+        _migrate_v3_to_v4(conn)
+        current_version = 4
+
+    conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+    conn.commit()
 
 
 def _read_user_version(conn: sqlite3.Connection) -> int:
@@ -156,6 +155,7 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             reasoning_tokens INTEGER NOT NULL DEFAULT 0,
             cache_read_tokens INTEGER NOT NULL DEFAULT 0,
             cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+            cache_output_tokens INTEGER NOT NULL DEFAULT 0,
             source_cost_usd TEXT NOT NULL DEFAULT '0',
             raw_json TEXT,
             imported_at_ms INTEGER NOT NULL,
@@ -201,6 +201,15 @@ def _migrate_v2_to_v3(conn: sqlite3.Connection) -> None:
         """
         CREATE INDEX IF NOT EXISTS idx_usage_events_provider_created
         ON usage_events(provider_id, created_ms);
+        """
+    )
+
+
+def _migrate_v3_to_v4(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        ALTER TABLE usage_events
+        ADD COLUMN cache_output_tokens INTEGER NOT NULL DEFAULT 0
         """
     )
 
@@ -409,58 +418,60 @@ def insert_usage_events(
                     harness_session_id,
                     harness,
                     source_session_id,
-                    source_row_id,
-                    source_message_id,
-                    source_dedup_key,
-                    global_dedup_key,
-                    fingerprint_hash,
-                    role,
-                    provider_id,
-                    model_id,
-                    thinking_level,
-                    agent,
-                    created_ms,
-                    completed_ms,
-                    input_tokens,
-                    output_tokens,
-                    reasoning_tokens,
-                    cache_read_tokens,
-                    cache_write_tokens,
-                    source_cost_usd,
-                    raw_json,
-                    imported_at_ms
-                )
-                VALUES (
-                    ?, ?, ?, ?, ?, ?, ?, ?, ?, 'assistant',
-                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-                )
-                """,
-                (
-                    tracking_session_id,
-                    harness_session_id,
-                    event.harness,
-                    event.source_session_id,
-                    event.source_row_id,
-                    event.source_message_id,
-                    event.source_dedup_key,
-                    event.global_dedup_key,
-                    event.fingerprint_hash,
-                    event.provider_id,
-                    event.model_id,
-                    event.thinking_level,
-                    event.agent,
-                    event.created_ms,
-                    event.completed_ms,
-                    event.tokens.input,
-                    event.tokens.output,
-                    event.tokens.reasoning,
-                    event.tokens.cache_read,
-                    event.tokens.cache_write,
-                    _source_cost_to_storage(event.source_cost_usd),
-                    event.raw_json,
-                    imported_at_ms,
-                ),
-            )
+                     source_row_id,
+                     source_message_id,
+                     source_dedup_key,
+                     global_dedup_key,
+                     fingerprint_hash,
+                     role,
+                     provider_id,
+                     model_id,
+                     thinking_level,
+                     agent,
+                     created_ms,
+                     completed_ms,
+                     input_tokens,
+                     output_tokens,
+                     reasoning_tokens,
+                     cache_read_tokens,
+                     cache_write_tokens,
+                     cache_output_tokens,
+                     source_cost_usd,
+                     raw_json,
+                     imported_at_ms
+                 )
+                 VALUES (
+                     ?, ?, ?, ?, ?, ?, ?, ?, ?, 'assistant',
+                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                 )
+                 """,
+                 (
+                     tracking_session_id,
+                     harness_session_id,
+                     event.harness,
+                     event.source_session_id,
+                     event.source_row_id,
+                     event.source_message_id,
+                     event.source_dedup_key,
+                     event.global_dedup_key,
+                     event.fingerprint_hash,
+                     event.provider_id,
+                     event.model_id,
+                     event.thinking_level,
+                     event.agent,
+                     event.created_ms,
+                     event.completed_ms,
+                     event.tokens.input,
+                     event.tokens.output,
+                     event.tokens.reasoning,
+                     event.tokens.cache_read,
+                     event.tokens.cache_write,
+                     event.tokens.cache_output,
+                     _source_cost_to_storage(event.source_cost_usd),
+                     event.raw_json,
+                     imported_at_ms,
+                 ),
+             )
             rows_inserted += cursor.rowcount
             if tracking_session_id is None:
                 continue
@@ -551,6 +562,7 @@ def summarize_usage(
             COALESCE(SUM(ue.reasoning_tokens), 0) AS reasoning_tokens,
             COALESCE(SUM(ue.cache_read_tokens), 0) AS cache_read_tokens,
             COALESCE(SUM(ue.cache_write_tokens), 0) AS cache_write_tokens,
+            COALESCE(SUM(ue.cache_output_tokens), 0) AS cache_output_tokens,
             COALESCE(DECIMAL_SUM(ue.source_cost_usd), '0') AS source_cost_usd
         """
         + source_clause
@@ -636,6 +648,7 @@ def summarize_usage(
                 reasoning_tokens=totals_tokens.reasoning,
                 cache_read_tokens=totals_tokens.cache_read,
                 cache_write_tokens=totals_tokens.cache_write,
+                cache_output_tokens=totals_tokens.cache_output,
                 total_tokens=totals_tokens.total,
                 cost_usd=sim_result.cost_usd,
                 baseline_virtual_usd=sim_result.baseline_virtual_usd,
@@ -842,6 +855,29 @@ def summarize_subscription_usage(
             else:
                 used_usd = costs.virtual_cost_usd
 
+            # Generate warnings for cost issues
+            warnings: list[dict[str, object]] = []
+            if message_count > 0 and used_usd == 0:
+                # Cost is zero but there are tokens; find unpriced models
+                for model_row in report.by_model:
+                    model_cost = (
+                        model_row.source_cost_usd
+                        if subscription.cost_basis == "source"
+                        else model_row.actual_cost_usd
+                        if subscription.cost_basis == "actual"
+                        else model_row.virtual_cost_usd
+                    )
+                    if model_cost == 0 and model_row.message_count > 0:
+                        warnings.append(
+                            {
+                                "kind": "zero_cost_with_tokens",
+                                "cost_basis": subscription.cost_basis,
+                                "provider_id": model_row.provider_id,
+                                "model_id": model_row.model_id,
+                                "message_count": model_row.message_count,
+                            }
+                        )
+
             limit_usd = Decimal(str(window_config.limit_usd))
             remaining_usd = max(limit_usd - used_usd, Decimal(0))
             over_limit_usd = max(used_usd - limit_usd, Decimal(0))
@@ -865,6 +901,7 @@ def summarize_subscription_usage(
                     message_count=message_count,
                     tokens=tokens,
                     costs=costs,
+                    warnings=tuple(warnings),
                 )
             )
 
@@ -949,6 +986,7 @@ def summarize_usage_series(
             COALESCE(SUM(ue.reasoning_tokens), 0) AS reasoning_tokens,
             COALESCE(SUM(ue.cache_read_tokens), 0) AS cache_read_tokens,
             COALESCE(SUM(ue.cache_write_tokens), 0) AS cache_write_tokens,
+            COALESCE(SUM(ue.cache_output_tokens), 0) AS cache_output_tokens,
             COALESCE(DECIMAL_SUM(ue.source_cost_usd), '0') AS source_cost_usd
         """
         + source_clause
@@ -1236,6 +1274,7 @@ def _row_tokens(row: sqlite3.Row) -> TokenBreakdown:
         reasoning=_required_int(row["reasoning_tokens"]),
         cache_read=_required_int(row["cache_read_tokens"]),
         cache_write=_required_int(row["cache_write_tokens"]),
+        cache_output=_required_int(row["cache_output_tokens"]),
     )
 
 
