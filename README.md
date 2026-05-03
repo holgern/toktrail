@@ -179,19 +179,19 @@ cost_basis = "source"
 
 [[subscriptions.windows]]
 period = "5h"
-limit_usd = 10
-reset_mode = "fixed"
+limit_usd = 12
+reset_mode = "first_use"
 reset_at = "2026-05-01T00:00:00+02:00"
 
 [[subscriptions.windows]]
 period = "weekly"
-limit_usd = 50
+limit_usd = 30
 reset_mode = "fixed"
 reset_at = "2026-05-01T00:00:00+02:00"
 
 [[subscriptions.windows]]
 period = "monthly"
-limit_usd = 200
+limit_usd = 60
 reset_mode = "fixed"
 reset_at = "2026-05-01T00:00:00+02:00"
 ```
