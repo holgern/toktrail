@@ -4,7 +4,13 @@ from decimal import Decimal
 from pathlib import Path
 from time import time
 
-from toktrail.config import ActualCostRule, CostingConfig, Price, SubscriptionConfig
+from toktrail.config import (
+    ActualCostRule,
+    CostingConfig,
+    Price,
+    SubscriptionConfig,
+    SubscriptionWindowConfig,
+)
 from toktrail.db import (
     connect,
     create_tracking_session,
@@ -106,7 +112,7 @@ def test_migrate_creates_tables_and_is_idempotent(tmp_path: Path) -> None:
         "usage_events",
         "run_events",
     } <= table_names
-    assert user_version == 2
+    assert user_version == 3
 
 
 def test_source_costs_are_stored_and_aggregated_as_exact_decimals(
@@ -710,7 +716,7 @@ def test_summarize_usage_provider_filter_filters_provider_summary(
     assert [row.provider_id for row in report.by_provider] == ["opencode-go"]
 
 
-def test_summarize_subscription_usage_source_basis_periods(tmp_path: Path) -> None:
+def test_summarize_subscription_usage_zai_5h_only(tmp_path: Path) -> None:
     conn = connect(tmp_path / "toktrail.db")
     migrate(conn)
     insert_usage_events(
@@ -719,29 +725,33 @@ def test_summarize_subscription_usage_source_basis_periods(tmp_path: Path) -> No
         [
             make_usage_event(
                 dedup_suffix="1",
-                provider_id="opencode-go",
+                provider_id="z-ai",
                 source_cost_usd=3.2,
-                created_ms=1777587000000,
+                created_ms=1777799400000,
             ),
             make_usage_event(
                 dedup_suffix="2",
-                provider_id="opencode-go",
+                provider_id="z-ai",
                 source_cost_usd=5.8,
-                created_ms=1777590600000,
+                created_ms=1777801200000,
             ),
         ],
     )
     config = CostingConfig(
         subscriptions=(
             SubscriptionConfig(
-                provider="opencode-go",
-                display_name="OpenCode Go",
-                timezone="Europe/Berlin",
-                cycle_start="2026-05-01",
+                provider="z-ai",
+                display_name="z.ai",
+                timezone="UTC",
                 cost_basis="source",
-                daily_limit_usd=10,
-                weekly_limit_usd=50,
-                monthly_limit_usd=200,
+                windows=(
+                    SubscriptionWindowConfig(
+                        period="5h",
+                        limit_usd=10,
+                        reset_mode="fixed",
+                        reset_at="2026-05-03T08:00:00+00:00",
+                    ),
+                ),
             ),
         ),
     )
@@ -749,101 +759,18 @@ def test_summarize_subscription_usage_source_basis_periods(tmp_path: Path) -> No
     report = summarize_subscription_usage(
         conn,
         config,
-        now_ms=1777594200000,
+        now_ms=1777802400000,
     )
 
     assert len(report.subscriptions) == 1
     row = report.subscriptions[0]
-    assert row.provider_id == "opencode-go"
-    assert [period.period for period in row.periods] == ["daily", "weekly", "monthly"]
+    assert row.provider_id == "z-ai"
+    assert [period.period for period in row.periods] == ["5h"]
     assert row.periods[0].used_usd == Decimal("9.0")
     assert row.periods[0].remaining_usd == Decimal("1.0")
 
 
-def test_summarize_subscription_usage_actual_and_virtual_basis(tmp_path: Path) -> None:
-    conn = connect(tmp_path / "toktrail.db")
-    migrate(conn)
-    insert_usage_events(
-        conn,
-        None,
-        [
-            make_usage_event(
-                dedup_suffix="1",
-                harness="copilot",
-                provider_id="github-copilot",
-                model_id="gpt-5.4",
-                source_cost_usd=0,
-                tokens=TokenBreakdown(input=1_000_000, output=500_000),
-                created_ms=1777597800000,
-            ),
-        ],
-    )
-    pricing = make_price(
-        provider="github-copilot",
-        model="gpt-5.4",
-        input_usd_per_1m=1.0,
-        output_usd_per_1m=2.0,
-    )
-    config = CostingConfig(
-        default_actual_mode="pricing",
-        default_virtual_mode="pricing",
-        actual_rules=(
-            ActualCostRule(
-                harness="copilot",
-                provider="github-copilot",
-                model="gpt-5.4",
-                mode="pricing",
-            ),
-        ),
-        actual_prices=(pricing,),
-        virtual_prices=(pricing,),
-        subscriptions=(
-            SubscriptionConfig(
-                provider="github-copilot",
-                cycle_start="2026-05-01",
-                timezone="UTC",
-                cost_basis="actual",
-                monthly_limit_usd=10,
-            ),
-            SubscriptionConfig(
-                provider="github-copilot",
-                cycle_start="2026-05-01",
-                timezone="UTC",
-                cost_basis="virtual",
-                monthly_limit_usd=10,
-                enabled=False,
-            ),
-        ),
-    )
-
-    actual_report = summarize_subscription_usage(conn, config, now_ms=1777594200000)
-    actual_period = actual_report.subscriptions[0].periods[0]
-    assert actual_period.used_usd == Decimal("2.0")
-
-    virtual_config = CostingConfig(
-        default_actual_mode=config.default_actual_mode,
-        default_virtual_mode=config.default_virtual_mode,
-        actual_rules=config.actual_rules,
-        actual_prices=config.actual_prices,
-        virtual_prices=config.virtual_prices,
-        subscriptions=(
-            SubscriptionConfig(
-                provider="github-copilot",
-                cycle_start="2026-05-01",
-                timezone="UTC",
-                cost_basis="virtual",
-                monthly_limit_usd=10,
-            ),
-        ),
-    )
-    virtual_report = summarize_subscription_usage(
-        conn, virtual_config, now_ms=1777594200000
-    )
-    virtual_period = virtual_report.subscriptions[0].periods[0]
-    assert virtual_period.used_usd == Decimal("2.0")
-
-
-def test_summarize_subscription_usage_over_limit_and_missing_source_cost(
+def test_summarize_subscription_usage_codex_first_use_5h_and_weekly(
     tmp_path: Path,
 ) -> None:
     conn = connect(tmp_path / "toktrail.db")
@@ -854,15 +781,71 @@ def test_summarize_subscription_usage_over_limit_and_missing_source_cost(
         [
             make_usage_event(
                 dedup_suffix="1",
-                provider_id="anthropic",
-                source_cost_usd=0.0,
-                created_ms=1777597800000,
+                provider_id="codex",
+                source_cost_usd=3.0,
+                created_ms=1777799400000,
+            ),
+            make_usage_event(
+                dedup_suffix="2",
+                provider_id="codex",
+                source_cost_usd=2.0,
+                created_ms=1777801200000,
+            ),
+        ],
+    )
+    config = CostingConfig(
+        subscriptions=(
+            SubscriptionConfig(
+                provider="codex",
+                timezone="UTC",
+                cost_basis="source",
+                windows=(
+                    SubscriptionWindowConfig(
+                        period="5h",
+                        limit_usd=20,
+                        reset_mode="first_use",
+                        reset_at="2026-05-03T00:00:00+00:00",
+                    ),
+                    SubscriptionWindowConfig(
+                        period="weekly",
+                        limit_usd=200,
+                        reset_mode="first_use",
+                        reset_at="2026-05-03T00:00:00+00:00",
+                    ),
+                ),
+            ),
+        ),
+    )
+
+    report = summarize_subscription_usage(conn, config, now_ms=1777802400000)
+    periods = report.subscriptions[0].periods
+    assert [period.period for period in periods] == ["5h", "weekly"]
+    assert periods[0].status == "active"
+    assert periods[0].used_usd == Decimal("5.0")
+    assert periods[1].status == "active"
+    assert periods[1].used_usd == Decimal("5.0")
+
+
+def test_summarize_subscription_usage_opencode_go_5h_weekly_monthly(
+    tmp_path: Path,
+) -> None:
+    conn = connect(tmp_path / "toktrail.db")
+    migrate(conn)
+    insert_usage_events(
+        conn,
+        None,
+        [
+            make_usage_event(
+                dedup_suffix="1",
+                provider_id="opencode-go",
+                source_cost_usd=2.0,
+                created_ms=1777799400000,
             ),
             make_usage_event(
                 dedup_suffix="2",
                 provider_id="opencode-go",
-                source_cost_usd=15.0,
-                created_ms=1777597800000,
+                source_cost_usd=3.0,
+                created_ms=1777801200000,
             ),
         ],
     )
@@ -870,34 +853,185 @@ def test_summarize_subscription_usage_over_limit_and_missing_source_cost(
     config = CostingConfig(
         subscriptions=(
             SubscriptionConfig(
-                provider="anthropic",
-                cycle_start="2026-05-01",
                 timezone="UTC",
-                cost_basis="source",
-                monthly_limit_usd=10,
-            ),
-            SubscriptionConfig(
                 provider="opencode-go",
-                cycle_start="2026-05-01",
-                timezone="UTC",
                 cost_basis="source",
-                monthly_limit_usd=10,
+                windows=(
+                    SubscriptionWindowConfig(
+                        period="5h",
+                        limit_usd=25,
+                        reset_mode="fixed",
+                        reset_at="2026-05-03T08:00:00+00:00",
+                    ),
+                    SubscriptionWindowConfig(
+                        period="weekly",
+                        limit_usd=100,
+                        reset_mode="fixed",
+                        reset_at="2026-05-01T00:00:00+00:00",
+                    ),
+                    SubscriptionWindowConfig(
+                        period="monthly",
+                        limit_usd=400,
+                        reset_mode="fixed",
+                        reset_at="2026-05-01T00:00:00+00:00",
+                    ),
+                ),
             ),
         ),
     )
 
-    report = summarize_subscription_usage(conn, config, now_ms=1777594200000)
-    anthropic = next(
-        row for row in report.subscriptions if row.provider_id == "anthropic"
-    )
-    opencode_go = next(
-        row for row in report.subscriptions if row.provider_id == "opencode-go"
+    report = summarize_subscription_usage(conn, config, now_ms=1777802400000)
+    periods = report.subscriptions[0].periods
+    assert [period.period for period in periods] == ["5h", "weekly", "monthly"]
+    assert all(period.used_usd == Decimal("5.0") for period in periods)
+
+
+def test_summarize_subscription_usage_disabled_window_is_omitted(
+    tmp_path: Path,
+) -> None:
+    conn = connect(tmp_path / "toktrail.db")
+    migrate(conn)
+    config = CostingConfig(
+        subscriptions=(
+            SubscriptionConfig(
+                provider="opencode-go",
+                timezone="UTC",
+                windows=(
+                    SubscriptionWindowConfig(
+                        period="5h",
+                        limit_usd=10,
+                        reset_at="2026-05-03T08:00:00+00:00",
+                        enabled=False,
+                    ),
+                    SubscriptionWindowConfig(
+                        period="weekly",
+                        limit_usd=50,
+                        reset_at="2026-05-01T00:00:00+00:00",
+                        enabled=True,
+                    ),
+                ),
+            ),
+        )
     )
 
-    assert anthropic.periods[0].used_usd == Decimal("0.0")
-    assert anthropic.periods[0].remaining_usd == Decimal("10.0")
-    assert opencode_go.periods[0].remaining_usd == Decimal("0")
-    assert opencode_go.periods[0].over_limit_usd == Decimal("5.0")
+    report = summarize_subscription_usage(conn, config, now_ms=1777802400000)
+    assert [period.period for period in report.subscriptions[0].periods] == ["weekly"]
+
+
+def test_summarize_subscription_usage_reset_at_excludes_old_usage(
+    tmp_path: Path,
+) -> None:
+    conn = connect(tmp_path / "toktrail.db")
+    migrate(conn)
+    insert_usage_events(
+        conn,
+        None,
+        [
+            make_usage_event(
+                dedup_suffix="1",
+                provider_id="opencode-go",
+                source_cost_usd=4.0,
+                created_ms=1777797600000,
+            ),
+            make_usage_event(
+                dedup_suffix="2",
+                provider_id="opencode-go",
+                source_cost_usd=6.0,
+                created_ms=1777801200000,
+            ),
+        ],
+    )
+    config = CostingConfig(
+        subscriptions=(
+            SubscriptionConfig(
+                provider="opencode-go",
+                timezone="UTC",
+                windows=(
+                    SubscriptionWindowConfig(
+                        period="5h",
+                        limit_usd=20,
+                        reset_mode="fixed",
+                        reset_at="2026-05-03T09:00:00+00:00",
+                    ),
+                ),
+            ),
+        )
+    )
+
+    report = summarize_subscription_usage(conn, config, now_ms=1777802400000)
+    assert report.subscriptions[0].periods[0].used_usd == Decimal("6.0")
+
+
+def test_summarize_subscription_usage_first_use_waiting_returns_zero_usage(
+    tmp_path: Path,
+) -> None:
+    conn = connect(tmp_path / "toktrail.db")
+    migrate(conn)
+    config = CostingConfig(
+        subscriptions=(
+            SubscriptionConfig(
+                provider="codex",
+                timezone="UTC",
+                windows=(
+                    SubscriptionWindowConfig(
+                        period="5h",
+                        limit_usd=20,
+                        reset_mode="first_use",
+                        reset_at="2026-05-03T00:00:00+00:00",
+                    ),
+                ),
+            ),
+        )
+    )
+
+    report = summarize_subscription_usage(conn, config, now_ms=1777802400000)
+    period = report.subscriptions[0].periods[0]
+    assert period.status == "waiting_for_first_use"
+    assert period.since_ms is None
+    assert period.until_ms is None
+    assert period.used_usd == Decimal("0")
+
+
+def test_summarize_subscription_usage_first_use_expired_waiting_returns_zero(
+    tmp_path: Path,
+) -> None:
+    conn = connect(tmp_path / "toktrail.db")
+    migrate(conn)
+    insert_usage_events(
+        conn,
+        None,
+        [
+            make_usage_event(
+                dedup_suffix="1",
+                provider_id="codex",
+                source_cost_usd=4.0,
+                created_ms=1777799400000,
+            ),
+        ],
+    )
+    config = CostingConfig(
+        subscriptions=(
+            SubscriptionConfig(
+                provider="codex",
+                timezone="UTC",
+                windows=(
+                    SubscriptionWindowConfig(
+                        period="5h",
+                        limit_usd=20,
+                        reset_mode="first_use",
+                        reset_at="2026-05-03T00:00:00+00:00",
+                    ),
+                ),
+            ),
+        )
+    )
+
+    report = summarize_subscription_usage(conn, config, now_ms=1777821000000)
+    period = report.subscriptions[0].periods[0]
+    assert period.status == "expired_waiting_for_next_use"
+    assert period.since_ms is None
+    assert period.until_ms is None
+    assert period.used_usd == Decimal("0")
 
 
 def test_summarize_usage_bounds_tracking_session_by_run_lifetime(

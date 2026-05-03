@@ -30,6 +30,13 @@ from toktrail.errors import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _isolate_toktrail_config(tmp_path, monkeypatch) -> None:
+    config_path = tmp_path / "toktrail.toml"
+    config_path.write_text("config_version = 1\n", encoding="utf-8")
+    monkeypatch.setenv("TOKTRAIL_CONFIG", str(config_path))
+
+
 def _build_opencode_source(tmp_path):
     source_db = tmp_path / "opencode.db"
     conn = create_opencode_db(source_db)

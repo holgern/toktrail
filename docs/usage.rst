@@ -73,11 +73,13 @@ Provider subscription status
 ----------------------------
 
 Use ``toktrail subscriptions`` to inspect configured ``[[subscriptions]]`` quota
-windows. The command reports daily, weekly, and monthly windows that are
-configured for each provider, including used, remaining, and over-limit values.
+windows. The command reports configured windows (for example ``5h``, ``weekly``,
+and ``monthly``) per provider, including ``fixed`` and ``first_use`` reset
+status, used, remaining, and over-limit values.
 
 .. code-block:: bash
 
    toktrail subscriptions
    toktrail subscriptions --provider opencode-go
+   toktrail subscriptions --period 5h --json
    toktrail subscriptions --period monthly --json

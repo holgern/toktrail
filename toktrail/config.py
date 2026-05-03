@@ -18,6 +18,8 @@ VirtualCostMode = Literal["zero", "pricing"]
 MissingPriceMode = Literal["zero", "warn"]
 ImportMissingSourceMode = Literal["warn", "error", "skip"]
 SubscriptionCostBasis = Literal["source", "actual", "virtual"]
+SubscriptionWindowPeriod = Literal["5h", "daily", "weekly", "monthly"]
+SubscriptionWindowResetMode = Literal["fixed", "first_use"]
 
 CONFIG_VERSION = 1
 DEFAULT_TEMPLATE_NAME = "default"
@@ -27,6 +29,8 @@ _VALID_VIRTUAL_COST_MODES = {"zero", "pricing"}
 _VALID_MISSING_PRICE_MODES = {"zero", "warn"}
 _VALID_IMPORT_MISSING_SOURCE_MODES = {"warn", "error", "skip"}
 _VALID_SUBSCRIPTION_COST_BASES = {"source", "actual", "virtual"}
+_VALID_SUBSCRIPTION_WINDOW_PERIODS = {"5h", "daily", "weekly", "monthly"}
+_VALID_SUBSCRIPTION_WINDOW_RESET_MODES = {"fixed", "first_use"}
 _PRICE_FIELDS = {
     "provider",
     "model",
@@ -52,11 +56,15 @@ _SUBSCRIPTION_FIELDS = {
     "provider",
     "display_name",
     "timezone",
-    "cycle_start",
     "cost_basis",
-    "daily_limit_usd",
-    "weekly_limit_usd",
-    "monthly_limit_usd",
+    "windows",
+    "enabled",
+}
+_SUBSCRIPTION_WINDOW_FIELDS = {
+    "period",
+    "limit_usd",
+    "reset_mode",
+    "reset_at",
     "enabled",
 }
 _ROOT_FIELDS = {
@@ -112,11 +120,25 @@ missing_price = "warn"
 # provider = "opencode-go"
 # display_name = "OpenCode Go"
 # timezone = "Europe/Berlin"
-# cycle_start = "2026-05-01"
 # cost_basis = "source"
-# daily_limit_usd = 10.00
-# weekly_limit_usd = 50.00
-# monthly_limit_usd = 200.00
+#
+# [[subscriptions.windows]]
+# period = "5h"
+# limit_usd = 10.00
+# reset_mode = "fixed"
+# reset_at = "2026-05-01T00:00:00+02:00"
+#
+# [[subscriptions.windows]]
+# period = "weekly"
+# limit_usd = 50.00
+# reset_mode = "fixed"
+# reset_at = "2026-05-01T00:00:00+02:00"
+#
+# [[subscriptions.windows]]
+# period = "monthly"
+# limit_usd = 200.00
+# reset_mode = "fixed"
+# reset_at = "2026-05-01T00:00:00+02:00"
 
 [[actual_cost]]
 harness = "opencode"
@@ -186,11 +208,25 @@ price_profile = "copilot-public-api-equivalent"
 # provider = "opencode-go"
 # display_name = "OpenCode Go"
 # timezone = "Europe/Berlin"
-# cycle_start = "2026-05-01"
 # cost_basis = "source"
-# daily_limit_usd = 10.00
-# weekly_limit_usd = 50.00
-# monthly_limit_usd = 200.00
+#
+# [[subscriptions.windows]]
+# period = "5h"
+# limit_usd = 10.00
+# reset_mode = "fixed"
+# reset_at = "2026-05-01T00:00:00+02:00"
+#
+# [[subscriptions.windows]]
+# period = "weekly"
+# limit_usd = 50.00
+# reset_mode = "fixed"
+# reset_at = "2026-05-01T00:00:00+02:00"
+#
+# [[subscriptions.windows]]
+# period = "monthly"
+# limit_usd = 200.00
+# reset_mode = "fixed"
+# reset_at = "2026-05-01T00:00:00+02:00"
 
 [[actual_cost]]
 harness = "copilot"
@@ -509,15 +545,21 @@ class ActualCostRule:
 
 
 @dataclass(frozen=True)
+class SubscriptionWindowConfig:
+    period: SubscriptionWindowPeriod
+    limit_usd: float
+    reset_at: str
+    reset_mode: SubscriptionWindowResetMode = "fixed"
+    enabled: bool = True
+
+
+@dataclass(frozen=True)
 class SubscriptionConfig:
     provider: str
     display_name: str | None = None
     timezone: str | None = None
-    cycle_start: str = ""
     cost_basis: SubscriptionCostBasis = "source"
-    daily_limit_usd: float | None = None
-    weekly_limit_usd: float | None = None
-    monthly_limit_usd: float | None = None
+    windows: tuple[SubscriptionWindowConfig, ...] = ()
     enabled: bool = True
 
     @property
@@ -843,13 +885,6 @@ def _parse_subscriptions(value: object) -> tuple[SubscriptionConfig, ...]:
             raw_subscription.get("timezone"),
             context=f"subscriptions[{index}].timezone",
         )
-        cycle_start = _parse_string(
-            raw_subscription.get("cycle_start"),
-            context=f"subscriptions[{index}].cycle_start",
-        )
-        if not cycle_start:
-            msg = f"subscriptions[{index}].cycle_start must not be empty."
-            raise ValueError(msg)
         cost_basis = cast(
             SubscriptionCostBasis,
             _parse_choice(
@@ -858,37 +893,14 @@ def _parse_subscriptions(value: object) -> tuple[SubscriptionConfig, ...]:
                 context=f"subscriptions[{index}].cost_basis",
             ),
         )
-        daily_limit_usd = _parse_positive_float(
-            raw_subscription.get("daily_limit_usd"),
-            context=f"subscriptions[{index}].daily_limit_usd",
+        windows = _parse_subscription_windows(
+            raw_subscription.get("windows"),
+            context=f"subscriptions[{index}].windows",
+            timezone_name=timezone_name,
         )
-        weekly_limit_usd = _parse_positive_float(
-            raw_subscription.get("weekly_limit_usd"),
-            context=f"subscriptions[{index}].weekly_limit_usd",
-        )
-        monthly_limit_usd = _parse_positive_float(
-            raw_subscription.get("monthly_limit_usd"),
-            context=f"subscriptions[{index}].monthly_limit_usd",
-        )
-        if (
-            daily_limit_usd is None
-            and weekly_limit_usd is None
-            and monthly_limit_usd is None
-        ):
-            msg = (
-                f"subscriptions[{index}] must define at least one of "
-                "daily_limit_usd, weekly_limit_usd, or monthly_limit_usd."
-            )
-            raise ValueError(msg)
         enabled = _parse_bool(
             raw_subscription.get("enabled", True),
             context=f"subscriptions[{index}].enabled",
-        )
-
-        _validate_subscription_cycle_start(
-            cycle_start=cycle_start,
-            timezone_name=timezone_name,
-            context=f"subscriptions[{index}].cycle_start",
         )
 
         if enabled and provider in enabled_providers:
@@ -905,11 +917,8 @@ def _parse_subscriptions(value: object) -> tuple[SubscriptionConfig, ...]:
                 provider=provider,
                 display_name=display_name,
                 timezone=timezone_name,
-                cycle_start=cycle_start,
                 cost_basis=cost_basis,
-                daily_limit_usd=daily_limit_usd,
-                weekly_limit_usd=weekly_limit_usd,
-                monthly_limit_usd=monthly_limit_usd,
+                windows=windows,
                 enabled=enabled,
             )
         )
@@ -1289,18 +1298,99 @@ def _parse_choice(
     return text
 
 
-def _validate_subscription_cycle_start(
+def _parse_subscription_windows(
+    value: object,
     *,
-    cycle_start: str,
+    context: str,
+    timezone_name: str | None,
+) -> tuple[SubscriptionWindowConfig, ...]:
+    if not isinstance(value, list):
+        msg = f"{context} must be an array of tables."
+        raise ValueError(msg)
+    if not value:
+        msg = f"{context} must include at least one window."
+        raise ValueError(msg)
+
+    windows: list[SubscriptionWindowConfig] = []
+    enabled_periods: set[str] = set()
+    for index, raw_window in enumerate(value, start=1):
+        if not isinstance(raw_window, dict):
+            msg = f"{context}[{index}] must be a TOML table."
+            raise ValueError(msg)
+        _validate_allowed_keys(
+            raw_window,
+            _SUBSCRIPTION_WINDOW_FIELDS,
+            context=f"{context}[{index}]",
+        )
+        period = cast(
+            SubscriptionWindowPeriod,
+            _parse_choice(
+                raw_window.get("period"),
+                valid=_VALID_SUBSCRIPTION_WINDOW_PERIODS,
+                context=f"{context}[{index}].period",
+            ),
+        )
+        limit_usd = _parse_positive_float(
+            raw_window.get("limit_usd"),
+            context=f"{context}[{index}].limit_usd",
+        )
+        if limit_usd is None:
+            msg = f"{context}[{index}].limit_usd is required."
+            raise ValueError(msg)
+        reset_mode = cast(
+            SubscriptionWindowResetMode,
+            _parse_choice(
+                raw_window.get("reset_mode", "fixed"),
+                valid=_VALID_SUBSCRIPTION_WINDOW_RESET_MODES,
+                context=f"{context}[{index}].reset_mode",
+            ),
+        )
+        reset_at = _parse_string(
+            raw_window.get("reset_at"),
+            context=f"{context}[{index}].reset_at",
+        )
+        if not reset_at:
+            msg = f"{context}[{index}].reset_at must not be empty."
+            raise ValueError(msg)
+        enabled = _parse_bool(
+            raw_window.get("enabled", True),
+            context=f"{context}[{index}].enabled",
+        )
+        _validate_subscription_reset_at(
+            reset_at=reset_at,
+            timezone_name=timezone_name,
+            context=f"{context}[{index}].reset_at",
+        )
+        if enabled and period in enabled_periods:
+            msg = f"{context}[{index}].period duplicates enabled period {period!r}."
+            raise ValueError(msg)
+        if enabled:
+            enabled_periods.add(period)
+        windows.append(
+            SubscriptionWindowConfig(
+                period=period,
+                limit_usd=limit_usd,
+                reset_at=reset_at,
+                reset_mode=reset_mode,
+                enabled=enabled,
+            )
+        )
+
+    return tuple(windows)
+
+
+def _validate_subscription_reset_at(
+    *,
+    reset_at: str,
     timezone_name: str | None,
     context: str,
 ) -> None:
-    from toktrail.periods import resolve_subscription_cycle_window
+    from toktrail.periods import resolve_fixed_subscription_window
 
     try:
-        resolve_subscription_cycle_window(
+        resolve_fixed_subscription_window(
             period="daily",
-            cycle_start=cycle_start,
+            reset_at=reset_at,
             timezone_name=timezone_name,
             now_ms=0,
         )

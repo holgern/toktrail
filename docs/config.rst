@@ -42,11 +42,25 @@ Example
    provider = "opencode-go"
    display_name = "OpenCode Go"
    timezone = "Europe/Berlin"
-   cycle_start = "2026-05-01"
    cost_basis = "source"
-   daily_limit_usd = 10
-   weekly_limit_usd = 50
-   monthly_limit_usd = 200
+   
+   [[subscriptions.windows]]
+   period = "5h"
+   limit_usd = 10
+   reset_mode = "fixed"
+   reset_at = "2026-05-01T00:00:00+02:00"
+
+   [[subscriptions.windows]]
+   period = "weekly"
+   limit_usd = 50
+   reset_mode = "fixed"
+   reset_at = "2026-05-01T00:00:00+02:00"
+
+   [[subscriptions.windows]]
+   period = "monthly"
+   limit_usd = 200
+   reset_mode = "fixed"
+   reset_at = "2026-05-01T00:00:00+02:00"
 
 ``[[subscriptions]]`` are config-only definitions. They are not stored in the
 state database. Use ``toktrail subscriptions`` to inspect current windows,

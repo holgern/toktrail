@@ -23,6 +23,13 @@ from toktrail.errors import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _isolate_toktrail_config(tmp_path, monkeypatch) -> None:
+    config_path = tmp_path / "toktrail.toml"
+    config_path.write_text("config_version = 1\n", encoding="utf-8")
+    monkeypatch.setenv("TOKTRAIL_CONFIG", str(config_path))
+
+
 def test_import_usage_defaults_to_active_session_and_is_idempotent(tmp_path) -> None:
     state_db = tmp_path / "toktrail.db"
     source_db = tmp_path / "opencode.db"

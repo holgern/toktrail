@@ -232,6 +232,9 @@ def _to_public_subscription_period(
 ) -> SubscriptionUsagePeriod:
     return SubscriptionUsagePeriod(
         period=value.period,
+        reset_mode=value.reset_mode,
+        reset_at=value.reset_at,
+        status=value.status,
         since_ms=value.since_ms,
         until_ms=value.until_ms,
         limit_usd=value.limit_usd,
@@ -252,7 +255,6 @@ def _to_public_subscription_row(
         provider_id=value.provider_id,
         display_name=value.display_name,
         timezone=value.timezone,
-        cycle_start=value.cycle_start,
         cost_basis=value.cost_basis,
         periods=tuple(
             _to_public_subscription_period(period) for period in value.periods

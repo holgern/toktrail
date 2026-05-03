@@ -36,7 +36,8 @@ from toktrail.reporting import (
     UsageSeriesReport,
 )
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
+_PERIOD_SORT: dict[str, int] = {"5h": 0, "daily": 1, "weekly": 2, "monthly": 3}
 
 
 @dataclass(frozen=True)
@@ -68,9 +69,18 @@ def migrate(conn: sqlite3.Connection) -> None:
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         conn.commit()
         return
-    if current_version == 1 and SCHEMA_VERSION == 2:
+    if current_version == 1:
         _migrate_v1_to_v2(conn)
-        conn.execute("PRAGMA user_version = 2")
+        if SCHEMA_VERSION >= 3:
+            _migrate_v2_to_v3(conn)
+            conn.execute("PRAGMA user_version = 3")
+        else:
+            conn.execute("PRAGMA user_version = 2")
+        conn.commit()
+        return
+    if current_version == 2 and SCHEMA_VERSION == 3:
+        _migrate_v2_to_v3(conn)
+        conn.execute("PRAGMA user_version = 3")
         conn.commit()
         return
     if current_version == SCHEMA_VERSION:
@@ -164,6 +174,9 @@ def _create_schema(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_usage_events_model_thinking
         ON usage_events(provider_id, model_id, thinking_level);
 
+        CREATE INDEX IF NOT EXISTS idx_usage_events_provider_created
+        ON usage_events(provider_id, created_ms);
+
         CREATE TABLE IF NOT EXISTS run_events (
             tracking_session_id INTEGER NOT NULL
                 REFERENCES runs(id) ON DELETE CASCADE,
@@ -181,6 +194,15 @@ def _create_schema(conn: sqlite3.Connection) -> None:
 
 def _migrate_v1_to_v2(conn: sqlite3.Connection) -> None:
     _create_schema(conn)
+
+
+def _migrate_v2_to_v3(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_usage_events_provider_created
+        ON usage_events(provider_id, created_ms);
+        """
+    )
 
 
 def create_tracking_session(
@@ -732,7 +754,10 @@ def summarize_subscription_usage(
     provider_id: str | None = None,
     now_ms: int | None = None,
 ) -> SubscriptionUsageReport:
-    from toktrail.periods import resolve_subscription_cycle_window
+    from toktrail.periods import (
+        resolve_first_use_subscription_window,
+        resolve_fixed_subscription_window,
+    )
 
     generated_at_ms = _now_ms() if now_ms is None else now_ms
     provider_filter = (
@@ -749,58 +774,97 @@ def summarize_subscription_usage(
     rows: list[SubscriptionUsageRow] = []
     for subscription in sorted(subscriptions, key=lambda item: item.provider):
         periods: list[SubscriptionUsagePeriod] = []
-        for period_name, limit_value in (
-            ("daily", subscription.daily_limit_usd),
-            ("weekly", subscription.weekly_limit_usd),
-            ("monthly", subscription.monthly_limit_usd),
+        for window_config in sorted(
+            subscription.windows,
+            key=lambda item: (_PERIOD_SORT.get(item.period, 99), item.period),
         ):
-            if limit_value is None:
+            if not window_config.enabled:
                 continue
 
-            window = resolve_subscription_cycle_window(
-                period=period_name,
-                cycle_start=subscription.cycle_start,
-                timezone_name=subscription.timezone,
-                now_ms=generated_at_ms,
-            )
-            report = summarize_usage(
-                conn,
-                UsageReportFilter(
+            status = "active"
+            since_ms: int | None
+            until_ms: int | None
+            if window_config.reset_mode == "fixed":
+                window = resolve_fixed_subscription_window(
+                    period=window_config.period,
+                    reset_at=window_config.reset_at,
+                    timezone_name=subscription.timezone,
+                    now_ms=generated_at_ms,
+                )
+                since_ms = window.since_ms
+                until_ms = window.until_ms
+            else:
+                reset_anchor = resolve_fixed_subscription_window(
+                    period="daily",
+                    reset_at=window_config.reset_at,
+                    timezone_name=subscription.timezone,
+                    now_ms=0,
+                )
+                usage_timestamps = _provider_usage_timestamps(
+                    conn,
                     provider_id=subscription.provider,
-                    since_ms=window.since_ms,
-                    until_ms=window.until_ms,
-                ),
-                costing_config=config,
-            )
+                    since_ms=reset_anchor.since_ms,
+                    until_ms=generated_at_ms,
+                )
+                first_use_window = resolve_first_use_subscription_window(
+                    period=window_config.period,
+                    reset_at=window_config.reset_at,
+                    timezone_name=subscription.timezone,
+                    usage_timestamps_ms=usage_timestamps,
+                    now_ms=generated_at_ms,
+                )
+                status = first_use_window.status
+                since_ms = first_use_window.since_ms
+                until_ms = first_use_window.until_ms
+
+            if since_ms is not None and until_ms is not None:
+                report = summarize_usage(
+                    conn,
+                    UsageReportFilter(
+                        provider_id=subscription.provider,
+                        since_ms=since_ms,
+                        until_ms=until_ms,
+                    ),
+                    costing_config=config,
+                )
+                message_count = sum(row.message_count for row in report.by_harness)
+                tokens = report.totals.tokens
+                costs = report.totals.costs
+            else:
+                message_count = 0
+                tokens = TokenBreakdown()
+                costs = CostTotals()
 
             if subscription.cost_basis == "source":
-                used_usd = report.totals.source_cost_usd
+                used_usd = costs.source_cost_usd
             elif subscription.cost_basis == "actual":
-                used_usd = report.totals.actual_cost_usd
+                used_usd = costs.actual_cost_usd
             else:
-                used_usd = report.totals.virtual_cost_usd
+                used_usd = costs.virtual_cost_usd
 
-            limit_usd = Decimal(str(limit_value))
+            limit_usd = Decimal(str(window_config.limit_usd))
             remaining_usd = max(limit_usd - used_usd, Decimal(0))
             over_limit_usd = max(used_usd - limit_usd, Decimal(0))
             percent_used = (
                 None if limit_usd == 0 else (used_usd / limit_usd) * Decimal(100)
             )
-            message_count = sum(row.message_count for row in report.by_harness)
 
             periods.append(
                 SubscriptionUsagePeriod(
-                    period=period_name,
-                    since_ms=window.since_ms,
-                    until_ms=window.until_ms,
+                    period=window_config.period,
+                    reset_mode=window_config.reset_mode,
+                    reset_at=window_config.reset_at,
+                    status=status,
+                    since_ms=since_ms,
+                    until_ms=until_ms,
                     limit_usd=limit_usd,
                     used_usd=used_usd,
                     remaining_usd=remaining_usd,
                     over_limit_usd=over_limit_usd,
                     percent_used=percent_used,
                     message_count=message_count,
-                    tokens=report.totals.tokens,
-                    costs=report.totals.costs,
+                    tokens=tokens,
+                    costs=costs,
                 )
             )
 
@@ -809,7 +873,6 @@ def summarize_subscription_usage(
                 provider_id=subscription.provider,
                 display_name=subscription.label,
                 timezone=subscription.timezone,
-                cycle_start=subscription.cycle_start,
                 cost_basis=subscription.cost_basis,
                 periods=tuple(periods),
             )
@@ -819,6 +882,27 @@ def summarize_subscription_usage(
         generated_at_ms=generated_at_ms,
         subscriptions=tuple(rows),
     )
+
+
+def _provider_usage_timestamps(
+    conn: sqlite3.Connection,
+    *,
+    provider_id: str,
+    since_ms: int,
+    until_ms: int,
+) -> list[int]:
+    rows = conn.execute(
+        """
+        SELECT created_ms
+        FROM usage_events
+        WHERE provider_id = ?
+          AND created_ms >= ?
+          AND created_ms <= ?
+        ORDER BY created_ms ASC
+        """,
+        (provider_id, since_ms, until_ms),
+    ).fetchall()
+    return [_required_int(row["created_ms"]) for row in rows]
 
 
 def summarize_usage_series(

@@ -2691,11 +2691,25 @@ config_version = 1
 provider = "opencode-go"
 display_name = "OpenCode Go"
 timezone = "UTC"
-cycle_start = "2023-11-01"
 cost_basis = "source"
-daily_limit_usd = 10
-weekly_limit_usd = 50
-monthly_limit_usd = 200
+
+[[subscriptions.windows]]
+period = "5h"
+limit_usd = 10
+reset_mode = "fixed"
+reset_at = "2023-11-01T00:00:00+00:00"
+
+[[subscriptions.windows]]
+period = "weekly"
+limit_usd = 50
+reset_mode = "fixed"
+reset_at = "2023-11-01T00:00:00+00:00"
+
+[[subscriptions.windows]]
+period = "monthly"
+limit_usd = 200
+reset_mode = "fixed"
+reset_at = "2023-11-01T00:00:00+00:00"
 """.strip(),
         encoding="utf-8",
     )
@@ -2757,7 +2771,7 @@ def test_cli_usage_summary_json_contains_by_provider(tmp_path) -> None:
     assert payload["by_provider"][0]["provider_id"] == "anthropic"
 
 
-def test_cli_subscriptions_prints_configured_provider_and_periods(tmp_path) -> None:
+def test_cli_subscriptions_prints_5h_window(tmp_path) -> None:
     runner = CliRunner()
     state_db = tmp_path / "toktrail.db"
     source_db = tmp_path / "opencode-go.db"
@@ -2795,7 +2809,7 @@ def test_cli_subscriptions_prints_configured_provider_and_periods(tmp_path) -> N
 
     assert result.exit_code == 0, result.output
     assert "OpenCode Go (opencode-go)" in result.output
-    assert "daily" in result.output
+    assert "5h" in result.output
     assert "weekly" in result.output
     assert "monthly" in result.output
 
@@ -2845,10 +2859,149 @@ def test_cli_subscriptions_provider_filter_json_shape(tmp_path) -> None:
     assert len(payload["subscriptions"]) == 1
     assert payload["subscriptions"][0]["provider_id"] == "opencode-go"
     assert [period["period"] for period in payload["subscriptions"][0]["periods"]] == [
-        "daily",
+        "5h",
         "weekly",
         "monthly",
     ]
+    assert "status" in payload["subscriptions"][0]["periods"][0]
+    assert "reset_mode" in payload["subscriptions"][0]["periods"][0]
+    assert "reset_at" in payload["subscriptions"][0]["periods"][0]
+
+
+def test_cli_subscriptions_period_filter_accepts_5h(tmp_path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    source_db = tmp_path / "opencode-go.db"
+    config_path = tmp_path / "toktrail.toml"
+    create_opencode_go_source_db(source_db)
+    write_subscriptions_config(config_path)
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "import",
+            "--no-session",
+            "--harness",
+            "opencode",
+            "--source",
+            str(source_db),
+        ],
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "--config",
+            str(config_path),
+            "subscriptions",
+            "--period",
+            "5h",
+            "--json",
+            "--now-ms",
+            "1700000000000",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    periods = payload["subscriptions"][0]["periods"]
+    assert [period["period"] for period in periods] == ["5h"]
+
+
+def test_cli_subscriptions_disabled_window_is_not_printed(tmp_path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    config_path = tmp_path / "toktrail.toml"
+    config_path.write_text(
+        """
+config_version = 1
+
+[[subscriptions]]
+provider = "opencode-go"
+display_name = "OpenCode Go"
+timezone = "UTC"
+cost_basis = "source"
+
+[[subscriptions.windows]]
+period = "5h"
+limit_usd = 10
+reset_mode = "fixed"
+reset_at = "2023-11-01T00:00:00+00:00"
+enabled = false
+
+[[subscriptions.windows]]
+period = "weekly"
+limit_usd = 50
+reset_mode = "fixed"
+reset_at = "2023-11-01T00:00:00+00:00"
+enabled = true
+""".strip(),
+        encoding="utf-8",
+    )
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "--config",
+            str(config_path),
+            "subscriptions",
+            "--now-ms",
+            "1700000000000",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "weekly" in result.output
+    assert "5h" not in result.output
+
+
+def test_cli_subscriptions_first_use_waiting_human_output_is_clear(tmp_path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    config_path = tmp_path / "toktrail.toml"
+    config_path.write_text(
+        """
+config_version = 1
+
+[[subscriptions]]
+provider = "codex"
+display_name = "Codex"
+timezone = "UTC"
+cost_basis = "source"
+
+[[subscriptions.windows]]
+period = "5h"
+limit_usd = 20
+reset_mode = "first_use"
+reset_at = "2026-05-03T00:00:00+00:00"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "--config",
+            str(config_path),
+            "subscriptions",
+            "--now-ms",
+            "1777802400000",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "starts on first use" in result.output
 
 
 def test_cli_subscriptions_no_configured_subscriptions_is_clear(tmp_path) -> None:

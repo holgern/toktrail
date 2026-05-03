@@ -15,6 +15,13 @@ from toktrail.api.workflow import finalize_manual_run, prepare_manual_run
 from toktrail.errors import AmbiguousSourceSessionError, SourcePathError
 
 
+@pytest.fixture(autouse=True)
+def _isolate_toktrail_config(tmp_path, monkeypatch) -> None:
+    config_path = tmp_path / "toktrail.toml"
+    config_path.write_text("config_version = 1\n", encoding="utf-8")
+    monkeypatch.setenv("TOKTRAIL_CONFIG", str(config_path))
+
+
 def test_prepare_manual_run_returns_tracking_session_snapshot_and_environment(
     tmp_path,
 ) -> None:

@@ -35,6 +35,13 @@ from toktrail.errors import InvalidAPIUsageError, NoActiveRunError
 from toktrail.models import TokenBreakdown, UsageEvent
 
 
+@pytest.fixture(autouse=True)
+def _isolate_toktrail_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config_path = tmp_path / "toktrail.toml"
+    config_path.write_text("config_version = 1\n", encoding="utf-8")
+    monkeypatch.setenv("TOKTRAIL_CONFIG", str(config_path))
+
+
 def make_api_usage_event(
     dedup_suffix: str,
     *,
@@ -279,10 +286,14 @@ config_version = 1
 
 [[subscriptions]]
 provider = "anthropic"
-cycle_start = "2023-11-01"
 timezone = "UTC"
 cost_basis = "source"
-monthly_limit_usd = 1
+
+[[subscriptions.windows]]
+period = "5h"
+limit_usd = 1
+reset_mode = "first_use"
+reset_at = "2023-11-01T00:00:00+00:00"
 """.strip(),
         encoding="utf-8",
     )
@@ -298,7 +309,12 @@ monthly_limit_usd = 1
     subscriptions = cast(list[dict[str, object]], payload["subscriptions"])
     periods = cast(list[dict[str, object]], subscriptions[0]["periods"])
     assert subscriptions[0]["provider_id"] == "anthropic"
-    assert periods[0]["period"] == "monthly"
+    assert periods[0]["period"] == "5h"
+    assert periods[0]["status"] in {"waiting_for_first_use", "active"}
+    assert periods[0]["reset_mode"] == "first_use"
+    assert periods[0]["reset_at"] == "2023-11-01T00:00:00+00:00"
+    assert "since_ms" in periods[0]
+    assert "until_ms" in periods[0]
 
 
 def test_session_report_bounds_to_run_lifetime(tmp_path: Path) -> None:

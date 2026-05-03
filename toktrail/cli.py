@@ -503,8 +503,8 @@ def subscriptions_status(
     now_ms: Annotated[int | None, typer.Option("--now-ms", hidden=True)] = None,
 ) -> None:
     normalized_period = period.strip().lower()
-    if normalized_period not in {"all", "daily", "weekly", "monthly"}:
-        _exit_with_error("--period must be one of: all, daily, weekly, monthly.")
+    if normalized_period not in {"all", "5h", "daily", "weekly", "monthly"}:
+        _exit_with_error("--period must be one of: all, 5h, daily, weekly, monthly.")
 
     costing_config = _load_costing_config_or_exit(ctx)
     conn = _open_toktrail_connection(ctx)
@@ -1077,8 +1077,7 @@ def _print_subscription_usage_report(
         typer.echo(
             f"{subscription.display_name} ({subscription.provider_id})  "
             f"basis={subscription.cost_basis}  "
-            f"timezone={timezone_label}  "
-            f"cycle_start={subscription.cycle_start}"
+            f"timezone={timezone_label}"
         )
         rows: list[dict[str, str]] = []
         for period in subscription.periods:
@@ -1088,11 +1087,14 @@ def _print_subscription_usage_report(
             rows.append(
                 {
                     "period": period.period,
+                    "status": period.status,
                     "window": _format_subscription_window(
                         period.since_ms,
                         period.until_ms,
                         timezone_name=subscription.timezone,
+                        status=period.status,
                     ),
+                    "reset": f"{period.reset_mode} @ {period.reset_at}",
                     "limit": _format_cost(period.limit_usd),
                     "used": _format_cost(period.used_usd),
                     "left": left_value,
@@ -1101,10 +1103,21 @@ def _print_subscription_usage_report(
             )
         _print_table(
             rows,
-            ["period", "window", "limit", "used", "left", "used_pct"],
+            [
+                "period",
+                "status",
+                "window",
+                "reset",
+                "limit",
+                "used",
+                "left",
+                "used_pct",
+            ],
             {
                 "period": "period",
+                "status": "status",
                 "window": "window",
+                "reset": "reset",
                 "limit": "limit",
                 "used": "used",
                 "left": "left",
@@ -1115,14 +1128,22 @@ def _print_subscription_usage_report(
 
 
 def _format_subscription_window(
-    since_ms: int,
-    until_ms: int,
+    since_ms: int | None,
+    until_ms: int | None,
     *,
     timezone_name: str | None,
+    status: str,
 ) -> str:
-    from toktrail.periods import _resolve_timezone
+    from toktrail.periods import resolve_timezone
 
-    tz = _resolve_timezone(timezone_name=timezone_name, utc=False)
+    if since_ms is None or until_ms is None:
+        if status == "waiting_for_first_use":
+            return "starts on first use"
+        if status == "expired_waiting_for_next_use":
+            return "expired; next starts on first use"
+        return "(none)"
+
+    tz = resolve_timezone(timezone_name=timezone_name, utc=False)
     since_dt = datetime.datetime.fromtimestamp(since_ms / 1000, tz=tz)
     until_dt = datetime.datetime.fromtimestamp(until_ms / 1000, tz=tz)
     return f"{since_dt.date().isoformat()}..{until_dt.date().isoformat()}"

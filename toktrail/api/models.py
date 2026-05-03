@@ -484,8 +484,11 @@ class RunReport:
 @dataclass(frozen=True)
 class SubscriptionUsagePeriod:
     period: str
-    since_ms: int
-    until_ms: int
+    reset_mode: str
+    reset_at: str
+    status: str
+    since_ms: int | None
+    until_ms: int | None
     limit_usd: Decimal
     used_usd: Decimal
     remaining_usd: Decimal
@@ -498,6 +501,9 @@ class SubscriptionUsagePeriod:
     def as_dict(self) -> dict[str, object]:
         return {
             "period": self.period,
+            "reset_mode": self.reset_mode,
+            "reset_at": self.reset_at,
+            "status": self.status,
             "since_ms": self.since_ms,
             "until_ms": self.until_ms,
             "limit_usd": str(self.limit_usd),
@@ -518,7 +524,6 @@ class SubscriptionUsageRow:
     provider_id: str
     display_name: str
     timezone: str | None
-    cycle_start: str
     cost_basis: str
     periods: tuple[SubscriptionUsagePeriod, ...]
 
@@ -527,7 +532,6 @@ class SubscriptionUsageRow:
             "provider_id": self.provider_id,
             "display_name": self.display_name,
             "timezone": self.timezone,
-            "cycle_start": self.cycle_start,
             "cost_basis": self.cost_basis,
             "periods": [period.as_dict() for period in self.periods],
         }

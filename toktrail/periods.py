@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import calendar
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone, tzinfo
-from typing import Literal
+from typing import Literal, cast
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 Granularity = Literal["daily", "weekly", "monthly"]
+SubscriptionWindowPeriod = Literal["5h", "daily", "weekly", "monthly"]
 Weekday = Literal[
     "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"
 ]
@@ -41,6 +43,13 @@ class SubscriptionCycleWindow:
     label: str
 
 
+@dataclass(frozen=True)
+class ResolvedFirstUseWindow:
+    status: str
+    since_ms: int | None
+    until_ms: int | None
+
+
 def current_time_in_zone(tz: tzinfo) -> datetime:
     return datetime.now(tz)
 
@@ -57,7 +66,7 @@ def resolve_time_range(
         msg = "Use either a named period or --since/--until, not both."
         raise ValueError(msg)
 
-    tz = _resolve_timezone(timezone_name=timezone_name, utc=utc)
+    tz = resolve_timezone(timezone_name=timezone_name, utc=utc)
     timezone_label = "UTC" if tz is timezone.utc else getattr(tz, "key", str(tz))
 
     if period is not None:
@@ -78,7 +87,7 @@ def resolve_time_range(
     )
 
 
-def _resolve_timezone(*, timezone_name: str | None, utc: bool) -> tzinfo:
+def resolve_timezone(*, timezone_name: str | None, utc: bool) -> tzinfo:
     if utc:
         return timezone.utc
     if timezone_name is not None:
@@ -88,6 +97,10 @@ def _resolve_timezone(*, timezone_name: str | None, utc: bool) -> tzinfo:
             msg = f"Unknown timezone: {timezone_name}"
             raise ValueError(msg) from exc
     return datetime.now().astimezone().tzinfo or timezone.utc
+
+
+def _resolve_timezone(*, timezone_name: str | None, utc: bool) -> tzinfo:
+    return resolve_timezone(timezone_name=timezone_name, utc=utc)
 
 
 def _normalize_period(value: str) -> str:
@@ -181,40 +194,46 @@ def _datetime_to_ms(value: datetime) -> int:
     return int(value.timestamp() * 1000)
 
 
-def resolve_subscription_cycle_window(
+def resolve_fixed_subscription_window(
     *,
-    period: str,
-    cycle_start: str,
+    period: SubscriptionWindowPeriod,
+    reset_at: str,
     timezone_name: str | None,
     now_ms: int | None = None,
 ) -> SubscriptionCycleWindow:
     normalized_period = period.strip().lower()
-    if normalized_period not in {"daily", "weekly", "monthly"}:
-        msg = "period must be daily, weekly, or monthly."
+    if normalized_period not in {"5h", "daily", "weekly", "monthly"}:
+        msg = "period must be one of: 5h, daily, weekly, monthly."
         raise ValueError(msg)
 
-    tz = _resolve_timezone(timezone_name=timezone_name, utc=False)
-    cycle_start_dt = _parse_subscription_cycle_start(cycle_start, tz=tz)
+    tz = resolve_timezone(timezone_name=timezone_name, utc=False)
+    reset_at_dt = _parse_subscription_reset_at(reset_at, tz=tz)
     if now_ms is None:
         now = current_time_in_zone(tz)
     else:
         now = datetime.fromtimestamp(now_ms / 1000, tz=tz)
 
-    if now < cycle_start_dt:
-        since = cycle_start_dt
+    if now < reset_at_dt:
+        since = reset_at_dt
+    elif normalized_period == "5h":
+        elapsed = now - reset_at_dt
+        offset = int(elapsed // timedelta(hours=5))
+        since = reset_at_dt + timedelta(hours=offset * 5)
     elif normalized_period == "daily":
-        elapsed = now - cycle_start_dt
+        elapsed = now - reset_at_dt
         offset = int(elapsed // timedelta(days=1))
-        since = cycle_start_dt + timedelta(days=offset)
+        since = reset_at_dt + timedelta(days=offset)
     elif normalized_period == "weekly":
-        elapsed = now - cycle_start_dt
+        elapsed = now - reset_at_dt
         offset = int(elapsed // timedelta(days=7))
-        since = cycle_start_dt + timedelta(days=offset * 7)
+        since = reset_at_dt + timedelta(days=offset * 7)
     else:
-        month_offset = _month_offset_for_timestamp(cycle_start_dt, now)
-        since = _add_months_with_clamp(cycle_start_dt, month_offset)
+        month_offset = _month_offset_for_timestamp(reset_at_dt, now)
+        since = _add_months_with_clamp(reset_at_dt, month_offset)
 
-    if normalized_period == "daily":
+    if normalized_period == "5h":
+        until = since + timedelta(hours=5)
+    elif normalized_period == "daily":
         until = since + timedelta(days=1)
     elif normalized_period == "weekly":
         until = since + timedelta(days=7)
@@ -229,17 +248,92 @@ def resolve_subscription_cycle_window(
     )
 
 
-def _parse_subscription_cycle_start(value: str, *, tz: tzinfo) -> datetime:
+def resolve_subscription_cycle_window(
+    *,
+    period: str,
+    cycle_start: str,
+    timezone_name: str | None,
+    now_ms: int | None = None,
+) -> SubscriptionCycleWindow:
+    normalized_period = period.strip().lower()
+    return resolve_fixed_subscription_window(
+        period=cast(SubscriptionWindowPeriod, normalized_period),
+        reset_at=cycle_start,
+        timezone_name=timezone_name,
+        now_ms=now_ms,
+    )
+
+
+def resolve_first_use_subscription_window(
+    *,
+    period: SubscriptionWindowPeriod,
+    reset_at: str,
+    timezone_name: str | None,
+    usage_timestamps_ms: Iterable[int],
+    now_ms: int | None = None,
+) -> ResolvedFirstUseWindow:
+    normalized_period = period.strip().lower()
+    if normalized_period not in {"5h", "daily", "weekly", "monthly"}:
+        msg = "period must be one of: 5h, daily, weekly, monthly."
+        raise ValueError(msg)
+
+    tz = resolve_timezone(timezone_name=timezone_name, utc=False)
+    reset_at_dt = _parse_subscription_reset_at(reset_at, tz=tz)
+    reset_at_ms = _datetime_to_ms(reset_at_dt)
+    if now_ms is None:
+        now_dt = current_time_in_zone(tz)
+        now_limit_ms = _datetime_to_ms(now_dt)
+    else:
+        now_limit_ms = now_ms
+        now_dt = datetime.fromtimestamp(now_ms / 1000, tz=tz)
+
+    relevant = sorted(
+        timestamp
+        for timestamp in usage_timestamps_ms
+        if timestamp >= reset_at_ms and timestamp <= now_limit_ms
+    )
+    current_start: datetime | None = None
+    for timestamp in relevant:
+        candidate = datetime.fromtimestamp(timestamp / 1000, tz=tz)
+        if current_start is None:
+            current_start = candidate
+            continue
+        if candidate >= _window_end(current_start, normalized_period):
+            current_start = candidate
+
+    if current_start is None:
+        return ResolvedFirstUseWindow(
+            status="waiting_for_first_use",
+            since_ms=None,
+            until_ms=None,
+        )
+
+    current_until = _window_end(current_start, normalized_period)
+    if now_dt >= current_until:
+        return ResolvedFirstUseWindow(
+            status="expired_waiting_for_next_use",
+            since_ms=None,
+            until_ms=None,
+        )
+
+    return ResolvedFirstUseWindow(
+        status="active",
+        since_ms=_datetime_to_ms(current_start),
+        until_ms=_datetime_to_ms(current_until),
+    )
+
+
+def _parse_subscription_reset_at(value: str, *, tz: tzinfo) -> datetime:
     raw = value.strip()
     if not raw:
-        msg = "cycle_start must not be empty."
+        msg = "reset_at must not be empty."
         raise ValueError(msg)
 
     normalized = raw[:-1] + "+00:00" if raw.endswith("Z") else raw
     try:
         parsed = datetime.fromisoformat(normalized)
     except ValueError as exc:
-        msg = f"Invalid cycle_start: {value}"
+        msg = f"Invalid reset_at: {value}"
         raise ValueError(msg) from exc
 
     if parsed.tzinfo is None:
@@ -247,6 +341,19 @@ def _parse_subscription_cycle_start(value: str, *, tz: tzinfo) -> datetime:
     else:
         parsed = parsed.astimezone(tz)
     return parsed
+
+
+def _window_end(start: datetime, period: str) -> datetime:
+    if period == "5h":
+        return start + timedelta(hours=5)
+    if period == "daily":
+        return start + timedelta(days=1)
+    if period == "weekly":
+        return start + timedelta(days=7)
+    if period == "monthly":
+        return _add_months_with_clamp(start, 1)
+    msg = f"Unsupported period: {period}"
+    raise ValueError(msg)
 
 
 def _add_months_with_clamp(value: datetime, months: int) -> datetime:
