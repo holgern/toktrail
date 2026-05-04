@@ -577,6 +577,9 @@ class SubscriptionUsagePeriod:
     message_count: int
     tokens: TokenBreakdown
     costs: CostTotals
+    last_since_ms: int | None = None
+    last_until_ms: int | None = None
+    last_usage_ms: int | None = None
     warnings: tuple[dict[str, object], ...] = field(default_factory=tuple)
 
     def as_dict(self) -> dict[str, object]:
@@ -587,6 +590,9 @@ class SubscriptionUsagePeriod:
             "status": self.status,
             "since_ms": self.since_ms,
             "until_ms": self.until_ms,
+            "last_since_ms": self.last_since_ms,
+            "last_until_ms": self.last_until_ms,
+            "last_usage_ms": self.last_usage_ms,
             "limit_usd": str(self.limit_usd),
             "used_usd": str(self.used_usd),
             "remaining_usd": str(self.remaining_usd),
@@ -607,7 +613,7 @@ class SubscriptionBillingPeriod:
     reset_at: str
     since_ms: int
     until_ms: int
-    cost_basis: str
+    billing_basis: str
     fixed_cost_usd: Decimal
     value_usd: Decimal
     net_savings_usd: Decimal
@@ -623,7 +629,7 @@ class SubscriptionBillingPeriod:
             "reset_at": self.reset_at,
             "since_ms": self.since_ms,
             "until_ms": self.until_ms,
-            "cost_basis": self.cost_basis,
+            "billing_basis": self.billing_basis,
             "fixed_cost_usd": str(self.fixed_cost_usd),
             "value_usd": str(self.value_usd),
             "net_savings_usd": str(self.net_savings_usd),
@@ -639,19 +645,21 @@ class SubscriptionBillingPeriod:
 
 @dataclass(frozen=True)
 class SubscriptionUsageRow:
-    provider_id: str
+    subscription_id: str
     display_name: str
     timezone: str | None
-    cost_basis: str
+    usage_provider_ids: tuple[str, ...]
+    quota_cost_basis: str
     periods: tuple[SubscriptionUsagePeriod, ...]
     billing: SubscriptionBillingPeriod | None = None
 
     def as_dict(self) -> dict[str, object]:
         payload: dict[str, object] = {
-            "provider_id": self.provider_id,
+            "subscription_id": self.subscription_id,
             "display_name": self.display_name,
             "timezone": self.timezone,
-            "cost_basis": self.cost_basis,
+            "usage_provider_ids": list(self.usage_provider_ids),
+            "quota_cost_basis": self.quota_cost_basis,
             "periods": [period.as_dict() for period in self.periods],
         }
         if self.billing is not None:

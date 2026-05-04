@@ -262,6 +262,9 @@ def _to_public_subscription_period(
         message_count=value.message_count,
         tokens=_to_public_token_breakdown(value.tokens),
         costs=_to_public_cost_totals(value.costs),
+        last_since_ms=value.last_since_ms,
+        last_until_ms=value.last_until_ms,
+        last_usage_ms=value.last_usage_ms,
         warnings=value.warnings,
     )
 
@@ -274,7 +277,7 @@ def _to_public_subscription_billing(
         reset_at=value.reset_at,
         since_ms=value.since_ms,
         until_ms=value.until_ms,
-        cost_basis=value.cost_basis,
+        billing_basis=value.billing_basis,
         fixed_cost_usd=value.fixed_cost_usd,
         value_usd=value.value_usd,
         net_savings_usd=value.net_savings_usd,
@@ -290,10 +293,11 @@ def _to_public_subscription_row(
     value: InternalSubscriptionUsageRow,
 ) -> SubscriptionUsageRow:
     return SubscriptionUsageRow(
-        provider_id=value.provider_id,
+        subscription_id=value.subscription_id,
         display_name=value.display_name,
         timezone=value.timezone,
-        cost_basis=value.cost_basis,
+        usage_provider_ids=value.usage_provider_ids,
+        quota_cost_basis=value.quota_cost_basis,
         periods=tuple(
             _to_public_subscription_period(period) for period in value.periods
         ),

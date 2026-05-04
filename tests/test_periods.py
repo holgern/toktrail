@@ -181,6 +181,9 @@ def test_resolve_first_use_subscription_window_expired_waiting_for_next_use() ->
     assert window.status == "expired_waiting_for_next_use"
     assert window.since_ms is None
     assert window.until_ms is None
+    assert window.last_since_ms is not None
+    assert window.last_until_ms is not None
+    assert window.last_usage_ms == usage
 
 
 def test_resolve_first_use_subscription_window_monthly_clamps_day() -> None:
@@ -201,3 +204,74 @@ def test_resolve_first_use_subscription_window_monthly_clamps_day() -> None:
     until = datetime.fromtimestamp(window.until_ms / 1000, tz=tz)
     assert since == datetime(2026, 1, 31, 9, 0, tzinfo=tz)
     assert until == datetime(2026, 2, 28, 9, 0, tzinfo=tz)
+
+
+def test_resolve_fixed_subscription_window_yearly() -> None:
+    tz = ZoneInfo("Europe/Berlin")
+    now_ms = int(datetime(2026, 8, 1, 0, 0, tzinfo=tz).timestamp() * 1000)
+
+    window = resolve_fixed_subscription_window(
+        period="yearly",
+        reset_at="2026-05-01T00:00:00+02:00",
+        timezone_name="Europe/Berlin",
+        now_ms=now_ms,
+    )
+
+    since = datetime.fromtimestamp(window.since_ms / 1000, tz=tz)
+    until = datetime.fromtimestamp(window.until_ms / 1000, tz=tz)
+    assert since == datetime(2026, 5, 1, 0, 0, tzinfo=tz)
+    assert until == datetime(2027, 5, 1, 0, 0, tzinfo=tz)
+
+
+def test_resolve_fixed_subscription_window_yearly_before_reset_returns_first() -> None:
+    tz = ZoneInfo("UTC")
+    now_ms = int(datetime(2025, 12, 31, 23, 0, tzinfo=tz).timestamp() * 1000)
+
+    window = resolve_fixed_subscription_window(
+        period="yearly",
+        reset_at="2026-01-01T00:00:00+00:00",
+        timezone_name="UTC",
+        now_ms=now_ms,
+    )
+
+    since = datetime.fromtimestamp(window.since_ms / 1000, tz=tz)
+    until = datetime.fromtimestamp(window.until_ms / 1000, tz=tz)
+    assert since == datetime(2026, 1, 1, 0, 0, tzinfo=tz)
+    assert until == datetime(2027, 1, 1, 0, 0, tzinfo=tz)
+
+
+def test_resolve_first_use_subscription_window_yearly_starts_on_first_usage() -> None:
+    tz = ZoneInfo("UTC")
+    usage = int(datetime(2026, 2, 1, 9, 0, tzinfo=tz).timestamp() * 1000)
+    now_ms = int(datetime(2026, 7, 1, 12, 0, tzinfo=tz).timestamp() * 1000)
+
+    window = resolve_first_use_subscription_window(
+        period="yearly",
+        reset_at="2026-01-01T00:00:00+00:00",
+        timezone_name="UTC",
+        usage_timestamps_ms=[usage],
+        now_ms=now_ms,
+    )
+
+    assert window.status == "active"
+    since = datetime.fromtimestamp(window.since_ms / 1000, tz=tz)
+    until = datetime.fromtimestamp(window.until_ms / 1000, tz=tz)
+    assert since == datetime(2026, 2, 1, 9, 0, tzinfo=tz)
+    assert until == datetime(2027, 2, 1, 9, 0, tzinfo=tz)
+
+
+def test_resolve_yearly_window_clamps_leap_day() -> None:
+    tz = ZoneInfo("UTC")
+    now_ms = int(datetime(2025, 3, 1, 0, 0, tzinfo=tz).timestamp() * 1000)
+
+    window = resolve_fixed_subscription_window(
+        period="yearly",
+        reset_at="2024-02-29T00:00:00+00:00",
+        timezone_name="UTC",
+        now_ms=now_ms,
+    )
+
+    since = datetime.fromtimestamp(window.since_ms / 1000, tz=tz)
+    until = datetime.fromtimestamp(window.until_ms / 1000, tz=tz)
+    assert since == datetime(2025, 2, 28, 0, 0, tzinfo=tz)
+    assert until == datetime(2026, 2, 28, 0, 0, tzinfo=tz)

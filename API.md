@@ -225,15 +225,17 @@ period/time-range reporting, it returns `RunReport(session=None, ...)`.
 
 ### Subscription usage report
 
-`subscription_usage_report()` returns provider subscription quota usage for configured
-`[[subscriptions]]`, including configured windows (`5h`, `daily`, `weekly`,
-`monthly`) with per-window `reset_mode` (`fixed` or `first_use`), `reset_at`,
-status (`active`, `waiting_for_first_use`, `expired_waiting_for_next_use`),
-and used/remaining/over-limit cost values based on each subscription
-`cost_basis` (`source`, `actual`, or `virtual`).
+`subscription_usage_report()` returns subscription quota usage for configured
+`[[subscriptions]]` (keyed by `id` with `usage_providers` coverage), including
+configured windows (`5h`, `daily`, `weekly`, `monthly`, `yearly`) with
+per-window `reset_mode` (`fixed` or `first_use`), `reset_at`, status
+(`active`, `waiting_for_first_use`, `expired_waiting_for_next_use`), and
+used/remaining/over-limit cost values based on each subscription
+`quota_cost_basis` (`source`, `actual`, or `virtual`).
 
 When configured, subscription rows also expose a `billing` object with
-`fixed_cost_usd`, `value_usd`, `net_savings_usd`, and break-even metrics.
+`fixed_cost_usd`, `value_usd`, `billing_basis`, `net_savings_usd`, and
+break-even metrics.
 
 ### Sync archive API
 

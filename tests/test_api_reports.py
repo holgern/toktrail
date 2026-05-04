@@ -286,9 +286,10 @@ def test_subscription_usage_report_returns_public_dataclasses(tmp_path: Path) ->
 config_version = 1
 
 [[subscriptions]]
-provider = "anthropic"
+id = "anthropic-pro-plan"
+usage_providers = ["anthropic"]
 timezone = "UTC"
-cost_basis = "source"
+quota_cost_basis = "source"
 fixed_cost_usd = 10
 fixed_cost_period = "monthly"
 fixed_cost_reset_at = "2023-11-01T00:00:00+00:00"
@@ -312,7 +313,9 @@ reset_at = "2023-11-01T00:00:00+00:00"
     assert "generated_at_ms" in payload
     subscriptions = cast(list[dict[str, object]], payload["subscriptions"])
     periods = cast(list[dict[str, object]], subscriptions[0]["periods"])
-    assert subscriptions[0]["provider_id"] == "anthropic"
+    assert subscriptions[0]["subscription_id"] == "anthropic-pro-plan"
+    assert subscriptions[0]["usage_provider_ids"] == ["anthropic"]
+    assert subscriptions[0]["quota_cost_basis"] == "source"
     assert periods[0]["period"] == "5h"
     assert periods[0]["status"] in {"waiting_for_first_use", "active"}
     assert periods[0]["reset_mode"] == "first_use"

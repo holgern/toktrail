@@ -3120,16 +3120,35 @@ def create_opencode_go_source_db(path: Path) -> None:
     conn.close()
 
 
+def create_zai_source_db(path: Path, *, source_cost: float = 0.0) -> None:
+    conn = create_opencode_db(path)
+    zai_event = deepcopy(VALID_ASSISTANT)
+    zai_event["id"] = "msg-zai"
+    zai_event["providerID"] = "zai"
+    zai_event["modelID"] = "zai/glm-4.5"
+    zai_event["cost"] = source_cost
+    zai_event["tokens"] = {
+        "input": 1_000_000,
+        "output": 100_000,
+        "reasoning": 0,
+        "cache": {"read": 0, "write": 0},
+    }
+    insert_message(conn, row_id="row-zai", session_id="ses-1", data=zai_event)
+    conn.commit()
+    conn.close()
+
+
 def write_subscriptions_config(path: Path) -> None:
     path.write_text(
         """
 config_version = 1
 
 [[subscriptions]]
-provider = "opencode-go"
+id = "opencode-go"
+usage_providers = ["opencode-go"]
 display_name = "OpenCode Go"
 timezone = "UTC"
-cost_basis = "source"
+quota_cost_basis = "source"
 fixed_cost_usd = 10
 fixed_cost_period = "monthly"
 fixed_cost_reset_at = "2023-11-01T00:00:00+00:00"
@@ -3175,10 +3194,11 @@ include_raw_json = false
 opencode = "{source_db}"
 
 [[subscriptions]]
-provider = "opencode-go"
+id = "opencode-go"
+usage_providers = ["opencode-go"]
 display_name = "OpenCode Go"
 timezone = "UTC"
-cost_basis = "source"
+quota_cost_basis = "source"
 
 [[subscriptions.windows]]
 period = "5h"
@@ -3380,7 +3400,9 @@ def test_cli_subscriptions_provider_filter_json_shape(tmp_path) -> None:
     payload = json.loads(result.output)
     assert "generated_at_ms" in payload
     assert len(payload["subscriptions"]) == 1
-    assert payload["subscriptions"][0]["provider_id"] == "opencode-go"
+    assert payload["subscriptions"][0]["subscription_id"] == "opencode-go"
+    assert payload["subscriptions"][0]["usage_provider_ids"] == ["opencode-go"]
+    assert payload["subscriptions"][0]["quota_cost_basis"] == "source"
     assert [period["period"] for period in payload["subscriptions"][0]["periods"]] == [
         "5h",
         "weekly",
@@ -3438,6 +3460,188 @@ def test_cli_subscriptions_period_filter_accepts_5h(tmp_path) -> None:
     assert "billing" in payload["subscriptions"][0]
 
 
+def test_cli_subscriptions_plan_id_can_cover_different_usage_provider(tmp_path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    source_db = tmp_path / "zai.db"
+    config_path = tmp_path / "toktrail.toml"
+    create_zai_source_db(source_db, source_cost=0.0)
+    config_path.write_text(
+        f"""
+config_version = 1
+
+[imports]
+harnesses = ["opencode"]
+missing_source = "warn"
+include_raw_json = false
+
+[imports.sources]
+opencode = "{source_db}"
+
+[pricing]
+[[pricing.virtual]]
+provider = "zai"
+model = "glm-4.5"
+input_usd_per_1m = 4.0
+output_usd_per_1m = 8.0
+
+[[subscriptions]]
+id = "zai-coding-plan"
+usage_providers = ["zai"]
+display_name = "Zai Coding Plan"
+timezone = "Europe/Berlin"
+quota_cost_basis = "virtual"
+
+[[subscriptions.windows]]
+period = "5h"
+limit_usd = 12
+reset_mode = "first_use"
+reset_at = "2023-11-01T00:00:00+00:00"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "--config",
+            str(config_path),
+            "subscriptions",
+            "--now-ms",
+            "1700000000000",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Zai Coding Plan (zai-coding-plan)" in result.output
+    assert "providers=zai" in result.output
+    assert "active" in result.output
+
+
+def test_cli_subscriptions_deduplicates_zero_cost_warnings_across_windows(
+    tmp_path,
+) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    source_db = tmp_path / "zai.db"
+    config_path = tmp_path / "toktrail.toml"
+    create_zai_source_db(source_db, source_cost=0.0)
+    config_path.write_text(
+        f"""
+config_version = 1
+
+[imports]
+harnesses = ["opencode"]
+missing_source = "warn"
+include_raw_json = false
+
+[imports.sources]
+opencode = "{source_db}"
+
+[[subscriptions]]
+id = "zai-coding-plan"
+usage_providers = ["zai"]
+display_name = "Zai Coding Plan"
+timezone = "UTC"
+quota_cost_basis = "source"
+
+[[subscriptions.windows]]
+period = "5h"
+limit_usd = 12
+reset_mode = "fixed"
+reset_at = "2023-11-01T00:00:00+00:00"
+
+[[subscriptions.windows]]
+period = "weekly"
+limit_usd = 60
+reset_mode = "fixed"
+reset_at = "2023-11-01T00:00:00+00:00"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "--config",
+            str(config_path),
+            "subscriptions",
+            "--now-ms",
+            "1700000000000",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert result.output.count("zero cost for basis=source") == 1
+
+
+def test_cli_subscriptions_prints_yearly_billing(tmp_path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    source_db = tmp_path / "opencode-go.db"
+    config_path = tmp_path / "toktrail.toml"
+    create_opencode_go_source_db(source_db)
+    config_path.write_text(
+        """
+config_version = 1
+
+[[subscriptions]]
+id = "opencode-go-plan"
+usage_providers = ["opencode-go"]
+display_name = "OpenCode Go"
+timezone = "UTC"
+quota_cost_basis = "source"
+fixed_cost_usd = 120
+fixed_cost_period = "yearly"
+fixed_cost_reset_at = "2026-01-01T00:00:00+00:00"
+
+[[subscriptions.windows]]
+period = "monthly"
+limit_usd = 200
+reset_mode = "fixed"
+reset_at = "2026-05-01T00:00:00+00:00"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "refresh",
+            "--no-session",
+            "--harness",
+            "opencode",
+            "--source",
+            str(source_db),
+        ],
+    )
+    result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "--config",
+            str(config_path),
+            "subscriptions",
+            "--now-ms",
+            "1777802400000",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "yearly" in result.output
+    assert "2026-01-01..2027-01-01" in result.output
+
+
 def test_cli_subscriptions_disabled_window_is_not_printed(tmp_path) -> None:
     runner = CliRunner()
     state_db = tmp_path / "toktrail.db"
@@ -3447,10 +3651,11 @@ def test_cli_subscriptions_disabled_window_is_not_printed(tmp_path) -> None:
 config_version = 1
 
 [[subscriptions]]
-provider = "opencode-go"
+id = "opencode-go"
+usage_providers = ["opencode-go"]
 display_name = "OpenCode Go"
 timezone = "UTC"
-cost_basis = "source"
+quota_cost_basis = "source"
 
 [[subscriptions.windows]]
 period = "5h"
@@ -3497,10 +3702,11 @@ def test_cli_subscriptions_first_use_waiting_human_output_is_clear(tmp_path) -> 
 config_version = 1
 
 [[subscriptions]]
-provider = "codex"
+id = "codex"
+usage_providers = ["codex"]
 display_name = "Codex"
 timezone = "UTC"
-cost_basis = "source"
+quota_cost_basis = "source"
 
 [[subscriptions.windows]]
 period = "5h"

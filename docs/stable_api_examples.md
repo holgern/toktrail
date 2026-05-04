@@ -159,6 +159,10 @@ Each example prints:
 - agent breakdown where available;
 - unconfigured pricing rows.
 
+For subscription reporting, rows are keyed by subscription `id` and expose
+`usage_provider_ids` plus `quota_cost_basis`/`billing_basis` fields when
+`subscription_usage_report()` is used.
+
 ## Ambiguous source sessions
 
 If several source sessions changed while the user was running the harness,

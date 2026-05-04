@@ -758,10 +758,11 @@ def test_summarize_subscription_usage_zai_5h_only(tmp_path: Path) -> None:
     config = CostingConfig(
         subscriptions=(
             SubscriptionConfig(
-                provider="z-ai",
+                id="z-ai-plan",
+                usage_providers=("z-ai",),
                 display_name="z.ai",
                 timezone="UTC",
-                cost_basis="source",
+                quota_cost_basis="source",
                 windows=(
                     SubscriptionWindowConfig(
                         period="5h",
@@ -782,10 +783,72 @@ def test_summarize_subscription_usage_zai_5h_only(tmp_path: Path) -> None:
 
     assert len(report.subscriptions) == 1
     row = report.subscriptions[0]
-    assert row.provider_id == "z-ai"
+    assert row.subscription_id == "z-ai-plan"
+    assert row.usage_provider_ids == ("z-ai",)
     assert [period.period for period in row.periods] == ["5h"]
     assert row.periods[0].used_usd == Decimal("9.0")
     assert row.periods[0].remaining_usd == Decimal("1.0")
+
+
+def test_summarize_subscription_usage_uses_covered_provider_for_first_use_5h(
+    tmp_path: Path,
+) -> None:
+    conn = connect(tmp_path / "toktrail.db")
+    migrate(conn)
+    insert_usage_events(
+        conn,
+        None,
+        [
+            make_usage_event(
+                dedup_suffix="1",
+                provider_id="zai",
+                model_id="glm-4.5",
+                source_cost_usd=0,
+                tokens=TokenBreakdown(input=1_000_000, output=100_000),
+                created_ms=1777890600000,
+            ),
+        ],
+    )
+
+    config = CostingConfig(
+        subscriptions=(
+            SubscriptionConfig(
+                id="zai-coding-plan",
+                display_name="Zai Coding Plan",
+                usage_providers=("zai",),
+                timezone="Europe/Berlin",
+                quota_cost_basis="virtual",
+                windows=(
+                    SubscriptionWindowConfig(
+                        period="5h",
+                        limit_usd=12,
+                        reset_mode="first_use",
+                        reset_at="2026-05-01T00:00:00+02:00",
+                    ),
+                ),
+            ),
+        ),
+        virtual_prices=(
+            make_price(
+                provider="zai",
+                model="glm-4.5",
+                input_usd_per_1m=4.0,
+                output_usd_per_1m=8.0,
+            ),
+        ),
+    )
+
+    report = summarize_subscription_usage(conn, config, now_ms=1777892400000)
+    row = report.subscriptions[0]
+    period = row.periods[0]
+
+    assert row.subscription_id == "zai-coding-plan"
+    assert row.usage_provider_ids == ("zai",)
+    assert period.status == "active"
+    assert period.message_count == 1
+    assert period.since_ms == 1777890600000
+    assert period.until_ms == 1777908600000
+    assert period.used_usd > Decimal("0")
 
 
 def test_summarize_subscription_usage_codex_first_use_5h_and_weekly(
@@ -814,9 +877,10 @@ def test_summarize_subscription_usage_codex_first_use_5h_and_weekly(
     config = CostingConfig(
         subscriptions=(
             SubscriptionConfig(
-                provider="codex",
+                id="codex",
+                usage_providers=("codex",),
                 timezone="UTC",
-                cost_basis="source",
+                quota_cost_basis="source",
                 windows=(
                     SubscriptionWindowConfig(
                         period="5h",
@@ -872,8 +936,9 @@ def test_summarize_subscription_usage_opencode_go_5h_weekly_monthly(
         subscriptions=(
             SubscriptionConfig(
                 timezone="UTC",
-                provider="opencode-go",
-                cost_basis="source",
+                id="opencode-go",
+                usage_providers=("opencode-go",),
+                quota_cost_basis="source",
                 windows=(
                     SubscriptionWindowConfig(
                         period="5h",
@@ -912,8 +977,10 @@ def test_summarize_subscription_usage_disabled_window_is_omitted(
     config = CostingConfig(
         subscriptions=(
             SubscriptionConfig(
-                provider="opencode-go",
+                id="opencode-go",
+                usage_providers=("opencode-go",),
                 timezone="UTC",
+                quota_cost_basis="source",
                 windows=(
                     SubscriptionWindowConfig(
                         period="5h",
@@ -962,8 +1029,10 @@ def test_summarize_subscription_usage_reset_at_excludes_old_usage(
     config = CostingConfig(
         subscriptions=(
             SubscriptionConfig(
-                provider="opencode-go",
+                id="opencode-go",
+                usage_providers=("opencode-go",),
                 timezone="UTC",
+                quota_cost_basis="source",
                 windows=(
                     SubscriptionWindowConfig(
                         period="5h",
@@ -988,7 +1057,8 @@ def test_summarize_subscription_usage_first_use_waiting_returns_zero_usage(
     config = CostingConfig(
         subscriptions=(
             SubscriptionConfig(
-                provider="codex",
+                id="codex",
+                usage_providers=("codex",),
                 timezone="UTC",
                 windows=(
                     SubscriptionWindowConfig(
@@ -1030,7 +1100,8 @@ def test_summarize_subscription_usage_first_use_expired_waiting_returns_zero(
     config = CostingConfig(
         subscriptions=(
             SubscriptionConfig(
-                provider="codex",
+                id="codex",
+                usage_providers=("codex",),
                 timezone="UTC",
                 windows=(
                     SubscriptionWindowConfig(
@@ -1049,6 +1120,9 @@ def test_summarize_subscription_usage_first_use_expired_waiting_returns_zero(
     assert period.status == "expired_waiting_for_next_use"
     assert period.since_ms is None
     assert period.until_ms is None
+    assert period.last_since_ms is not None
+    assert period.last_until_ms is not None
+    assert period.last_usage_ms == 1777799400000
     assert period.used_usd == Decimal("0")
 
 
@@ -1070,9 +1144,10 @@ def test_subscription_billing_break_even_not_reached(tmp_path: Path) -> None:
     config = CostingConfig(
         subscriptions=(
             SubscriptionConfig(
-                provider="opencode-go",
+                id="opencode-go",
+                usage_providers=("opencode-go",),
                 timezone="UTC",
-                cost_basis="source",
+                quota_cost_basis="source",
                 fixed_cost_usd=10.0,
                 fixed_cost_period="monthly",
                 fixed_cost_reset_at="2026-05-01T00:00:00+00:00",
@@ -1116,9 +1191,10 @@ def test_subscription_billing_break_even_reached(tmp_path: Path) -> None:
     config = CostingConfig(
         subscriptions=(
             SubscriptionConfig(
-                provider="opencode-go",
+                id="opencode-go",
+                usage_providers=("opencode-go",),
                 timezone="UTC",
-                cost_basis="source",
+                quota_cost_basis="source",
                 fixed_cost_usd=10.0,
                 fixed_cost_period="monthly",
                 fixed_cost_reset_at="2026-05-01T00:00:00+00:00",
@@ -1169,9 +1245,10 @@ def test_subscription_billing_basis_selects_configured_cost_basis(
     source_basis = CostingConfig(
         subscriptions=(
             SubscriptionConfig(
-                provider="opencode-go",
+                id="opencode-go",
+                usage_providers=("opencode-go",),
                 timezone="UTC",
-                cost_basis="source",
+                quota_cost_basis="source",
                 fixed_cost_usd=10.0,
                 fixed_cost_period="monthly",
                 fixed_cost_reset_at="2026-05-01T00:00:00+00:00",
@@ -1191,9 +1268,10 @@ def test_subscription_billing_basis_selects_configured_cost_basis(
     virtual_basis = CostingConfig(
         subscriptions=(
             SubscriptionConfig(
-                provider="opencode-go",
+                id="opencode-go",
+                usage_providers=("opencode-go",),
                 timezone="UTC",
-                cost_basis="source",
+                quota_cost_basis="source",
                 fixed_cost_usd=10.0,
                 fixed_cost_period="monthly",
                 fixed_cost_reset_at="2026-05-01T00:00:00+00:00",
@@ -1250,9 +1328,10 @@ def test_subscription_billing_window_is_independent_from_quota_windows(
     config = CostingConfig(
         subscriptions=(
             SubscriptionConfig(
-                provider="opencode-go",
+                id="opencode-go",
+                usage_providers=("opencode-go",),
                 timezone="UTC",
-                cost_basis="source",
+                quota_cost_basis="source",
                 fixed_cost_usd=10.0,
                 fixed_cost_period="monthly",
                 fixed_cost_reset_at="2026-05-01T00:00:00+00:00",
@@ -1293,6 +1372,61 @@ def test_subscription_billing_window_is_independent_from_quota_windows(
     assert billing.reset_at == "2026-05-01T00:00:00+00:00"
     assert billing.since_ms == expected.since_ms
     assert billing.until_ms == expected.until_ms
+
+
+def test_subscription_billing_yearly_window(tmp_path: Path) -> None:
+    conn = connect(tmp_path / "toktrail.db")
+    migrate(conn)
+    insert_usage_events(
+        conn,
+        None,
+        [
+            make_usage_event(
+                dedup_suffix="1",
+                provider_id="opencode-go",
+                source_cost_usd=13.0,
+                created_ms=1777799400000,
+            )
+        ],
+    )
+    config = CostingConfig(
+        subscriptions=(
+            SubscriptionConfig(
+                id="opencode-go-plan",
+                usage_providers=("opencode-go",),
+                timezone="UTC",
+                quota_cost_basis="source",
+                fixed_cost_usd=120.0,
+                fixed_cost_period="yearly",
+                fixed_cost_reset_at="2026-01-01T00:00:00+00:00",
+                fixed_cost_basis="virtual",
+                windows=(
+                    SubscriptionWindowConfig(
+                        period="monthly",
+                        limit_usd=200,
+                        reset_mode="fixed",
+                        reset_at="2026-05-01T00:00:00+00:00",
+                    ),
+                ),
+            ),
+        ),
+        virtual_prices=(
+            make_price(
+                provider="opencode-go",
+                model="claude-sonnet-4",
+                input_usd_per_1m=0.0,
+                output_usd_per_1m=13.0,
+            ),
+        ),
+    )
+
+    report = summarize_subscription_usage(conn, config, now_ms=1777802400000)
+    billing = report.subscriptions[0].billing
+    assert billing is not None
+    assert billing.period == "yearly"
+    assert billing.since_ms == 1767225600000
+    assert billing.until_ms == 1798761600000
+    assert billing.billing_basis == "virtual"
 
 
 def test_summarize_usage_bounds_tracking_session_by_run_lifetime(

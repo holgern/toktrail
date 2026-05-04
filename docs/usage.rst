@@ -100,8 +100,8 @@ Provider subscription status
 
 Use ``toktrail subscriptions`` to inspect configured ``[[subscriptions]]`` quota
 windows. The command reports configured windows (for example ``5h``, ``weekly``,
-and ``monthly``) per provider, including ``fixed`` and ``first_use`` reset
-status, used, remaining, and over-limit values.
+``monthly``, and ``yearly``) per subscription, including ``fixed`` and
+``first_use`` reset status, used, remaining, and over-limit values.
 
 .. code-block:: bash
 
@@ -110,6 +110,6 @@ status, used, remaining, and over-limit values.
    toktrail subscriptions --period 5h --json
    toktrail subscriptions --period monthly --json
 
-If ``fixed_cost_usd`` is configured for a provider subscription, the output also
+If ``fixed_cost_usd`` is configured for a subscription, the output also
 includes a billing row with fixed fee, value, net savings, and break-even
 progress for the configured billing period.

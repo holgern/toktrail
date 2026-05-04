@@ -1,7 +1,7 @@
 Configuration
 =============
 
-toktrail reads pricing, refresh defaults, and optional provider subscription quota
+toktrail reads pricing, refresh defaults, and optional subscription quota
 settings from ``config.toml``.
 
 Key sections:
@@ -42,10 +42,11 @@ Example
    missing_price = "warn"
 
    [[subscriptions]]
-   provider = "opencode-go"
+   id = "opencode-go"
+   usage_providers = ["opencode-go"]
    display_name = "OpenCode Go"
    timezone = "Europe/Berlin"
-   cost_basis = "virtual"
+   quota_cost_basis = "virtual"
    fixed_cost_usd = 10
    fixed_cost_period = "monthly"
    fixed_cost_reset_at = "2026-05-01T00:00:00+02:00"
@@ -69,12 +70,14 @@ Example
    reset_mode = "fixed"
    reset_at = "2026-05-01T00:00:00+02:00"
 
-``[[subscriptions]]`` are config-only definitions. They are not stored in the
-state database. Use ``toktrail subscriptions`` to inspect current windows,
-used cost, and remaining quota per configured provider.
+``[[subscriptions]]`` are config-only definitions keyed by ``id`` with explicit
+``usage_providers`` coverage. They are not stored in the state database. Use
+``toktrail subscriptions`` to inspect current windows, used cost, and remaining
+quota per configured subscription.
 
 When ``fixed_cost_usd`` is set, ``toktrail subscriptions`` also reports billing
-value, net savings, and break-even progress for the fixed billing period.
+value, net savings, and break-even progress for the fixed billing period
+(``daily``, ``weekly``, ``monthly``, or ``yearly``).
 
 See ``README.md`` for the canonical CLI workflow and ``API.md`` for the public
 Python integration surface.

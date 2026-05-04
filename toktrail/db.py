@@ -11,6 +11,7 @@ from typing import Any, cast
 
 from toktrail.config import (
     CostingConfig,
+    SubscriptionConfig,
     SubscriptionWindowConfig,
     default_costing_config,
     normalize_identity,
@@ -46,7 +47,13 @@ from toktrail.reporting import (
 )
 
 SCHEMA_VERSION = 5
-_PERIOD_SORT: dict[str, int] = {"5h": 0, "daily": 1, "weekly": 2, "monthly": 3}
+_PERIOD_SORT: dict[str, int] = {
+    "5h": 0,
+    "daily": 1,
+    "weekly": 2,
+    "monthly": 3,
+    "yearly": 4,
+}
 _STATE_METADATA_MACHINE_ID_KEY = "machine_id"
 _STATE_METADATA_CREATED_AT_MS_KEY = "created_at_ms"
 
@@ -1017,11 +1024,15 @@ def summarize_subscription_usage(
         subscription
         for subscription in config.subscriptions
         if subscription.enabled
-        and (provider_filter is None or subscription.provider == provider_filter)
+        and (
+            provider_filter is None
+            or provider_filter in _subscription_usage_provider_ids(subscription)
+        )
     ]
 
     rows: list[SubscriptionUsageRow] = []
-    for subscription in sorted(subscriptions, key=lambda item: item.provider):
+    for subscription in sorted(subscriptions, key=lambda item: item.id):
+        provider_ids = _subscription_usage_provider_ids(subscription)
         periods: list[SubscriptionUsagePeriod] = []
         for window_config in sorted(
             subscription.windows,
@@ -1033,6 +1044,9 @@ def summarize_subscription_usage(
             status = "active"
             since_ms: int | None
             until_ms: int | None
+            last_since_ms: int | None = None
+            last_until_ms: int | None = None
+            last_usage_ms: int | None = None
             if window_config.reset_mode == "fixed":
                 window = resolve_fixed_subscription_window(
                     period=window_config.period,
@@ -1051,7 +1065,7 @@ def summarize_subscription_usage(
                 )
                 usage_timestamps = _provider_usage_timestamps(
                     conn,
-                    provider_id=subscription.provider,
+                    provider_ids=provider_ids,
                     since_ms=reset_anchor.since_ms,
                     until_ms=generated_at_ms,
                 )
@@ -1065,12 +1079,15 @@ def summarize_subscription_usage(
                 status = first_use_window.status
                 since_ms = first_use_window.since_ms
                 until_ms = first_use_window.until_ms
+                last_since_ms = first_use_window.last_since_ms
+                last_until_ms = first_use_window.last_until_ms
+                last_usage_ms = first_use_window.last_usage_ms
 
             if since_ms is not None and until_ms is not None:
                 report = summarize_usage(
                     conn,
                     UsageReportFilter(
-                        provider_id=subscription.provider,
+                        provider_ids=provider_ids,
                         since_ms=since_ms,
                         until_ms=until_ms,
                     ),
@@ -1084,12 +1101,10 @@ def summarize_subscription_usage(
                 tokens = TokenBreakdown()
                 costs = CostTotals()
 
-            if subscription.cost_basis == "source":
-                used_usd = costs.source_cost_usd
-            elif subscription.cost_basis == "actual":
-                used_usd = costs.actual_cost_usd
-            else:
-                used_usd = costs.virtual_cost_usd
+            used_usd = _select_subscription_cost(
+                costs,
+                basis=subscription.quota_cost_basis,
+            )
 
             # Generate warnings for cost issues
             warnings: list[dict[str, object]] = []
@@ -1098,16 +1113,16 @@ def summarize_subscription_usage(
                 for model_row in report.by_model:
                     model_cost = (
                         model_row.source_cost_usd
-                        if subscription.cost_basis == "source"
+                        if subscription.quota_cost_basis == "source"
                         else model_row.actual_cost_usd
-                        if subscription.cost_basis == "actual"
+                        if subscription.quota_cost_basis == "actual"
                         else model_row.virtual_cost_usd
                     )
                     if model_cost == 0 and model_row.message_count > 0:
                         warnings.append(
                             {
                                 "kind": "zero_cost_with_tokens",
-                                "cost_basis": subscription.cost_basis,
+                                "cost_basis": subscription.quota_cost_basis,
                                 "provider_id": model_row.provider_id,
                                 "model_id": model_row.model_id,
                                 "message_count": model_row.message_count,
@@ -1137,6 +1152,9 @@ def summarize_subscription_usage(
                     message_count=message_count,
                     tokens=tokens,
                     costs=costs,
+                    last_since_ms=last_since_ms,
+                    last_until_ms=last_until_ms,
+                    last_usage_ms=last_usage_ms,
                     warnings=tuple(warnings),
                 )
             )
@@ -1165,13 +1183,15 @@ def summarize_subscription_usage(
             billing_report = summarize_usage(
                 conn,
                 UsageReportFilter(
-                    provider_id=subscription.provider,
+                    provider_ids=provider_ids,
                     since_ms=billing_window.since_ms,
                     until_ms=billing_window.until_ms,
                 ),
                 costing_config=config,
             )
-            billing_basis = subscription.fixed_cost_basis or subscription.cost_basis
+            billing_basis = (
+                subscription.fixed_cost_basis or subscription.quota_cost_basis
+            )
             value_usd = _select_subscription_cost(
                 billing_report.totals.costs,
                 basis=billing_basis,
@@ -1187,7 +1207,7 @@ def summarize_subscription_usage(
                 reset_at=billing_reset_at,
                 since_ms=billing_window.since_ms,
                 until_ms=billing_window.until_ms,
-                cost_basis=billing_basis,
+                billing_basis=billing_basis,
                 fixed_cost_usd=fixed_cost_usd,
                 value_usd=value_usd,
                 net_savings_usd=value_usd - fixed_cost_usd,
@@ -1202,10 +1222,11 @@ def summarize_subscription_usage(
 
         rows.append(
             SubscriptionUsageRow(
-                provider_id=subscription.provider,
+                subscription_id=subscription.id,
                 display_name=subscription.label,
                 timezone=subscription.timezone,
-                cost_basis=subscription.cost_basis,
+                usage_provider_ids=provider_ids,
+                quota_cost_basis=subscription.quota_cost_basis,
                 periods=tuple(periods),
                 billing=billing,
             )
@@ -1228,6 +1249,12 @@ def _subscription_reset_at_from_windows(
     return None
 
 
+def _subscription_usage_provider_ids(
+    subscription: SubscriptionConfig,
+) -> tuple[str, ...]:
+    return tuple(subscription.usage_providers)
+
+
 def _select_subscription_cost(costs: CostTotals, *, basis: str) -> Decimal:
     if basis == "source":
         return costs.source_cost_usd
@@ -1242,20 +1269,23 @@ def _select_subscription_cost(costs: CostTotals, *, basis: str) -> Decimal:
 def _provider_usage_timestamps(
     conn: sqlite3.Connection,
     *,
-    provider_id: str,
+    provider_ids: tuple[str, ...],
     since_ms: int,
     until_ms: int,
 ) -> list[int]:
+    if not provider_ids:
+        return []
+    placeholders = ", ".join("?" for _ in provider_ids)
     rows = conn.execute(
-        """
+        f"""
         SELECT created_ms
         FROM usage_events
-        WHERE provider_id = ?
+        WHERE provider_id IN ({placeholders})
           AND created_ms >= ?
           AND created_ms <= ?
         ORDER BY created_ms ASC
         """,
-        (provider_id, since_ms, until_ms),
+        (*provider_ids, since_ms, until_ms),
     ).fetchall()
     return [_required_int(row["created_ms"]) for row in rows]
 
@@ -1522,9 +1552,19 @@ def _usage_report_query_parts(
     if filters.source_session_id is not None:
         clauses.append("ue.source_session_id = ?")
         params.append(filters.source_session_id)
+    if filters.provider_id is not None and filters.provider_ids:
+        msg = "provider_id and provider_ids cannot both be set."
+        raise ValueError(msg)
     if filters.provider_id is not None:
         clauses.append("ue.provider_id = ?")
         params.append(filters.provider_id)
+    elif filters.provider_ids:
+        normalized_provider_ids = tuple(
+            normalize_identity(provider_id) for provider_id in filters.provider_ids
+        )
+        placeholders = ", ".join("?" for _ in normalized_provider_ids)
+        clauses.append(f"ue.provider_id IN ({placeholders})")
+        params.extend(normalized_provider_ids)
     if filters.model_id is not None:
         clauses.append("ue.model_id = ?")
         params.append(filters.model_id)

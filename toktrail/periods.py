@@ -9,7 +9,7 @@ from typing import Literal, cast
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 Granularity = Literal["daily", "weekly", "monthly"]
-SubscriptionWindowPeriod = Literal["5h", "daily", "weekly", "monthly"]
+SubscriptionWindowPeriod = Literal["5h", "daily", "weekly", "monthly", "yearly"]
 Weekday = Literal[
     "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"
 ]
@@ -48,6 +48,9 @@ class ResolvedFirstUseWindow:
     status: str
     since_ms: int | None
     until_ms: int | None
+    last_since_ms: int | None = None
+    last_until_ms: int | None = None
+    last_usage_ms: int | None = None
 
 
 def current_time_in_zone(tz: tzinfo) -> datetime:
@@ -202,8 +205,8 @@ def resolve_fixed_subscription_window(
     now_ms: int | None = None,
 ) -> SubscriptionCycleWindow:
     normalized_period = period.strip().lower()
-    if normalized_period not in {"5h", "daily", "weekly", "monthly"}:
-        msg = "period must be one of: 5h, daily, weekly, monthly."
+    if normalized_period not in {"5h", "daily", "weekly", "monthly", "yearly"}:
+        msg = "period must be one of: 5h, daily, weekly, monthly, yearly."
         raise ValueError(msg)
 
     tz = resolve_timezone(timezone_name=timezone_name, utc=False)
@@ -227,6 +230,14 @@ def resolve_fixed_subscription_window(
         elapsed = now - reset_at_dt
         offset = int(elapsed // timedelta(days=7))
         since = reset_at_dt + timedelta(days=offset * 7)
+    elif normalized_period == "yearly":
+        month_offset = _month_offset_for_timestamp(reset_at_dt, now)
+        year_offset = month_offset // 12
+        since = _add_months_with_clamp(reset_at_dt, year_offset * 12)
+        while _add_months_with_clamp(since, 12) <= now:
+            since = _add_months_with_clamp(since, 12)
+        while since > now:
+            since = _add_months_with_clamp(since, -12)
     else:
         month_offset = _month_offset_for_timestamp(reset_at_dt, now)
         since = _add_months_with_clamp(reset_at_dt, month_offset)
@@ -237,6 +248,8 @@ def resolve_fixed_subscription_window(
         until = since + timedelta(days=1)
     elif normalized_period == "weekly":
         until = since + timedelta(days=7)
+    elif normalized_period == "yearly":
+        until = _add_months_with_clamp(since, 12)
     else:
         until = _add_months_with_clamp(since, 1)
 
@@ -273,8 +286,8 @@ def resolve_first_use_subscription_window(
     now_ms: int | None = None,
 ) -> ResolvedFirstUseWindow:
     normalized_period = period.strip().lower()
-    if normalized_period not in {"5h", "daily", "weekly", "monthly"}:
-        msg = "period must be one of: 5h, daily, weekly, monthly."
+    if normalized_period not in {"5h", "daily", "weekly", "monthly", "yearly"}:
+        msg = "period must be one of: 5h, daily, weekly, monthly, yearly."
         raise ValueError(msg)
 
     tz = resolve_timezone(timezone_name=timezone_name, utc=False)
@@ -314,6 +327,9 @@ def resolve_first_use_subscription_window(
             status="expired_waiting_for_next_use",
             since_ms=None,
             until_ms=None,
+            last_since_ms=_datetime_to_ms(current_start),
+            last_until_ms=_datetime_to_ms(current_until),
+            last_usage_ms=relevant[-1] if relevant else None,
         )
 
     return ResolvedFirstUseWindow(
@@ -352,6 +368,8 @@ def _window_end(start: datetime, period: str) -> datetime:
         return start + timedelta(days=7)
     if period == "monthly":
         return _add_months_with_clamp(start, 1)
+    if period == "yearly":
+        return _add_months_with_clamp(start, 12)
     msg = f"Unsupported period: {period}"
     raise ValueError(msg)
 

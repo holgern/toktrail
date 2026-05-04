@@ -235,10 +235,11 @@ def test_load_costing_config_parses_subscription_windows(tmp_path) -> None:
 config_version = 1
 
 [[subscriptions]]
-provider = "OpenCode Go"
+id = "OpenCode Go"
+usage_providers = ["OpenCode Go"]
 display_name = "OpenCode Go"
 timezone = "Europe/Berlin"
-cost_basis = "source"
+quota_cost_basis = "source"
 enabled = true
 
 [[subscriptions.windows]]
@@ -269,10 +270,11 @@ enabled = false
 
     assert len(config.subscriptions) == 1
     subscription = config.subscriptions[0]
-    assert subscription.provider == "opencode-go"
+    assert subscription.id == "opencode-go"
+    assert subscription.usage_providers == ("opencode-go",)
     assert subscription.display_name == "OpenCode Go"
     assert subscription.timezone == "Europe/Berlin"
-    assert subscription.cost_basis == "source"
+    assert subscription.quota_cost_basis == "source"
     assert [window.period for window in subscription.windows] == [
         "5h",
         "weekly",
@@ -285,7 +287,7 @@ enabled = false
     assert subscription.enabled is True
 
 
-def test_load_costing_config_subscription_defaults_cost_basis_and_enabled(
+def test_load_costing_config_subscription_defaults_quota_basis_and_enabled(
     tmp_path,
 ) -> None:
     config_path = tmp_path / "toktrail.toml"
@@ -294,7 +296,8 @@ def test_load_costing_config_subscription_defaults_cost_basis_and_enabled(
 config_version = 1
 
 [[subscriptions]]
-provider = "anthropic"
+id = "anthropic-pro-plan"
+usage_providers = ["anthropic"]
 [[subscriptions.windows]]
 period = "monthly"
 limit_usd = 100
@@ -306,9 +309,9 @@ reset_at = "2026-05-01"
     config = load_costing_config(config_path)
 
     subscription = config.subscriptions[0]
-    assert subscription.cost_basis == "source"
+    assert subscription.quota_cost_basis == "virtual"
     assert subscription.fixed_cost_period == "monthly"
-    assert subscription.fixed_cost_basis == "source"
+    assert subscription.fixed_cost_basis is None
     assert subscription.fixed_cost_usd is None
     assert subscription.fixed_cost_reset_at == "2026-05-01"
     assert subscription.enabled is True
@@ -323,8 +326,9 @@ def test_load_costing_config_parses_fixed_subscription_billing_fields(tmp_path) 
 config_version = 1
 
 [[subscriptions]]
-provider = "opencode-go"
-cost_basis = "virtual"
+id = "opencode-go"
+usage_providers = ["opencode-go"]
+quota_cost_basis = "virtual"
 fixed_cost_usd = 10
 fixed_cost_period = "monthly"
 fixed_cost_reset_at = "2026-05-01T00:00:00+02:00"
@@ -353,7 +357,8 @@ def test_load_costing_config_rejects_negative_fixed_cost_usd(tmp_path) -> None:
 config_version = 1
 
 [[subscriptions]]
-provider = "opencode-go"
+id = "opencode-go"
+usage_providers = ["opencode-go"]
 fixed_cost_usd = -1
 [[subscriptions.windows]]
 period = "monthly"
@@ -374,7 +379,8 @@ def test_load_costing_config_rejects_invalid_fixed_cost_period(tmp_path) -> None
 config_version = 1
 
 [[subscriptions]]
-provider = "opencode-go"
+id = "opencode-go"
+usage_providers = ["opencode-go"]
 fixed_cost_usd = 10
 fixed_cost_period = "5h"
 [[subscriptions.windows]]
@@ -389,6 +395,32 @@ reset_at = "2026-05-01"
         load_costing_config(config_path)
 
 
+def test_load_costing_config_parses_yearly_fixed_cost_period(tmp_path) -> None:
+    config_path = tmp_path / "toktrail.toml"
+    config_path.write_text(
+        """
+config_version = 1
+
+[[subscriptions]]
+id = "opencode-go"
+usage_providers = ["opencode-go"]
+fixed_cost_usd = 120
+fixed_cost_period = "yearly"
+fixed_cost_reset_at = "2026-01-01T00:00:00+00:00"
+
+[[subscriptions.windows]]
+period = "monthly"
+limit_usd = 100
+reset_at = "2026-01-01T00:00:00+00:00"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    config = load_costing_config(config_path)
+    subscription = config.subscriptions[0]
+    assert subscription.fixed_cost_period == "yearly"
+
+
 def test_load_costing_config_rejects_fixed_cost_without_reset_anchor(tmp_path) -> None:
     config_path = tmp_path / "toktrail.toml"
     config_path.write_text(
@@ -396,7 +428,8 @@ def test_load_costing_config_rejects_fixed_cost_without_reset_anchor(tmp_path) -
 config_version = 1
 
 [[subscriptions]]
-provider = "opencode-go"
+id = "opencode-go"
+usage_providers = ["opencode-go"]
 fixed_cost_usd = 10
 fixed_cost_period = "monthly"
 [[subscriptions.windows]]
@@ -418,7 +451,8 @@ def test_load_costing_config_rejects_subscription_without_windows(tmp_path) -> N
 config_version = 1
 
 [[subscriptions]]
-provider = "anthropic"
+id = "anthropic-pro-plan"
+usage_providers = ["anthropic"]
 """.strip(),
         encoding="utf-8",
     )
@@ -427,15 +461,18 @@ provider = "anthropic"
         load_costing_config(config_path)
 
 
-def test_load_costing_config_rejects_invalid_subscription_cost_basis(tmp_path) -> None:
+def test_load_costing_config_rejects_invalid_subscription_quota_cost_basis(
+    tmp_path,
+) -> None:
     config_path = tmp_path / "toktrail.toml"
     config_path.write_text(
         """
 config_version = 1
 
 [[subscriptions]]
-provider = "anthropic"
-cost_basis = "other"
+id = "anthropic-pro-plan"
+usage_providers = ["anthropic"]
+quota_cost_basis = "other"
 [[subscriptions.windows]]
 period = "monthly"
 limit_usd = 100
@@ -444,11 +481,13 @@ reset_at = "2026-05-01"
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="cost_basis"):
+    with pytest.raises(ValueError, match="quota_cost_basis"):
         load_costing_config(config_path)
 
 
-def test_load_costing_config_rejects_duplicate_subscription_provider(tmp_path) -> None:
+def test_load_costing_config_rejects_subscription_provider_key_pre_release(
+    tmp_path,
+) -> None:
     config_path = tmp_path / "toktrail.toml"
     config_path.write_text(
         """
@@ -456,13 +495,59 @@ config_version = 1
 
 [[subscriptions]]
 provider = "OpenCode Go"
+usage_providers = ["opencode-go"]
+[[subscriptions.windows]]
+period = "monthly"
+limit_usd = 100
+reset_at = "2026-05-01"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="unsupported keys"):
+        load_costing_config(config_path)
+
+
+def test_load_costing_config_rejects_empty_usage_providers(tmp_path) -> None:
+    config_path = tmp_path / "toktrail.toml"
+    config_path.write_text(
+        """
+config_version = 1
+
+[[subscriptions]]
+id = "opencode-go"
+usage_providers = []
+[[subscriptions.windows]]
+period = "monthly"
+limit_usd = 100
+reset_at = "2026-05-01"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="must contain at least one provider"):
+        load_costing_config(config_path)
+
+
+def test_load_costing_config_rejects_duplicate_enabled_subscription_id(
+    tmp_path,
+) -> None:
+    config_path = tmp_path / "toktrail.toml"
+    config_path.write_text(
+        """
+config_version = 1
+
+[[subscriptions]]
+id = "OpenCode Go"
+usage_providers = ["opencode-go"]
 [[subscriptions.windows]]
 period = "monthly"
 limit_usd = 100
 reset_at = "2026-05-01"
 
 [[subscriptions]]
-provider = "opencode-go"
+id = "opencode-go"
+usage_providers = ["opencode-go-proxy"]
 [[subscriptions.windows]]
 period = "monthly"
 limit_usd = 200
@@ -471,7 +556,38 @@ reset_at = "2026-05-01"
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="duplicates enabled provider"):
+    with pytest.raises(ValueError, match="duplicates enabled subscription id"):
+        load_costing_config(config_path)
+
+
+def test_load_costing_config_rejects_overlapping_enabled_usage_provider(
+    tmp_path,
+) -> None:
+    config_path = tmp_path / "toktrail.toml"
+    config_path.write_text(
+        """
+config_version = 1
+
+[[subscriptions]]
+id = "zai-coding-plan"
+usage_providers = ["zai"]
+[[subscriptions.windows]]
+period = "monthly"
+limit_usd = 100
+reset_at = "2026-05-01"
+
+[[subscriptions]]
+id = "zai-enterprise-plan"
+usage_providers = ["zai", "zai-enterprise"]
+[[subscriptions.windows]]
+period = "monthly"
+limit_usd = 200
+reset_at = "2026-05-01"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="overlaps enabled usage provider"):
         load_costing_config(config_path)
 
 
@@ -484,7 +600,8 @@ def test_load_costing_config_rejects_non_positive_subscription_window_limits(
 config_version = 1
 
 [[subscriptions]]
-provider = "anthropic"
+id = "anthropic-pro-plan"
+usage_providers = ["anthropic"]
 [[subscriptions.windows]]
 period = "daily"
 limit_usd = 0
@@ -501,7 +618,8 @@ reset_at = "2026-05-01"
 config_version = 1
 
 [[subscriptions]]
-provider = "anthropic"
+id = "anthropic-pro-plan"
+usage_providers = ["anthropic"]
 [[subscriptions.windows]]
 period = "daily"
 limit_usd = -1
@@ -523,7 +641,8 @@ def test_load_costing_config_rejects_duplicate_enabled_subscription_window_perio
 config_version = 1
 
 [[subscriptions]]
-provider = "anthropic"
+id = "anthropic-pro-plan"
+usage_providers = ["anthropic"]
 
 [[subscriptions.windows]]
 period = "weekly"
@@ -551,7 +670,8 @@ def test_load_costing_config_allows_disabled_duplicate_subscription_window_perio
 config_version = 1
 
 [[subscriptions]]
-provider = "anthropic"
+id = "anthropic-pro-plan"
+usage_providers = ["anthropic"]
 
 [[subscriptions.windows]]
 period = "weekly"
@@ -581,7 +701,8 @@ def test_load_costing_config_rejects_invalid_subscription_window_period(
 config_version = 1
 
 [[subscriptions]]
-provider = "anthropic"
+id = "anthropic-pro-plan"
+usage_providers = ["anthropic"]
 [[subscriptions.windows]]
 period = "hourly"
 limit_usd = 100
@@ -603,7 +724,8 @@ def test_load_costing_config_rejects_invalid_subscription_window_reset_mode(
 config_version = 1
 
 [[subscriptions]]
-provider = "anthropic"
+id = "anthropic-pro-plan"
+usage_providers = ["anthropic"]
 [[subscriptions.windows]]
 period = "monthly"
 limit_usd = 100
@@ -626,7 +748,8 @@ def test_load_costing_config_rejects_invalid_subscription_window_reset_at(
 config_version = 1
 
 [[subscriptions]]
-provider = "anthropic"
+id = "anthropic-pro-plan"
+usage_providers = ["anthropic"]
 [[subscriptions.windows]]
 period = "monthly"
 limit_usd = 100
@@ -648,7 +771,8 @@ def test_load_costing_config_rejects_old_flat_subscription_limit_fields(
 config_version = 1
 
 [[subscriptions]]
-provider = "anthropic"
+id = "anthropic-pro-plan"
+usage_providers = ["anthropic"]
 cycle_start = "2026-05-01"
 monthly_limit_usd = 100
 """.strip(),
@@ -666,7 +790,8 @@ def test_summarize_costing_config_includes_subscription_count(tmp_path) -> None:
 config_version = 1
 
 [[subscriptions]]
-provider = "anthropic"
+id = "anthropic-pro-plan"
+usage_providers = ["anthropic"]
 [[subscriptions.windows]]
 period = "monthly"
 limit_usd = 100

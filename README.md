@@ -186,10 +186,11 @@ claude = "~/.claude/projects"
 
 ```toml
 [[subscriptions]]
-provider = "opencode-go"
+id = "opencode-go"
+usage_providers = ["opencode-go"]
 display_name = "OpenCode Go"
 timezone = "Europe/Berlin"
-cost_basis = "virtual"
+quota_cost_basis = "virtual"
 fixed_cost_usd = 10.00
 fixed_cost_period = "monthly"
 fixed_cost_reset_at = "2026-05-01T00:00:00+02:00"
@@ -211,6 +212,26 @@ reset_at = "2026-05-01T00:00:00+02:00"
 period = "monthly"
 limit_usd = 60
 reset_mode = "fixed"
+reset_at = "2026-05-01T00:00:00+02:00"
+```
+
+```toml
+
+[[subscriptions]]
+id = "zai-coding-plan"
+usage_providers = ["zai"]
+display_name = "Zai Coding Plan"
+timezone = "Asia/Singapore"
+quota_cost_basis = "virtual"
+fixed_cost_usd = 36.00
+fixed_cost_period = "yearly"
+fixed_cost_reset_at = "2025-09-01T00:00:00+02:00"
+fixed_cost_basis = "virtual"
+
+[[subscriptions.windows]]
+period = "5h"
+limit_usd = 10
+reset_mode = "first_use"
 reset_at = "2026-05-01T00:00:00+02:00"
 ```
 

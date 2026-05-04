@@ -580,8 +580,10 @@ def subscriptions_status(
     raw: RawModeOption = None,
 ) -> None:
     normalized_period = period.strip().lower()
-    if normalized_period not in {"all", "5h", "daily", "weekly", "monthly"}:
-        _exit_with_error("--period must be one of: all, 5h, daily, weekly, monthly.")
+    if normalized_period not in {"all", "5h", "daily", "weekly", "monthly", "yearly"}:
+        _exit_with_error(
+            "--period must be one of: all, 5h, daily, weekly, monthly, yearly."
+        )
 
     refresh_results = _refresh_before_report(
         ctx,
@@ -1211,9 +1213,11 @@ def _print_subscription_usage_report(
     for subscription in report.subscriptions:
         typer.echo("")
         timezone_label = subscription.timezone or "(local)"
+        providers = ",".join(subscription.usage_provider_ids)
         typer.echo(
-            f"{subscription.display_name} ({subscription.provider_id})  "
-            f"basis={subscription.cost_basis}  "
+            f"{subscription.display_name} ({subscription.subscription_id})  "
+            f"providers={providers}  "
+            f"quota_basis={subscription.quota_cost_basis}  "
             f"timezone={timezone_label}"
         )
         if subscription.billing is not None:
@@ -1232,16 +1236,26 @@ def _print_subscription_usage_report(
                         ),
                         "fixed": _format_cost(billing.fixed_cost_usd),
                         "value": _format_cost(billing.value_usd),
+                        "billing_basis": billing.billing_basis,
                         "net_savings": _format_cost(billing.net_savings_usd),
                         "break_even": _format_break_even(billing),
                     }
                 ],
-                ["period", "window", "fixed", "value", "net_savings", "break_even"],
+                [
+                    "period",
+                    "window",
+                    "fixed",
+                    "value",
+                    "billing_basis",
+                    "net_savings",
+                    "break_even",
+                ],
                 {
                     "period": "period",
                     "window": "window",
                     "fixed": "fixed",
                     "value": "value",
+                    "billing_basis": "billing basis",
                     "net_savings": "net savings",
                     "break_even": "break-even",
                 },
@@ -1264,6 +1278,8 @@ def _print_subscription_usage_report(
                         period.until_ms,
                         timezone_name=subscription.timezone,
                         status=period.status,
+                        last_since_ms=period.last_since_ms,
+                        last_until_ms=period.last_until_ms,
                     ),
                     "reset": f"{period.reset_mode} @ {period.reset_at}",
                     "limit": _format_cost(period.limit_usd),
@@ -1273,6 +1289,20 @@ def _print_subscription_usage_report(
                 }
             )
             all_warnings.extend(period.warnings)
+        deduped_warnings: list[dict[str, object]] = []
+        seen_warning_keys: set[tuple[object, ...]] = set()
+        for warning in all_warnings:
+            key = (
+                warning.get("kind"),
+                warning.get("cost_basis"),
+                warning.get("provider_id"),
+                warning.get("model_id"),
+                warning.get("message_count"),
+            )
+            if key in seen_warning_keys:
+                continue
+            seen_warning_keys.add(key)
+            deduped_warnings.append(warning)
         _print_table(
             rows,
             [
@@ -1297,10 +1327,10 @@ def _print_subscription_usage_report(
             },
             rich_output=rich_output,
         )
-        if all_warnings:
+        if deduped_warnings:
             typer.echo("")
             typer.echo("Warnings")
-            for warning in all_warnings:
+            for warning in deduped_warnings:
                 if warning.get("kind") == "zero_cost_with_tokens":
                     provider = warning.get("provider_id")
                     model = warning.get("model_id")
@@ -1329,6 +1359,8 @@ def _format_subscription_window(
     *,
     timezone_name: str | None,
     status: str,
+    last_since_ms: int | None = None,
+    last_until_ms: int | None = None,
 ) -> str:
     from toktrail.periods import resolve_timezone
 
@@ -1336,6 +1368,22 @@ def _format_subscription_window(
         if status == "waiting_for_first_use":
             return "starts on first use"
         if status == "expired_waiting_for_next_use":
+            if last_since_ms is not None and last_until_ms is not None:
+                tz = resolve_timezone(timezone_name=timezone_name, utc=False)
+                last_since_dt = datetime.datetime.fromtimestamp(
+                    last_since_ms / 1000,
+                    tz=tz,
+                )
+                last_until_dt = datetime.datetime.fromtimestamp(
+                    last_until_ms / 1000,
+                    tz=tz,
+                )
+                last_since_str = last_since_dt.strftime("%Y-%m-%d %H:%M")
+                last_until_str = last_until_dt.strftime("%Y-%m-%d %H:%M")
+                return (
+                    f"expired; last {last_since_str}..{last_until_str}; "
+                    "next starts on first use"
+                )
             return "expired; next starts on first use"
         return "(none)"
 

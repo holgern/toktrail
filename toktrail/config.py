@@ -18,9 +18,9 @@ VirtualCostMode = Literal["zero", "pricing"]
 MissingPriceMode = Literal["zero", "warn"]
 ImportMissingSourceMode = Literal["warn", "error", "skip"]
 SubscriptionCostBasis = Literal["source", "actual", "virtual"]
-SubscriptionWindowPeriod = Literal["5h", "daily", "weekly", "monthly"]
+SubscriptionWindowPeriod = Literal["5h", "daily", "weekly", "monthly", "yearly"]
 SubscriptionWindowResetMode = Literal["fixed", "first_use"]
-SubscriptionFixedCostPeriod = Literal["daily", "weekly", "monthly"]
+SubscriptionFixedCostPeriod = Literal["daily", "weekly", "monthly", "yearly"]
 
 CONFIG_VERSION = 1
 DEFAULT_TEMPLATE_NAME = "default"
@@ -30,9 +30,9 @@ _VALID_VIRTUAL_COST_MODES = {"zero", "pricing"}
 _VALID_MISSING_PRICE_MODES = {"zero", "warn"}
 _VALID_IMPORT_MISSING_SOURCE_MODES = {"warn", "error", "skip"}
 _VALID_SUBSCRIPTION_COST_BASES = {"source", "actual", "virtual"}
-_VALID_SUBSCRIPTION_WINDOW_PERIODS = {"5h", "daily", "weekly", "monthly"}
+_VALID_SUBSCRIPTION_WINDOW_PERIODS = {"5h", "daily", "weekly", "monthly", "yearly"}
 _VALID_SUBSCRIPTION_WINDOW_RESET_MODES = {"fixed", "first_use"}
-_VALID_SUBSCRIPTION_FIXED_COST_PERIODS = {"daily", "weekly", "monthly"}
+_VALID_SUBSCRIPTION_FIXED_COST_PERIODS = {"daily", "weekly", "monthly", "yearly"}
 _PRICE_FIELDS = {
     "provider",
     "model",
@@ -56,10 +56,11 @@ _COSTING_FIELDS = {
 }
 _PRICING_FIELDS = {"virtual", "actual"}
 _SUBSCRIPTION_FIELDS = {
-    "provider",
+    "id",
     "display_name",
     "timezone",
-    "cost_basis",
+    "usage_providers",
+    "quota_cost_basis",
     "fixed_cost_usd",
     "fixed_cost_period",
     "fixed_cost_reset_at",
@@ -124,10 +125,11 @@ default_virtual_mode = "pricing"
 missing_price = "warn"
 
 # [[subscriptions]]
-# provider = "opencode-go"
+# id = "opencode-go"
 # display_name = "OpenCode Go"
 # timezone = "Europe/Berlin"
-# cost_basis = "source"
+# usage_providers = ["opencode-go"]
+# quota_cost_basis = "virtual"
 # fixed_cost_usd = 10.00
 # fixed_cost_period = "monthly"
 # fixed_cost_reset_at = "2026-05-01T00:00:00+02:00"
@@ -216,10 +218,11 @@ missing_price = "warn"
 price_profile = "copilot-public-api-equivalent"
 
 # [[subscriptions]]
-# provider = "opencode-go"
+# id = "opencode-go"
 # display_name = "OpenCode Go"
 # timezone = "Europe/Berlin"
-# cost_basis = "source"
+# usage_providers = ["opencode-go"]
+# quota_cost_basis = "virtual"
 # fixed_cost_usd = 10.00
 # fixed_cost_period = "monthly"
 # fixed_cost_reset_at = "2026-05-01T00:00:00+02:00"
@@ -571,10 +574,11 @@ class SubscriptionWindowConfig:
 
 @dataclass(frozen=True)
 class SubscriptionConfig:
-    provider: str
+    id: str
+    usage_providers: tuple[str, ...]
     display_name: str | None = None
     timezone: str | None = None
-    cost_basis: SubscriptionCostBasis = "source"
+    quota_cost_basis: SubscriptionCostBasis = "virtual"
     fixed_cost_usd: float | None = None
     fixed_cost_period: SubscriptionFixedCostPeriod = "monthly"
     fixed_cost_reset_at: str | None = None
@@ -584,7 +588,7 @@ class SubscriptionConfig:
 
     @property
     def label(self) -> str:
-        return self.display_name or self.provider
+        return self.display_name or self.id
 
 
 @dataclass(frozen=True)
@@ -882,7 +886,8 @@ def _parse_subscriptions(value: object) -> tuple[SubscriptionConfig, ...]:
         raise ValueError(msg)
 
     subscriptions: list[SubscriptionConfig] = []
-    enabled_providers: set[str] = set()
+    enabled_subscription_ids: set[str] = set()
+    enabled_usage_provider_owner: dict[str, str] = {}
     for index, raw_subscription in enumerate(value, start=1):
         if not isinstance(raw_subscription, dict):
             msg = f"subscriptions[{index}] must be a TOML table."
@@ -892,11 +897,15 @@ def _parse_subscriptions(value: object) -> tuple[SubscriptionConfig, ...]:
             _SUBSCRIPTION_FIELDS,
             context=f"subscriptions[{index}]",
         )
-        provider_text = _parse_required_identity(
-            raw_subscription.get("provider"),
-            context=f"subscriptions[{index}].provider",
+        subscription_id_text = _parse_required_identity(
+            raw_subscription.get("id"),
+            context=f"subscriptions[{index}].id",
         )
-        provider = normalize_identity(provider_text)
+        subscription_id = normalize_identity(subscription_id_text)
+        usage_providers = _parse_required_identity_list(
+            raw_subscription.get("usage_providers"),
+            context=f"subscriptions[{index}].usage_providers",
+        )
         display_name = _parse_optional_string(
             raw_subscription.get("display_name"),
             context=f"subscriptions[{index}].display_name",
@@ -905,12 +914,12 @@ def _parse_subscriptions(value: object) -> tuple[SubscriptionConfig, ...]:
             raw_subscription.get("timezone"),
             context=f"subscriptions[{index}].timezone",
         )
-        cost_basis = cast(
+        quota_cost_basis = cast(
             SubscriptionCostBasis,
             _parse_choice(
-                raw_subscription.get("cost_basis", "source"),
+                raw_subscription.get("quota_cost_basis", "virtual"),
                 valid=_VALID_SUBSCRIPTION_COST_BASES,
-                context=f"subscriptions[{index}].cost_basis",
+                context=f"subscriptions[{index}].quota_cost_basis",
             ),
         )
         fixed_cost_usd = _parse_non_negative_float(
@@ -971,25 +980,36 @@ def _parse_subscriptions(value: object) -> tuple[SubscriptionConfig, ...]:
             context=f"subscriptions[{index}].enabled",
         )
 
-        if enabled and provider in enabled_providers:
+        if enabled and subscription_id in enabled_subscription_ids:
             msg = (
-                f"subscriptions[{index}].provider duplicates enabled provider "
-                f"{provider!r}."
+                f"subscriptions[{index}].id duplicates enabled subscription id "
+                f"{subscription_id!r}."
             )
             raise ValueError(msg)
         if enabled:
-            enabled_providers.add(provider)
+            enabled_subscription_ids.add(subscription_id)
+            for usage_provider in usage_providers:
+                existing_owner = enabled_usage_provider_owner.get(usage_provider)
+                if existing_owner is not None and existing_owner != subscription_id:
+                    msg = (
+                        f"subscriptions[{index}].usage_providers overlaps enabled "
+                        f"usage provider {usage_provider!r} already owned by "
+                        f"subscription {existing_owner!r}."
+                    )
+                    raise ValueError(msg)
+                enabled_usage_provider_owner[usage_provider] = subscription_id
 
         subscriptions.append(
             SubscriptionConfig(
-                provider=provider,
+                id=subscription_id,
+                usage_providers=usage_providers,
                 display_name=display_name,
                 timezone=timezone_name,
-                cost_basis=cost_basis,
+                quota_cost_basis=quota_cost_basis,
                 fixed_cost_usd=fixed_cost_usd,
                 fixed_cost_period=fixed_cost_period,
                 fixed_cost_reset_at=fixed_cost_reset_at,
-                fixed_cost_basis=fixed_cost_basis or cost_basis,
+                fixed_cost_basis=fixed_cost_basis,
                 windows=windows,
                 enabled=enabled,
             )
@@ -1352,6 +1372,26 @@ def _parse_optional_string(value: object, *, context: str) -> str | None:
         return None
     text = _parse_string(value, context=context)
     return text or None
+
+
+def _parse_required_identity_list(value: object, *, context: str) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        msg = f"{context} must be a list of identity strings."
+        raise ValueError(msg)
+    providers: list[str] = []
+    seen: set[str] = set()
+    for index, item in enumerate(value, start=1):
+        normalized = normalize_identity(
+            _parse_required_identity(item, context=f"{context}[{index}]")
+        )
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        providers.append(normalized)
+    if not providers:
+        msg = f"{context} must contain at least one provider."
+        raise ValueError(msg)
+    return tuple(providers)
 
 
 def _parse_string(value: object, *, context: str) -> str:
