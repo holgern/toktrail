@@ -210,6 +210,8 @@ def usage_series_report(
                 breakdown=breakdown,
                 start_of_week=start_of_week,
                 locale=None,
+                timezone_name=timezone,
+                utc=utc,
             ),
             costing_config=costing_config,
         )
@@ -299,10 +301,60 @@ def usage_sessions_report(
     return _to_public_usage_sessions_report(report)
 
 
+def usage_runs_report(
+    db_path: Path | None = None,
+    *,
+    since_ms: int | None = None,
+    until_ms: int | None = None,
+    provider_id: str | None = None,
+    model_id: str | None = None,
+    thinking_level: str | None = None,
+    agent: str | None = None,
+    limit: int | None = 10,
+    order: str = "desc",
+    split_thinking: bool = False,
+    config_path: Path | None = None,
+) -> object:
+    from toktrail.db import migrate, summarize_usage_runs
+    from toktrail.reporting import UsageRunsFilter
+
+    if order not in ("asc", "desc"):
+        msg = f"Invalid order: {order!r}. Use asc or desc."
+        raise InvalidAPIUsageError(msg)
+    if limit is not None and limit < 0:
+        msg = f"Invalid limit: {limit}. Must be non-negative."
+        raise InvalidAPIUsageError(msg)
+
+    conn, _ = _open_state_db(db_path)
+    try:
+        migrate(conn)
+        costing_config = _load_costing_config(config_path)
+        report = summarize_usage_runs(
+            conn,
+            UsageRunsFilter(
+                provider_id=provider_id,
+                model_id=model_id,
+                thinking_level=thinking_level,
+                agent=agent,
+                since_ms=since_ms,
+                until_ms=until_ms,
+                split_thinking=split_thinking,
+                limit=limit,
+                order=order,
+            ),
+            costing_config=costing_config,
+        )
+    finally:
+        conn.close()
+
+    return report
+
+
 __all__ = [
     "session_report",
     "usage_report",
     "usage_series_report",
     "usage_sessions_report",
     "subscription_usage_report",
+    "usage_runs_report",
 ]

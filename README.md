@@ -127,12 +127,14 @@ toktrail usage --since 2026-05-01 --until 2026-06-01 --timezone Europe/Berlin
 toktrail usage --price-state priced --sort provider --limit 10 --json
 toktrail usage today --no-refresh
 toktrail usage today --refresh-details
+toktrail usage sessions --last
+toktrail usage sessions --order asc --limit 10
+toktrail usage runs --last --limit 5
 toktrail subscriptions
 toktrail subscriptions --provider opencode-go --json
 toktrail sync export --out toktrail-state.tar.gz --no-refresh
 toktrail sync import toktrail-state.tar.gz
 toktrail sync import toktrail-state.tar.gz --dry-run --json
-toktrail analyze session opencode --last --source ~/.local/share/opencode/opencode.db
 ```
 
 Stop the active tracking session:
@@ -164,6 +166,13 @@ Report commands (`toktrail usage`, `toktrail run status`, and
 `toktrail subscriptions`) refresh configured sources first by default. Use
 `--no-refresh` for stale local-state reads, and `--refresh-details` to print a
 compact refresh summary.
+
+Session terminology:
+
+- `toktrail sessions` lists tracking **runs** (start/stop windows).
+- `toktrail source-sessions --harness <h>` lists raw **source sessions** from a specific harness.
+- `toktrail usage sessions` summarizes imported source-session **usage** (tokens, costs, models).
+- `toktrail usage runs` summarizes usage grouped by tracking **run**.
 
 `toktrail sync import` validates archive paths, manifest checksums, schema
 version, and usage-event fingerprints before merging.
@@ -262,8 +271,8 @@ toktrail sessions
 toktrail subscriptions
 toktrail sync export --out toktrail-state.tar.gz
 toktrail sync import toktrail-state.tar.gz --dry-run --json
-toktrail sessions pi
-toktrail sessions pi pi_ses_001
+toktrail source-sessions --harness pi
+toktrail source-session show --harness pi pi_ses_001
 ```
 
 Discover configured source paths before refreshing:
@@ -338,11 +347,11 @@ toktrail copilot env fish
 toktrail copilot env nu
 toktrail copilot env powershell
 
-toktrail sessions pi
-toktrail sessions codex
-toktrail sessions claude
-toktrail sessions pi pi_ses_001
-toktrail sessions goose goose_session_id
+toktrail source-sessions --harness pi
+toktrail source-sessions --harness codex
+toktrail source-sessions --harness claude
+toktrail source-session show --harness pi pi_ses_001
+toktrail source-session show --harness goose goose_session_id
 
 toktrail pricing list
 toktrail pricing list --missing-only
@@ -438,7 +447,7 @@ toktrail copilot env bash
 toktrail refresh --harness copilot --source ~/.copilot/otel/copilot-otel-20260429-090000.jsonl
 toktrail run status --price-state unpriced --sort tokens --limit 20
 toktrail pricing list --missing-only
-toktrail sessions copilot
+toktrail source-sessions --harness copilot
 ```
 
 Virtual and pricing-based actual costs are computed at report time, not during

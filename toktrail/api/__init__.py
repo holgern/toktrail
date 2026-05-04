@@ -68,6 +68,7 @@ from toktrail.api.reports import (
     usage_report,
     usage_series_report,
     usage_sessions_report,
+    usage_runs_report,
 )
 from toktrail.api.sessions import (
     get_active_run,
@@ -166,4 +167,5 @@ __all__ = [
     "usage_report",
     "usage_series_report",
     "usage_sessions_report",
+    "usage_runs_report",
 ]

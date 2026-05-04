@@ -4305,3 +4305,75 @@ def test_cli_usage_sessions_no_refresh_uses_existing_state_only(
     )
     assert result.exit_code == 0, result.output
     assert "toktrail usage sessions" in result.output
+
+
+def test_cli_usage_runs_human_output(tmp_path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    source_db = tmp_path / "opencode.db"
+    create_source_db(source_db)
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "refresh",
+            "--harness",
+            "opencode",
+            "--source",
+            str(source_db),
+        ],
+    )
+
+    result = runner.invoke(
+        app,
+        ["--db", str(state_db), "usage", "runs", "--no-refresh"],
+    )
+    assert result.exit_code == 0, result.output
+    assert "toktrail usage runs" in result.output
+
+
+def test_cli_usage_runs_json_shape(tmp_path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    source_db = tmp_path / "opencode.db"
+    create_source_db(source_db)
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "refresh",
+            "--harness",
+            "opencode",
+            "--source",
+            str(source_db),
+        ],
+    )
+
+    result = runner.invoke(
+        app,
+        ["--db", str(state_db), "usage", "runs", "--json", "--no-refresh"],
+    )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["type"] == "usage_runs"
+    assert "runs" in payload
+    assert "totals" in payload
+
+
+def test_cli_usage_project_rejected(tmp_path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    runner.invoke(app, ["--db", str(state_db), "init"])
+
+    result = runner.invoke(
+        app,
+        ["--db", str(state_db), "usage", "daily", "--project", "myproj"],
+    )
+    assert result.exit_code != 0
+    assert "--project is not supported" in result.output

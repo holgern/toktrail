@@ -640,9 +640,9 @@ def usage(
         str | None,
         typer.Argument(
             help=(
-                "daily, weekly, monthly, sessions, summary, today, yesterday, "
+                "daily, weekly, monthly, sessions, runs, summary, today, yesterday, "
                 "this-week, last-week, this-month, last-month"
-            )
+            ),
         ),
     ] = None,
     json_output: JsonOption = False,
@@ -679,7 +679,8 @@ def usage(
 ) -> None:
     if timezone_name is not None and utc:
         _exit_with_error("Use either --timezone or --utc, not both.")
-
+    if project is not None:
+        _exit_with_error("--project is not supported for any usage view.")
     normalized_view = (view or "daily").strip().lower()
     series_views = {"daily", "weekly", "monthly"}
     named_periods = {
@@ -787,8 +788,6 @@ def usage(
     if normalized_view in {"sessions", "session"}:
         if instances:
             _exit_with_error("--instances is not supported for sessions view.")
-        if project is not None:
-            _exit_with_error("--project is not supported for sessions view.")
         payload = _usage_sessions(
             ctx=ctx,
             json_output=json_output,
@@ -825,9 +824,45 @@ def usage(
             )
         return
 
+    if normalized_view in {"runs", "run"}:
+        if instances:
+            _exit_with_error("--instances is not supported for runs view.")
+        payload = _usage_runs(
+            ctx=ctx,
+            json_output=json_output,
+            provider_id=provider_id,
+            model_id=model_id,
+            thinking_level=thinking_level,
+            agent=agent,
+            since=since,
+            until=until,
+            timezone_name=timezone_name,
+            utc=utc,
+            split_thinking=split_thinking,
+            order=order,
+            limit=limit,
+            last=last,
+        )
+        if json_output:
+            if payload is None:
+                msg = "Usage runs payload unexpectedly missing."
+                raise TypeError(msg)
+            typer.echo(
+                json.dumps(
+                    _wrap_refresh_json_payload(
+                        payload,
+                        refresh_results=refresh_results,
+                        include_refresh=refresh_details,
+                    ),
+                    indent=2,
+                )
+            )
+        return
+
     _exit_with_error(
-        "Unsupported usage view. Use daily, weekly, monthly, sessions, summary, "
-        "today, yesterday, this-week, last-week, this-month, or last-month."
+        "Unsupported usage view. Use daily, weekly, monthly, sessions, runs, "
+        "summary, today, yesterday, this-week, last-week, this-month, or "
+        "last-month."
     )
 
 
@@ -891,6 +926,8 @@ def _usage_series(
                 start_of_week=start_of_week,
                 locale=locale,
                 order=order,
+                timezone_name=timezone_name,
+                utc=utc,
             ),
             costing_config=costing_config,
         )
@@ -936,14 +973,32 @@ def _print_usage_series(
     if instances:
         for instance in report.instances:
             typer.echo(f"\nInstance: {instance.instance_label}")
-            _print_usage_series_bucket_table(
+            filtered = _filter_series_buckets(
                 instance.buckets,
+                price_state=price_state,
+                min_messages=min_messages,
+                min_tokens=min_tokens,
+            )
+            filtered = _sort_series_buckets(filtered, sort=sort)
+            if limit is not None:
+                filtered = filtered[:limit]
+            _print_usage_series_bucket_table(
+                tuple(filtered),
                 compact=compact,
                 breakdown=breakdown,
             )
         return
-    _print_usage_series_bucket_table(
+    filtered = _filter_series_buckets(
         report.buckets,
+        price_state=price_state,
+        min_messages=min_messages,
+        min_tokens=min_tokens,
+    )
+    filtered = _sort_series_buckets(filtered, sort=sort)
+    if limit is not None:
+        filtered = filtered[:limit]
+    _print_usage_series_bucket_table(
+        tuple(filtered),
         compact=compact,
         breakdown=breakdown,
     )
@@ -1171,6 +1226,114 @@ def _print_usage_sessions(
                     f"{_format_cost(row.costs.virtual_cost_usd)}"
                 )
                 typer.echo(bline)
+
+
+def _usage_runs(
+    *,
+    ctx: typer.Context,
+    json_output: bool,
+    provider_id: str | None,
+    model_id: str | None,
+    thinking_level: str | None,
+    agent: str | None,
+    since: str | None,
+    until: str | None,
+    timezone_name: str | None,
+    utc: bool,
+    split_thinking: bool,
+    order: str,
+    limit: int | None,
+    last: bool,
+) -> dict[str, object] | None:
+    from toktrail.db import summarize_usage_runs
+    from toktrail.periods import _resolve_timezone, parse_cli_boundary
+    from toktrail.reporting import UsageRunsFilter
+
+    tz = _resolve_timezone(timezone_name=timezone_name, utc=utc)
+    since_ms = parse_cli_boundary(since, tz=tz, is_until=False)
+    until_ms = parse_cli_boundary(until, tz=tz, is_until=True)
+
+    costing_config = _load_costing_config_or_exit(ctx)
+    conn = _open_toktrail_connection(ctx)
+    try:
+        runs_report = summarize_usage_runs(
+            conn,
+            UsageRunsFilter(
+                provider_id=provider_id,
+                model_id=model_id,
+                thinking_level=thinking_level,
+                agent=agent,
+                since_ms=since_ms,
+                until_ms=until_ms,
+                split_thinking=split_thinking,
+                order=order,
+                limit=limit,
+                last=last,
+            ),
+            costing_config=costing_config,
+        )
+    finally:
+        conn.close()
+
+    if json_output:
+        return runs_report.as_dict()
+
+    _print_usage_runs(runs_report, utc=utc)
+    return None
+
+
+def _print_usage_runs(
+    report: object,
+    *,
+    utc: bool,
+) -> None:
+    from toktrail.formatting import format_epoch_ms_compact
+    from toktrail.reporting import UsageRunsReport
+
+    if not isinstance(report, UsageRunsReport):
+        msg = "Expected UsageRunsReport."
+        raise TypeError(msg)
+
+    typer.echo("toktrail usage runs")
+
+    if not report.runs:
+        typer.echo("No usage data.")
+        return
+
+    header = (
+        "run  name  started  ended  msgs  models  "
+        "input  output  reasoning  cache_r  cache_w  cache_o  "
+        "total  source  actual  virtual  savings  unpriced"
+    )
+    typer.echo(header)
+
+    for run in report.runs:
+        tokens = run.tokens
+        costs = run.costs
+        models = ", ".join(run.models)
+        started_str = format_epoch_ms_compact(run.started_at_ms, utc=utc)
+        ended_str = (
+            format_epoch_ms_compact(run.ended_at_ms, utc=utc)
+            if run.ended_at_ms is not None
+            else "-"
+        )
+        name_str = run.name or "-"
+        line = (
+            f"{run.run_id}  {name_str}  {started_str}  {ended_str}  "
+            f"{run.message_count}  {models}  "
+            f"{_format_int(tokens.input)}  {_format_int(tokens.output)}  "
+            f"{_format_int(tokens.reasoning)}  "
+            f"{_format_int(tokens.cache_read)}  "
+            f"{_format_int(tokens.cache_write)}  "
+            f"{_format_int(tokens.cache_output)}  "
+            f"{_format_int(tokens.total)}  "
+            f"{_format_cost(costs.source_cost_usd)}  "
+            f"{_format_cost(costs.actual_cost_usd)}  "
+            f"{_format_cost(costs.virtual_cost_usd)}  "
+            f"{_format_cost(costs.savings_usd)}  "
+            f"{costs.unpriced_count}"
+        )
+        typer.echo(line)
 
 
 def _usage_aggregate(
@@ -3667,6 +3830,94 @@ def _filter_unconfigured_models(
         if (min_messages is None or row.message_count >= min_messages)
         and (min_tokens is None or row.total_tokens >= min_tokens)
     ]
+
+
+def _filter_series_buckets(
+    buckets: tuple[UsageSeriesBucket, ...],
+    *,
+    price_state: str,
+    min_messages: int | None,
+    min_tokens: int | None,
+) -> list[UsageSeriesBucket]:
+    return [
+        b
+        for b in buckets
+        if _series_bucket_matches_price_state(b, price_state)
+        and (min_messages is None or b.message_count >= min_messages)
+        and (min_tokens is None or b.tokens.total >= min_tokens)
+    ]
+
+
+def _series_bucket_matches_price_state(
+    bucket: UsageSeriesBucket, price_state: str
+) -> bool:
+    if price_state == "all":
+        return True
+    if price_state == "priced":
+        return bucket.costs.unpriced_count == 0
+    return bucket.costs.unpriced_count > 0
+
+
+def _sort_series_buckets(
+    buckets: list[UsageSeriesBucket],
+    *,
+    sort: str,
+) -> list[UsageSeriesBucket]:
+    if sort == "actual":
+        return sorted(
+            buckets,
+            key=lambda b: (
+                b.costs.actual_cost_usd,
+                b.tokens.total,
+                b.message_count,
+                b.key,
+            ),
+            reverse=True,
+        )
+    if sort == "virtual":
+        return sorted(
+            buckets,
+            key=lambda b: (
+                b.costs.virtual_cost_usd,
+                b.tokens.total,
+                b.message_count,
+                b.key,
+            ),
+            reverse=True,
+        )
+    if sort == "savings":
+        return sorted(
+            buckets,
+            key=lambda b: (
+                b.costs.savings_usd,
+                b.tokens.total,
+                b.message_count,
+                b.key,
+            ),
+            reverse=True,
+        )
+    if sort == "tokens":
+        return sorted(
+            buckets,
+            key=lambda b: (
+                b.tokens.total,
+                b.message_count,
+                b.key,
+            ),
+            reverse=True,
+        )
+    if sort == "messages":
+        return sorted(
+            buckets,
+            key=lambda b: (
+                b.message_count,
+                b.tokens.total,
+                b.key,
+            ),
+            reverse=True,
+        )
+    # default: sort by key (chronological)
+    return sorted(buckets, key=lambda b: b.key)
 
 
 def _price_rows(config: CostingConfig, table: str) -> list[dict[str, object]]:

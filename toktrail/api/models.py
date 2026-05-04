@@ -1045,6 +1045,27 @@ class UsageSessionsReport:
         }
 
 
+@dataclass(frozen=True)
+class UsageRunsReport:
+    filters: dict[str, object]
+    runs: tuple[dict[str, object], ...]
+    totals: SessionTotals = field(
+        default_factory=lambda: SessionTotals(
+            tokens=TokenBreakdown(),
+            costs=CostTotals(),
+        )
+    )
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "type": "usage_runs",
+            "order": self.filters.get("order", "desc"),
+            "filters": dict(self.filters),
+            "runs": list(self.runs),
+            "totals": self.totals.as_dict(),
+        }
+
+
 __all__ = [
     "ActivitySummaryRow",
     "CacheCallRow",
@@ -1081,4 +1102,5 @@ __all__ = [
     "UsageSeriesReport",
     "UsageSessionRow",
     "UsageSessionsReport",
+    "UsageRunsReport",
 ]

@@ -41,9 +41,7 @@ def export_state_archive(
     conn, resolved_db = _open_state_db(db_path)
     conn.close()
     resolved_config = (
-        resolve_toktrail_config_path(config_path)
-        if include_config
-        else None
+        resolve_toktrail_config_path(config_path) if include_config else None
     )
     try:
         result = _export_state_archive(

@@ -66,9 +66,7 @@ class _ImportConflictError(ValueError):
         self.conflicts = conflicts
         first = conflicts[0] if conflicts else None
         detail = (
-            first.message
-            if first is not None and first.message
-            else "import conflict"
+            first.message if first is not None and first.message else "import conflict"
         )
         super().__init__(detail)
 

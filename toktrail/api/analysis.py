@@ -195,8 +195,7 @@ def _load_events_from_source(
         )
         if not sessions:
             msg = (
-                f"No source sessions found for harness {harness} "
-                f"at {resolved_source}."
+                f"No source sessions found for harness {harness} at {resolved_source}."
             )
             raise SourcePathError(msg)
         if last:

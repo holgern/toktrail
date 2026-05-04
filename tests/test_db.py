@@ -1836,3 +1836,197 @@ def test_summarize_usage_sessions_tracking_session_bounds(
     assert report.totals.tokens.total == 10
     assert report.filters["since_ms"] == 1_000
     assert report.filters["until_ms"] == 1_500
+
+
+def test_summarize_usage_runs_groups_by_run(tmp_path: Path) -> None:
+    from toktrail.db import (
+        connect,
+        create_tracking_session,
+        end_tracking_session,
+        summarize_usage_runs,
+    )
+    from toktrail.reporting import UsageRunsFilter
+
+    conn = connect(tmp_path / "toktrail.db")
+    migrate(conn)
+    try:
+        run1 = create_tracking_session(conn, "run-1", started_at_ms=1_000)
+        insert_usage_events(
+            conn,
+            run1,
+            [
+                make_usage_event(
+                    dedup_suffix="r1a",
+                    created_ms=1_000,
+                    tokens=TokenBreakdown(input=10, output=2),
+                ),
+                make_usage_event(
+                    dedup_suffix="r1b",
+                    created_ms=1_100,
+                    tokens=TokenBreakdown(input=5, output=1),
+                ),
+            ],
+        )
+        end_tracking_session(conn, run1, ended_at_ms=1_200)
+        run2 = create_tracking_session(conn, "run-2", started_at_ms=2_000)
+        insert_usage_events(
+            conn,
+            run2,
+            [
+                make_usage_event(
+                    dedup_suffix="r2a",
+                    created_ms=2_000,
+                    tokens=TokenBreakdown(input=20, output=3),
+                ),
+            ],
+        )
+        end_tracking_session(conn, run2, ended_at_ms=2_100)
+        report = summarize_usage_runs(conn, UsageRunsFilter(limit=None))
+    finally:
+        conn.close()
+
+    assert len(report.runs) == 2
+    assert report.runs[0].run_id == run2
+    assert report.runs[0].message_count == 1
+    assert report.runs[0].tokens.input == 20
+    assert report.runs[0].name == "run-2"
+    assert report.runs[1].run_id == run1
+    assert report.runs[1].message_count == 2
+    assert report.runs[1].tokens.input == 15
+    assert report.totals.tokens.input == 35
+
+
+def test_summarize_usage_runs_last_flag(tmp_path: Path) -> None:
+    from toktrail.db import (
+        connect,
+        create_tracking_session,
+        end_tracking_session,
+        summarize_usage_runs,
+    )
+    from toktrail.reporting import UsageRunsFilter
+
+    conn = connect(tmp_path / "toktrail.db")
+    migrate(conn)
+    try:
+        run1 = create_tracking_session(conn, "run-1", started_at_ms=1_000)
+        insert_usage_events(
+            conn,
+            run1,
+            [
+                make_usage_event(
+                    dedup_suffix="r1a",
+                    created_ms=1_000,
+                    tokens=TokenBreakdown(input=10),
+                ),
+            ],
+        )
+        end_tracking_session(conn, run1, ended_at_ms=1_200)
+        run2 = create_tracking_session(conn, "run-2", started_at_ms=2_000)
+        insert_usage_events(
+            conn,
+            run2,
+            [
+                make_usage_event(
+                    dedup_suffix="r2a",
+                    created_ms=2_000,
+                    tokens=TokenBreakdown(input=20),
+                ),
+            ],
+        )
+        end_tracking_session(conn, run2, ended_at_ms=2_100)
+        report = summarize_usage_runs(conn, UsageRunsFilter(last=True, limit=None))
+    finally:
+        conn.close()
+
+    assert len(report.runs) == 1
+    assert report.runs[0].run_id == run2
+
+
+def test_summarize_usage_series_timezone_affects_buckets(tmp_path: Path) -> None:
+    conn = connect(tmp_path / "toktrail.db")
+    migrate(conn)
+    # 1748217600000 = 2025-05-26 00:00 UTC = 2025-05-25 20:00 EDT
+    day_start_utc = 1748217600000
+    try:
+        insert_usage_events(
+            conn,
+            None,
+            [
+                make_usage_event(
+                    dedup_suffix="tz1",
+                    created_ms=day_start_utc,
+                    tokens=TokenBreakdown(input=10),
+                ),
+            ],
+        )
+        utc_report = summarize_usage_series(
+            conn,
+            UsageSeriesFilter(
+                granularity="daily",
+                utc=True,
+                since_ms=day_start_utc,
+                until_ms=day_start_utc + 86_400_000,
+            ),
+        )
+        edt_report = summarize_usage_series(
+            conn,
+            UsageSeriesFilter(
+                granularity="daily",
+                timezone_name="America/New_York",
+                since_ms=day_start_utc,
+                until_ms=day_start_utc + 86_400_000,
+            ),
+        )
+    finally:
+        conn.close()
+
+    assert utc_report.buckets[0].key == "2025-05-26"
+    assert edt_report.buckets[0].key == "2025-05-25"
+
+
+def test_summarize_usage_series_instance_breakdown_scoping(tmp_path: Path) -> None:
+    conn = connect(tmp_path / "toktrail.db")
+    migrate(conn)
+    day1 = 1748131200000
+    try:
+        insert_usage_events(
+            conn,
+            None,
+            [
+                make_usage_event(
+                    dedup_suffix="i1a",
+                    source_session_id="ses-a",
+                    model_id="model-a",
+                    created_ms=day1,
+                    tokens=TokenBreakdown(input=10),
+                ),
+                make_usage_event(
+                    dedup_suffix="i1b",
+                    source_session_id="ses-b",
+                    model_id="model-b",
+                    created_ms=day1,
+                    tokens=TokenBreakdown(input=20),
+                ),
+            ],
+        )
+        report = summarize_usage_series(
+            conn,
+            UsageSeriesFilter(
+                granularity="daily",
+                instances=True,
+                breakdown=True,
+                since_ms=day1,
+                until_ms=day1 + 86_400_000,
+            ),
+        )
+    finally:
+        conn.close()
+
+    assert len(report.instances) == 2
+    for inst in report.instances:
+        if "ses-a" in inst.instance_key:
+            assert len(inst.buckets[0].by_model) == 1
+            assert inst.buckets[0].by_model[0].model_id == "model-a"
+        else:
+            assert len(inst.buckets[0].by_model) == 1
+            assert inst.buckets[0].by_model[0].model_id == "model-b"

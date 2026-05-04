@@ -514,6 +514,8 @@ class UsageSeriesFilter:
     start_of_week: str = "monday"
     locale: str | None = None
     order: str = "desc"
+    timezone_name: str | None = None
+    utc: bool = False
 
     def to_usage_report_filter(self) -> UsageReportFilter:
         return UsageReportFilter(
@@ -691,5 +693,74 @@ class UsageSessionsReport:
             "order": self.filters.get("order", "desc"),
             "filters": dict(self.filters),
             "sessions": [row.as_dict() for row in self.sessions],
+            "totals": self.totals.as_dict(),
+        }
+
+
+@dataclass(frozen=True)
+class UsageRunsFilter:
+    tracking_session_id: int | None = None
+    provider_id: str | None = None
+    model_id: str | None = None
+    thinking_level: str | None = None
+    agent: str | None = None
+    since_ms: int | None = None
+    until_ms: int | None = None
+    split_thinking: bool = False
+    limit: int | None = 10
+    order: str = "desc"
+    last: bool = False
+
+    def to_usage_report_filter(self) -> UsageReportFilter:
+        return UsageReportFilter(
+            tracking_session_id=self.tracking_session_id,
+            provider_id=self.provider_id,
+            model_id=self.model_id,
+            thinking_level=self.thinking_level,
+            agent=self.agent,
+            since_ms=self.since_ms,
+            until_ms=self.until_ms,
+            split_thinking=self.split_thinking,
+        )
+
+
+@dataclass(frozen=True)
+class UsageRunRow:
+    run_id: int
+    name: str | None
+    started_at_ms: int
+    ended_at_ms: int | None
+    message_count: int
+    tokens: TokenBreakdown
+    costs: CostTotals
+    models: tuple[str, ...] = ()
+    providers: tuple[str, ...] = ()
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "run_id": self.run_id,
+            "name": self.name,
+            "started_at_ms": self.started_at_ms,
+            "ended_at_ms": self.ended_at_ms,
+            "message_count": self.message_count,
+            "providers": list(self.providers),
+            "models": list(self.models),
+            "tokens": self.tokens.as_dict(),
+            "costs": self.costs.as_dict(),
+        }
+
+
+@dataclass(frozen=True)
+class UsageRunsReport:
+    filters: dict[str, object]
+    runs: tuple[UsageRunRow, ...]
+    totals: SessionTotals
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "type": "usage_runs",
+            "order": self.filters.get("order", "desc"),
+            "filters": dict(self.filters),
+            "runs": [row.as_dict() for row in self.runs],
             "totals": self.totals.as_dict(),
         }
