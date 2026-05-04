@@ -98,6 +98,17 @@ def cost_from_price(tokens: TokenBreakdown, price: Price) -> Decimal:
     )
 
 
+def uncached_tokens(tokens: TokenBreakdown) -> TokenBreakdown:
+    return TokenBreakdown(
+        input=tokens.input + tokens.cache_read + tokens.cache_write,
+        output=tokens.output + tokens.cache_output,
+        reasoning=tokens.reasoning,
+        cache_read=0,
+        cache_write=0,
+        cache_output=0,
+    )
+
+
 def resolve_price(
     provider_id: str,
     model_id: str,

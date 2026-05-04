@@ -11,6 +11,7 @@ from toktrail.costing import (
     resolve_actual_mode,
     resolve_price,
     resolve_price_resolution,
+    uncached_tokens,
 )
 from toktrail.models import TokenBreakdown
 
@@ -23,6 +24,7 @@ def make_price(
     input_usd_per_1m: float = 1.0,
     cached_input_usd_per_1m: float | None = None,
     cache_write_usd_per_1m: float | None = None,
+    cached_output_usd_per_1m: float | None = None,
     output_usd_per_1m: float = 2.0,
     reasoning_usd_per_1m: float | None = None,
 ) -> Price:
@@ -33,6 +35,7 @@ def make_price(
         input_usd_per_1m=input_usd_per_1m,
         cached_input_usd_per_1m=cached_input_usd_per_1m,
         cache_write_usd_per_1m=cache_write_usd_per_1m,
+        cached_output_usd_per_1m=cached_output_usd_per_1m,
         output_usd_per_1m=output_usd_per_1m,
         reasoning_usd_per_1m=reasoning_usd_per_1m,
     )
@@ -69,6 +72,51 @@ def test_cost_from_price_falls_back_to_input_for_cache_write() -> None:
     tokens = TokenBreakdown(cache_write=100)
 
     assert float(cost_from_price(tokens, price)) == pytest.approx(0.0003)
+
+
+def test_uncached_tokens_moves_cache_read_to_input() -> None:
+    converted = uncached_tokens(
+        TokenBreakdown(
+            input=100,
+            output=20,
+            reasoning=3,
+            cache_read=40,
+            cache_write=10,
+            cache_output=5,
+        )
+    )
+
+    assert converted.input == 150
+    assert converted.output == 25
+    assert converted.reasoning == 3
+    assert converted.cache_read == 0
+    assert converted.cache_write == 0
+    assert converted.cache_output == 0
+
+
+def test_uncached_scenario_shows_cache_savings() -> None:
+    price = make_price(
+        input_usd_per_1m=1.0,
+        cached_input_usd_per_1m=0.2,
+        output_usd_per_1m=3.0,
+    )
+    tokens = TokenBreakdown(input=20, cache_read=80)
+
+    cached_cost = cost_from_price(tokens, price)
+    uncached_cost = cost_from_price(uncached_tokens(tokens), price)
+
+    assert uncached_cost > cached_cost
+
+
+def test_cached_output_scenario_moves_cache_output_to_output() -> None:
+    price = make_price(output_usd_per_1m=5.0, cached_output_usd_per_1m=1.0)
+    tokens = TokenBreakdown(output=10, cache_output=40)
+
+    uncached = uncached_tokens(tokens)
+
+    assert uncached.output == 50
+    assert uncached.cache_output == 0
+    assert cost_from_price(uncached, price) > cost_from_price(tokens, price)
 
 
 def test_resolve_price_prefers_exact_model_match() -> None:

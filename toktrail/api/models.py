@@ -843,8 +843,159 @@ class UsageSeriesReport:
         return result
 
 
+@dataclass(frozen=True)
+class CacheCallRow:
+    ordinal: int
+    harness: str
+    source_session_id: str
+    source_row_id: str | None
+    source_message_id: str | None
+    provider_id: str
+    model_id: str
+    thinking_level: str | None
+    agent: str | None
+    created_ms: int
+    completed_ms: int | None
+    tokens: TokenBreakdown
+    source_cost_usd: Decimal
+    actual_cost_usd: Decimal
+    virtual_cost_usd: Decimal
+    virtual_uncached_cost_usd: Decimal
+    virtual_cache_savings_usd: Decimal
+    prompt_like_tokens: int
+    cache_reuse_ratio: float
+    cache_presence_ratio: float
+    source_cost_per_1m_prompt_like: Decimal | None
+    cache_status: str
+    flags: tuple[str, ...] = ()
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "ordinal": self.ordinal,
+            "harness": self.harness,
+            "source_session_id": self.source_session_id,
+            "source_row_id": self.source_row_id,
+            "source_message_id": self.source_message_id,
+            "provider_id": self.provider_id,
+            "model_id": self.model_id,
+            "thinking_level": self.thinking_level,
+            "agent": self.agent,
+            "created_ms": self.created_ms,
+            "completed_ms": self.completed_ms,
+            "tokens": self.tokens.as_dict(),
+            "source_cost_usd": str(self.source_cost_usd),
+            "actual_cost_usd": str(self.actual_cost_usd),
+            "virtual_cost_usd": str(self.virtual_cost_usd),
+            "virtual_uncached_cost_usd": str(self.virtual_uncached_cost_usd),
+            "virtual_cache_savings_usd": str(self.virtual_cache_savings_usd),
+            "prompt_like_tokens": self.prompt_like_tokens,
+            "cache_reuse_ratio": self.cache_reuse_ratio,
+            "cache_presence_ratio": self.cache_presence_ratio,
+            "source_cost_per_1m_prompt_like": (
+                str(self.source_cost_per_1m_prompt_like)
+                if self.source_cost_per_1m_prompt_like is not None
+                else None
+            ),
+            "cache_status": self.cache_status,
+            "flags": list(self.flags),
+        }
+
+
+@dataclass(frozen=True)
+class CacheClusterRow:
+    provider_id: str
+    model_id: str
+    thinking_level: str | None
+    prompt_like_min: int
+    prompt_like_max: int
+    call_count: int
+    hit_count: int
+    miss_count: int
+    median_hit_source_cost_usd: Decimal | None
+    median_miss_source_cost_usd: Decimal | None
+    estimated_source_loss_usd: Decimal
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "provider_id": self.provider_id,
+            "model_id": self.model_id,
+            "thinking_level": self.thinking_level,
+            "prompt_like_min": self.prompt_like_min,
+            "prompt_like_max": self.prompt_like_max,
+            "call_count": self.call_count,
+            "hit_count": self.hit_count,
+            "miss_count": self.miss_count,
+            "median_hit_source_cost_usd": (
+                str(self.median_hit_source_cost_usd)
+                if self.median_hit_source_cost_usd is not None
+                else None
+            ),
+            "median_miss_source_cost_usd": (
+                str(self.median_miss_source_cost_usd)
+                if self.median_miss_source_cost_usd is not None
+                else None
+            ),
+            "estimated_source_loss_usd": str(self.estimated_source_loss_usd),
+        }
+
+
+@dataclass(frozen=True)
+class SessionCacheAnalysisReport:
+    harness: str
+    source_session_id: str
+    first_created_ms: int | None
+    last_created_ms: int | None
+    call_count: int
+    totals: SessionTotals
+    cache_read_tokens: int
+    cache_write_tokens: int
+    prompt_like_tokens: int
+    cache_reuse_ratio: float
+    cache_presence_ratio: float
+    source_cost_usd: Decimal
+    actual_cost_usd: Decimal
+    virtual_cost_usd: Decimal
+    virtual_uncached_cost_usd: Decimal
+    virtual_cache_savings_usd: Decimal
+    estimated_source_cache_loss_usd: Decimal
+    calls: tuple[CacheCallRow, ...]
+    clusters: tuple[CacheClusterRow, ...]
+    warnings: tuple[str, ...] = ()
+
+    def as_dict(self, *, include_calls: bool = True) -> dict[str, object]:
+        payload: dict[str, object] = {
+            "type": "session_cache_analysis",
+            "harness": self.harness,
+            "source_session_id": self.source_session_id,
+            "first_created_ms": self.first_created_ms,
+            "last_created_ms": self.last_created_ms,
+            "call_count": self.call_count,
+            "totals": self.totals.as_dict(),
+            "cache_read_tokens": self.cache_read_tokens,
+            "cache_write_tokens": self.cache_write_tokens,
+            "prompt_like_tokens": self.prompt_like_tokens,
+            "cache_reuse_ratio": self.cache_reuse_ratio,
+            "cache_presence_ratio": self.cache_presence_ratio,
+            "source_cost_usd": str(self.source_cost_usd),
+            "actual_cost_usd": str(self.actual_cost_usd),
+            "virtual_cost_usd": str(self.virtual_cost_usd),
+            "virtual_uncached_cost_usd": str(self.virtual_uncached_cost_usd),
+            "virtual_cache_savings_usd": str(self.virtual_cache_savings_usd),
+            "estimated_source_cache_loss_usd": str(
+                self.estimated_source_cache_loss_usd
+            ),
+            "clusters": [cluster.as_dict() for cluster in self.clusters],
+            "warnings": list(self.warnings),
+        }
+        if include_calls:
+            payload["calls"] = [call.as_dict() for call in self.calls]
+        return payload
+
+
 __all__ = [
     "ActivitySummaryRow",
+    "CacheCallRow",
+    "CacheClusterRow",
     "CostTotals",
     "FinalizedManualRun",
     "HarnessDefinition",
@@ -864,6 +1015,7 @@ __all__ = [
     "StateExportResult",
     "StateImportConflict",
     "StateImportResult",
+    "SessionCacheAnalysisReport",
     "SubscriptionBillingPeriod",
     "SubscriptionUsagePeriod",
     "SubscriptionUsageReport",

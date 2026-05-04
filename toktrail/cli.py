@@ -24,9 +24,10 @@ from toktrail.adapters.summary import (
     summarize_events_by_activity,
     summarize_events_by_model,
 )
+from toktrail.api.analysis import session_cache_analysis as session_cache_analysis_api
 from toktrail.api.environment import prepare_environment as prepare_api_environment
 from toktrail.api.imports import import_configured_usage as import_configured_usage_api
-from toktrail.api.models import ImportUsageResult
+from toktrail.api.models import ImportUsageResult, SessionCacheAnalysisReport
 from toktrail.api.sessions import list_runs
 from toktrail.api.sources import capture_source_snapshot
 from toktrail.cli_sync import sync_app
@@ -90,6 +91,7 @@ copilot_app = typer.Typer(help="Inspect and run GitHub Copilot CLI tracking.")
 config_app = typer.Typer(help="Inspect toktrail pricing config.")
 pricing_app = typer.Typer(help="Inspect configured and used model pricing.")
 subscriptions_app = typer.Typer(help="Inspect provider subscription limits.")
+analyze_app = typer.Typer(help="Analyze per-call cache and cost behavior.")
 
 app.add_typer(refresh_app, name="refresh")
 app.add_typer(watch_app, name="watch")
@@ -100,6 +102,7 @@ app.add_typer(copilot_app, name="copilot")
 app.add_typer(config_app, name="config")
 app.add_typer(pricing_app, name="pricing")
 app.add_typer(subscriptions_app, name="subscriptions")
+app.add_typer(analyze_app, name="analyze")
 app.add_typer(sync_app, name="sync")
 
 _VALID_REPORT_PRICE_STATES = {"all", "priced", "unpriced"}
@@ -2102,6 +2105,65 @@ def sessions_vibe(
     )
 
 
+@analyze_app.command("session")
+def analyze_session(
+    ctx: typer.Context,
+    harness: Annotated[str, typer.Argument(help="Harness name to analyze.")],
+    source_session_id: SourceSessionArgument = None,
+    source_path: SourcePathOption = None,
+    last: LastOption = False,
+    json_output: JsonOption = False,
+    utc: UtcOption = False,
+    refresh: RefreshOption = True,
+    use_active_run: Annotated[
+        bool,
+        typer.Option(
+            "--active-run/--all-runs",
+            help="When enabled, constrain state analysis to the active run if present.",
+        ),
+    ] = True,
+    cluster_tolerance: Annotated[
+        float,
+        typer.Option(
+            "--cluster-tolerance",
+            min=0.0,
+            help="Prompt-like tolerance for cache-cost clustering.",
+        ),
+    ] = 0.05,
+    include_calls: Annotated[
+        bool,
+        typer.Option("--calls/--no-calls", help="Include per-call rows in output."),
+    ] = True,
+    rich_output: RichOption = False,
+) -> None:
+    try:
+        report = session_cache_analysis_api(
+            db_path=_resolve_state_db(ctx),
+            config_path=_resolve_config_path(ctx),
+            harness=harness,
+            source_session_id=source_session_id,
+            last=last,
+            source_path=source_path,
+            refresh=refresh,
+            use_active_run=use_active_run,
+            cluster_tolerance=cluster_tolerance,
+            include_calls=include_calls,
+        )
+    except (ToktrailError, OSError, ValueError) as exc:
+        _exit_with_error(str(exc))
+
+    if json_output:
+        typer.echo(json.dumps(report.as_dict(include_calls=include_calls), indent=2))
+        return
+
+    _print_session_cache_analysis_report(
+        report,
+        utc=utc,
+        include_calls=include_calls,
+        rich_output=rich_output,
+    )
+
+
 @copilot_app.command(
     "run",
     context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
@@ -2445,6 +2507,7 @@ def _subtract_tokens(after: TokenBreakdown, before: TokenBreakdown) -> TokenBrea
         reasoning=after.reasoning - before.reasoning,
         cache_read=after.cache_read - before.cache_read,
         cache_write=after.cache_write - before.cache_write,
+        cache_output=after.cache_output - before.cache_output,
     )
 
 
@@ -2475,6 +2538,7 @@ def _watch_delta_has_activity(delta: WatchDelta) -> bool:
             totals.tokens.reasoning != 0,
             totals.tokens.cache_read != 0,
             totals.tokens.cache_write != 0,
+            totals.tokens.cache_output != 0,
             totals.costs.source_cost_usd != 0,
             totals.costs.actual_cost_usd != 0,
             totals.costs.virtual_cost_usd != 0,
@@ -2532,7 +2596,8 @@ def _format_token_delta(tokens: TokenBreakdown) -> str:
         f"out={_format_int(tokens.output)} "
         f"reasoning={_format_int(tokens.reasoning)} "
         f"cache_r={_format_int(tokens.cache_read)} "
-        f"cache_w={_format_int(tokens.cache_write)}"
+        f"cache_w={_format_int(tokens.cache_write)} "
+        f"cache_o={_format_int(tokens.cache_output)}"
     )
 
 
@@ -2633,6 +2698,7 @@ def _print_watch_stop(observed: WatchDelta) -> None:
     typer.echo(f"  reasoning:  {_format_int(totals.tokens.reasoning)}")
     typer.echo(f"  cache_r:    {_format_int(totals.tokens.cache_read)}")
     typer.echo(f"  cache_w:    {_format_int(totals.tokens.cache_write)}")
+    typer.echo(f"  cache_o:    {_format_int(totals.tokens.cache_output)}")
     typer.echo(f"  actual:     {_format_cost(totals.costs.actual_cost_usd)}")
     typer.echo(f"  virtual:    {_format_cost(totals.costs.virtual_cost_usd)}")
     typer.echo(f"  savings:    {_format_cost(totals.costs.savings_usd)}")
@@ -2847,6 +2913,8 @@ def _print_source_session_detail(
     by_activity = summarize_events_by_activity(events, costing_config=costing_config)
 
     if json_output:
+        totals_payload = totals.as_dict()
+        totals_payload["cache_output"] = totals.tokens.cache_output
         typer.echo(
             json.dumps(
                 {
@@ -2856,7 +2924,7 @@ def _print_source_session_detail(
                     "first_created_ms": summary.first_created_ms,
                     "last_created_ms": summary.last_created_ms,
                     "assistant_message_count": summary.assistant_message_count,
-                    "totals": totals.as_dict(),
+                    "totals": totals_payload,
                     "by_model": [row.as_dict() for row in by_model],
                     "by_activity": [row.as_dict() for row in by_activity],
                 },
@@ -2880,6 +2948,7 @@ def _print_source_session_detail(
     typer.echo(f"  reasoning:   {_format_int(totals.tokens.reasoning)}")
     typer.echo(f"  cache read:  {_format_int(totals.tokens.cache_read)}")
     typer.echo(f"  cache write: {_format_int(totals.tokens.cache_write)}")
+    typer.echo(f"  cache out:   {_format_int(totals.tokens.cache_output)}")
     typer.echo(f"  total:       {_format_int(totals.tokens.total)}")
     typer.echo("")
     typer.echo("Costs")
@@ -3682,6 +3751,151 @@ def _required_row_float(row: dict[str, object], key: str) -> float:
         msg = f"Missing numeric price field: {key}"
         raise TypeError(msg)
     return value
+
+
+def _print_session_cache_analysis_report(
+    report: SessionCacheAnalysisReport,
+    *,
+    utc: bool,
+    include_calls: bool,
+    rich_output: bool,
+) -> None:
+    typer.echo(f"{report.harness} source session {report.source_session_id}")
+    if report.first_created_ms is not None and report.last_created_ms is not None:
+        typer.echo(
+            "window: "
+            f"{format_epoch_ms_compact(report.first_created_ms, utc=utc)}.."
+            f"{format_epoch_ms_compact(report.last_created_ms, utc=utc)}"
+        )
+    typer.echo(
+        f"calls: {report.call_count}   "
+        f"source {_format_cost_precise(report.source_cost_usd)}   "
+        f"virtual {_format_cost_precise(report.virtual_cost_usd)}   "
+        f"virtual uncached {_format_cost_precise(report.virtual_uncached_cost_usd)}"
+    )
+    typer.echo(
+        f"cache read: {_format_int(report.cache_read_tokens)} / "
+        f"{_format_int(report.prompt_like_tokens)} prompt-like tokens   "
+        f"reuse {_format_ratio_percent(report.cache_reuse_ratio)}   "
+        f"presence {_format_ratio_percent(report.cache_presence_ratio)}"
+    )
+    typer.echo(
+        "estimated source cache loss: "
+        f"{_format_cost_precise(report.estimated_source_cache_loss_usd)}"
+    )
+    if report.warnings:
+        typer.echo(f"warnings: {', '.join(report.warnings)}")
+
+    if include_calls and report.calls:
+        typer.echo("")
+        typer.echo("Per call")
+        call_rows = [
+            {
+                "n": str(row.ordinal),
+                "time": format_epoch_ms_compact(row.created_ms, utc=utc),
+                "model": row.model_id,
+                "prompt": _format_int(row.prompt_like_tokens),
+                "cache_r": _format_int(row.tokens.cache_read),
+                "cache%": _format_ratio_percent(row.cache_reuse_ratio),
+                "out": _format_int(row.tokens.output),
+                "source": _format_cost_precise(row.source_cost_usd),
+                "eff_1m": _format_cost_or_dash(row.source_cost_per_1m_prompt_like),
+                "status": row.cache_status,
+                "flags": ",".join(row.flags),
+            }
+            for row in report.calls
+        ]
+        _print_table(
+            call_rows,
+            [
+                "n",
+                "time",
+                "model",
+                "prompt",
+                "cache_r",
+                "cache%",
+                "out",
+                "source",
+                "eff_1m",
+                "status",
+                "flags",
+            ],
+            {
+                "n": "#",
+                "time": "time",
+                "model": "model",
+                "prompt": "prompt",
+                "cache_r": "cache_r",
+                "cache%": "cache%",
+                "out": "out",
+                "source": "source",
+                "eff_1m": "eff$/1M",
+                "status": "status",
+                "flags": "flags",
+            },
+            rich_output=rich_output,
+        )
+
+    if report.clusters:
+        typer.echo("")
+        typer.echo("Clusters")
+        cluster_rows = [
+            {
+                "model": row.model_id,
+                "thinking": row.thinking_level or "-",
+                "calls": _format_int(row.call_count),
+                "hits": _format_int(row.hit_count),
+                "misses": _format_int(row.miss_count),
+                "range": (
+                    f"{_format_int(row.prompt_like_min)}.."
+                    f"{_format_int(row.prompt_like_max)}"
+                ),
+                "hit_median": _format_cost_or_dash(row.median_hit_source_cost_usd),
+                "miss_median": _format_cost_or_dash(row.median_miss_source_cost_usd),
+                "loss": _format_cost_precise(row.estimated_source_loss_usd),
+            }
+            for row in report.clusters
+        ]
+        _print_table(
+            cluster_rows,
+            [
+                "model",
+                "thinking",
+                "calls",
+                "hits",
+                "misses",
+                "range",
+                "hit_median",
+                "miss_median",
+                "loss",
+            ],
+            {
+                "model": "model",
+                "thinking": "thinking",
+                "calls": "calls",
+                "hits": "hits",
+                "misses": "misses",
+                "range": "prompt range",
+                "hit_median": "hit median",
+                "miss_median": "miss median",
+                "loss": "est. loss",
+            },
+            rich_output=rich_output,
+        )
+
+
+def _format_ratio_percent(value: float) -> str:
+    return f"{value * 100:.1f}%"
+
+
+def _format_cost_precise(value: Decimal | float) -> str:
+    return f"${float(value):.4f}"
+
+
+def _format_cost_or_dash(value: Decimal | None) -> str:
+    if value is None:
+        return "-"
+    return _format_cost_precise(value)
 
 
 def _refresh_before_report(

@@ -770,6 +770,54 @@ def summarize_tracking_session(
     )
 
 
+def list_usage_events(
+    conn: sqlite3.Connection,
+    filters: UsageReportFilter,
+    *,
+    order: str = "created",
+) -> list[UsageEvent]:
+    filters, _ = _apply_tracking_session_time_window(conn, filters)
+    source_clause, where_clause, params = _usage_report_query_parts(filters)
+    if order == "created":
+        order_clause = " ORDER BY ue.created_ms ASC, ue.id ASC"
+    elif order == "created_desc":
+        order_clause = " ORDER BY ue.created_ms DESC, ue.id DESC"
+    else:
+        msg = "Unsupported order. Use created or created_desc."
+        raise ValueError(msg)
+    rows = conn.execute(
+        """
+        SELECT
+            ue.harness,
+            ue.source_session_id,
+            ue.source_row_id,
+            ue.source_message_id,
+            ue.source_dedup_key,
+            ue.global_dedup_key,
+            ue.fingerprint_hash,
+            ue.provider_id,
+            ue.model_id,
+            ue.thinking_level,
+            ue.agent,
+            ue.created_ms,
+            ue.completed_ms,
+            ue.input_tokens,
+            ue.output_tokens,
+            ue.reasoning_tokens,
+            ue.cache_read_tokens,
+            ue.cache_write_tokens,
+            ue.cache_output_tokens,
+            ue.source_cost_usd,
+            ue.raw_json
+        """
+        + source_clause
+        + where_clause
+        + order_clause,
+        params,
+    ).fetchall()
+    return [_usage_event_from_row(row) for row in rows]
+
+
 def summarize_usage(
     conn: sqlite3.Connection,
     filters: UsageReportFilter,
@@ -1637,6 +1685,35 @@ def _row_tokens(row: sqlite3.Row) -> TokenBreakdown:
     )
 
 
+def _usage_event_from_row(row: sqlite3.Row) -> UsageEvent:
+    return UsageEvent(
+        harness=str(row["harness"]),
+        source_session_id=str(row["source_session_id"]),
+        source_row_id=(
+            str(row["source_row_id"]) if row["source_row_id"] is not None else None
+        ),
+        source_message_id=(
+            str(row["source_message_id"])
+            if row["source_message_id"] is not None
+            else None
+        ),
+        source_dedup_key=str(row["source_dedup_key"]),
+        global_dedup_key=str(row["global_dedup_key"]),
+        fingerprint_hash=str(row["fingerprint_hash"]),
+        provider_id=str(row["provider_id"]),
+        model_id=str(row["model_id"]),
+        thinking_level=(
+            str(row["thinking_level"]) if row["thinking_level"] is not None else None
+        ),
+        agent=str(row["agent"]) if row["agent"] is not None else None,
+        created_ms=_required_int(row["created_ms"]),
+        completed_ms=_optional_int(row["completed_ms"]),
+        tokens=_row_tokens(row),
+        source_cost_usd=_required_decimal(row["source_cost_usd"]),
+        raw_json=str(row["raw_json"]) if row["raw_json"] is not None else None,
+    )
+
+
 def _required_int(value: object) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
         msg = f"Expected int value, got {value!r}"
@@ -1720,6 +1797,7 @@ def _add_tokens(left: TokenBreakdown, right: TokenBreakdown) -> TokenBreakdown:
         reasoning=left.reasoning + right.reasoning,
         cache_read=left.cache_read + right.cache_read,
         cache_write=left.cache_write + right.cache_write,
+        cache_output=left.cache_output + right.cache_output,
     )
 
 

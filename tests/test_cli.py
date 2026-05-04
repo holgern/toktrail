@@ -802,6 +802,7 @@ def test_cli_sessions_droid_breakdown_shows_token_columns(tmp_path) -> None:
     assert "reasoning:" in result.output
     assert "cache read:" in result.output
     assert "cache write:" in result.output
+    assert "cache out:" in result.output
 
 
 def test_cli_status_supports_thinking_filter_and_collapse(tmp_path) -> None:
@@ -3102,6 +3103,76 @@ opencode = "{opencode_db}"
     assert by_harness[0]["cache_read"] > 0
 
 
+def test_cli_watch_json_includes_cache_output_delta(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    opencode_db = tmp_path / "opencode.db"
+    config_path = tmp_path / "toktrail.toml"
+
+    conn = create_opencode_db(opencode_db)
+    payload = deepcopy(VALID_ASSISTANT)
+    payload["tokens"] = {
+        "input": 100,
+        "output": 5,
+        "reasoning": 0,
+        "cache": {"read": 10, "write": 0, "output": 7},
+    }
+    insert_message(
+        conn,
+        row_id="row-1",
+        session_id="ses-1",
+        data=payload,
+    )
+    conn.commit()
+    conn.close()
+
+    config_path.write_text(
+        f"""
+config_version = 1
+
+[imports]
+harnesses = ["opencode"]
+missing_source = "error"
+include_raw_json = false
+
+[imports.sources]
+opencode = "{opencode_db}"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    init_state(state_db)
+    start_run(state_db, name="watch-json-cache-output", started_at_ms=0)
+
+    def interrupt_after_first_sleep(_interval: float) -> None:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("toktrail.cli.time.sleep", interrupt_after_first_sleep)
+    result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "--config",
+            str(config_path),
+            "watch",
+            "--json",
+            "--interval",
+            "0.1",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    lines = [line for line in result.output.splitlines() if line.strip()]
+    payloads = [json.loads(line) for line in lines]
+    assert payloads
+    assert payloads[0]["delta"]["cache_output"] == 7
+    assert payloads[0]["by_harness"][0]["cache_output"] == 7
+
+
 def create_opencode_go_source_db(path: Path) -> None:
     conn = create_opencode_db(path)
     opencode_go = deepcopy(VALID_ASSISTANT)
@@ -3118,6 +3189,176 @@ def create_opencode_go_source_db(path: Path) -> None:
     insert_message(conn, row_id="row-opencode-go", session_id="ses-1", data=opencode_go)
     conn.commit()
     conn.close()
+
+
+def create_opencode_cache_analysis_source_db(path: Path) -> None:
+    conn = create_opencode_db(path)
+    first = _stamp_opencode_message(VALID_ASSISTANT)
+    first["id"] = "msg-hit"
+    first["providerID"] = "opencode-go"
+    first["modelID"] = "glm-5.1"
+    first["tokens"] = {
+        "input": 30000,
+        "output": 50,
+        "reasoning": 0,
+        "cache": {"read": 120000, "write": 0, "output": 0},
+    }
+    first["cost"] = 0.04
+    second = _stamp_opencode_message(VALID_ASSISTANT)
+    second["id"] = "msg-miss"
+    second["providerID"] = "opencode-go"
+    second["modelID"] = "glm-5.1"
+    second["tokens"] = {
+        "input": 150000,
+        "output": 50,
+        "reasoning": 0,
+        "cache": {"read": 0, "write": 0, "output": 0},
+    }
+    second["cost"] = 0.21
+    insert_message(conn, row_id="row-1", session_id="ses-cache", data=first)
+    insert_message(conn, row_id="row-2", session_id="ses-cache", data=second)
+    conn.commit()
+    conn.close()
+
+
+def test_cli_analyze_session_opencode_last_human_output(tmp_path: Path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    source_db = tmp_path / "opencode.db"
+    create_opencode_cache_analysis_source_db(source_db)
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "analyze",
+            "session",
+            "opencode",
+            "--source",
+            str(source_db),
+            "--last",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "opencode source session ses-cache" in result.output
+    assert "estimated source cache loss:" in result.output
+    assert "Per call" in result.output
+    assert "Clusters" in result.output
+
+
+def test_cli_analyze_session_opencode_json_shape(tmp_path: Path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    source_db = tmp_path / "opencode.db"
+    create_opencode_cache_analysis_source_db(source_db)
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "analyze",
+            "session",
+            "opencode",
+            "--source",
+            str(source_db),
+            "--last",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["type"] == "session_cache_analysis"
+    assert payload["harness"] == "opencode"
+    assert payload["source_session_id"] == "ses-cache"
+    assert payload["call_count"] == 2
+    assert payload["totals"]["cache_read"] == 120000
+    assert payload["calls"][0]["ordinal"] == 1
+    assert payload["clusters"][0]["call_count"] == 2
+
+
+def test_cli_analyze_session_opencode_known_source_session_id(tmp_path: Path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    source_db = tmp_path / "opencode.db"
+    create_opencode_cache_analysis_source_db(source_db)
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "analyze",
+            "session",
+            "opencode",
+            "ses-cache",
+            "--source",
+            str(source_db),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "ses-cache" in result.output
+
+
+def test_cli_analyze_session_rejects_last_and_source_session_id(tmp_path: Path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    source_db = tmp_path / "opencode.db"
+    create_opencode_cache_analysis_source_db(source_db)
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "analyze",
+            "session",
+            "opencode",
+            "ses-cache",
+            "--source",
+            str(source_db),
+            "--last",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "cannot be used together" in result.output
+
+
+def test_cli_analyze_session_no_raw_json_in_output(tmp_path: Path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    source_db = tmp_path / "opencode.db"
+    create_opencode_cache_analysis_source_db(source_db)
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "analyze",
+            "session",
+            "opencode",
+            "--source",
+            str(source_db),
+            "--last",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert "raw_json" not in result.output
+    assert all("raw_json" not in row for row in payload["calls"])
 
 
 def create_zai_source_db(path: Path, *, source_cost: float = 0.0) -> None:

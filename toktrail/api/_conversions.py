@@ -88,6 +88,7 @@ def _to_public_token_breakdown(value: InternalTokenBreakdown) -> TokenBreakdown:
         reasoning=value.reasoning,
         cache_read=value.cache_read,
         cache_write=value.cache_write,
+        cache_output=value.cache_output,
     )
 
 

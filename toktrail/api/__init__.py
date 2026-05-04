@@ -10,6 +10,7 @@ from toktrail.api.config import (
     render_config_template,
     resolve_toktrail_config_path,
 )
+from toktrail.api.analysis import session_cache_analysis
 from toktrail.api.environment import prepare_environment
 from toktrail.api.harnesses import (
     get_harness_definition,
@@ -20,6 +21,8 @@ from toktrail.api.harnesses import (
 from toktrail.api.imports import import_configured_usage, import_usage
 from toktrail.api.models import (
     ActivitySummaryRow,
+    CacheCallRow,
+    CacheClusterRow,
     CostTotals,
     FinalizedManualRun,
     HarnessDefinition,
@@ -37,6 +40,7 @@ from toktrail.api.models import (
     StateExportResult,
     StateImportConflict,
     StateImportResult,
+    SessionCacheAnalysisReport,
     SubscriptionBillingPeriod,
     SubscriptionUsagePeriod,
     SubscriptionUsageReport,
@@ -86,6 +90,8 @@ from toktrail.api.workflow import finalize_manual_run, prepare_manual_run
 
 __all__ = [
     "ActivitySummaryRow",
+    "CacheCallRow",
+    "CacheClusterRow",
     "CostTotals",
     "FinalizedManualRun",
     "HarnessDefinition",
@@ -103,6 +109,7 @@ __all__ = [
     "StateExportResult",
     "StateImportConflict",
     "StateImportResult",
+    "SessionCacheAnalysisReport",
     "SubscriptionBillingPeriod",
     "SubscriptionUsagePeriod",
     "SubscriptionUsageReport",
@@ -142,6 +149,7 @@ __all__ = [
     "resolve_toktrail_config_path",
     "resolve_toktrail_db_path",
     "scan_usage",
+    "session_cache_analysis",
     "default_archive_name",
     "export_state_archive",
     "import_state_archive",

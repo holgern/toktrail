@@ -113,6 +113,8 @@ toktrail run status --split-thinking
 toktrail run status --price-state unpriced --sort tokens --limit 20
 toktrail --config ~/.config/toktrail/config.toml run status --json
 toktrail run status --harness pi --source-session pi_ses_001 --json
+toktrail analyze session opencode --last
+toktrail analyze session opencode ses-1 --json
 ```
 
 Show period-based usage across canonical ledger rows, even without an active
@@ -130,6 +132,7 @@ toktrail subscriptions --provider opencode-go --json
 toktrail sync export --out toktrail-state.tar.gz --no-refresh
 toktrail sync import toktrail-state.tar.gz
 toktrail sync import toktrail-state.tar.gz --dry-run --json
+toktrail analyze session opencode --last --source ~/.local/share/opencode/opencode.db
 ```
 
 Stop the active tracking session:
@@ -149,6 +152,7 @@ toktrail sources
 toktrail run start --name <name>
 toktrail refresh
 toktrail run status
+toktrail analyze session opencode --last
 toktrail usage today
 toktrail sessions
 toktrail subscriptions

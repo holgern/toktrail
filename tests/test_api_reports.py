@@ -169,6 +169,31 @@ def test_usage_report_supports_periods_without_tracking_session(
     assert report.totals.tokens.total == 1850
 
 
+def test_usage_report_preserves_cache_output_in_public_tokens(tmp_path: Path) -> None:
+    state_db = tmp_path / "toktrail.db"
+    conn = connect(state_db)
+    try:
+        migrate(conn)
+        insert_usage_events(
+            conn,
+            None,
+            [
+                make_api_usage_event(
+                    "cache-output",
+                    created_ms=1_000,
+                    tokens=TokenBreakdown(input=10, output=5, cache_output=7),
+                )
+            ],
+        )
+    finally:
+        conn.close()
+
+    report = usage_report(state_db)
+
+    assert report.totals.tokens.cache_output == 7
+    assert report.by_harness[0].tokens.cache_output == 7
+
+
 def test_usage_series_report_daily_json_shape(tmp_path: Path) -> None:
     state_db = tmp_path / "toktrail.db"
     source_db = tmp_path / "opencode.db"

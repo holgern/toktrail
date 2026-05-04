@@ -214,3 +214,99 @@ def test_list_opencode_sessions_aggregates_messages(tmp_path) -> None:
     assert summaries[0].source_session_id == "ses-1"
     assert summaries[0].assistant_message_count == 2
     assert summaries[0].tokens.total == 1865
+
+
+def test_parse_opencode_go_preserves_source_cost_and_cache_read(tmp_path) -> None:
+    db_path = tmp_path / "opencode.db"
+    conn = create_opencode_db(db_path)
+    high = deepcopy(VALID_ASSISTANT)
+    high["id"] = "msg-high"
+    high["providerID"] = "opencode-go"
+    high["modelID"] = "glm-5.1"
+    high["tokens"] = {
+        "input": 150435,
+        "output": 45,
+        "reasoning": 0,
+        "cache": {"read": 0, "write": 0, "output": 0},
+    }
+    high["cost"] = 0.2107
+    low = deepcopy(VALID_ASSISTANT)
+    low["id"] = "msg-low"
+    low["providerID"] = "opencode-go"
+    low["modelID"] = "glm-5.1"
+    low["tokens"] = {
+        "input": 20000,
+        "output": 90,
+        "reasoning": 0,
+        "cache": {"read": 130336, "write": 0, "output": 0},
+    }
+    low["cost"] = 0.0395
+    insert_message(conn, row_id="1", session_id="ses-cache", data=high)
+    insert_message(conn, row_id="2", session_id="ses-cache", data=low)
+    conn.commit()
+    conn.close()
+
+    events = parse_opencode_sqlite(db_path)
+
+    assert len(events) == 2
+    by_message = {event.source_message_id: event for event in events}
+    assert by_message["msg-high"].source_cost_usd == Decimal("0.2107")
+    assert by_message["msg-high"].tokens.cache_read == 0
+    assert by_message["msg-low"].source_cost_usd == Decimal("0.0395")
+    assert by_message["msg-low"].tokens.cache_read == 130336
+
+
+def test_parse_opencode_go_keeps_high_cost_uncached_call() -> None:
+    payload = deepcopy(VALID_ASSISTANT)
+    payload["id"] = "msg-high"
+    payload["providerID"] = "opencode-go"
+    payload["modelID"] = "glm-5.1"
+    payload["tokens"] = {
+        "input": 149000,
+        "output": 50,
+        "reasoning": 0,
+        "cache": {"read": 0, "write": 0, "output": 0},
+    }
+    payload["cost"] = 0.2096
+
+    event = parse_opencode_row("row-high", "ses-cache", json.dumps(payload))
+
+    assert event is not None
+    assert event.source_cost_usd == Decimal("0.2096")
+    assert event.tokens.cache_read == 0
+
+
+def test_parse_opencode_go_keeps_low_cost_cached_call() -> None:
+    payload = deepcopy(VALID_ASSISTANT)
+    payload["id"] = "msg-low"
+    payload["providerID"] = "opencode-go"
+    payload["modelID"] = "glm-5.1"
+    payload["tokens"] = {
+        "input": 18000,
+        "output": 60,
+        "reasoning": 0,
+        "cache": {"read": 132000, "write": 0, "output": 0},
+    }
+    payload["cost"] = 0.039
+
+    event = parse_opencode_row("row-low", "ses-cache", json.dumps(payload))
+
+    assert event is not None
+    assert event.source_cost_usd == Decimal("0.039")
+    assert event.tokens.cache_read == 132000
+
+
+def test_parse_opencode_go_cache_output_is_preserved() -> None:
+    payload = deepcopy(VALID_ASSISTANT)
+    payload["id"] = "msg-cache-output"
+    payload["tokens"] = {
+        "input": 10,
+        "output": 20,
+        "reasoning": 0,
+        "cache": {"read": 1, "write": 2, "output": 3},
+    }
+
+    event = parse_opencode_row("row-cache-output", "ses-cache", json.dumps(payload))
+
+    assert event is not None
+    assert event.tokens.cache_output == 3

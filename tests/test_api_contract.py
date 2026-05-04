@@ -23,6 +23,7 @@ def test_public_modules_import_successfully() -> None:
     for module_name in (
         "toktrail.errors",
         "toktrail.api",
+        "toktrail.api.analysis",
         "toktrail.api.models",
         "toktrail.api.paths",
         "toktrail.api.config",
@@ -55,6 +56,8 @@ def test_public_models_star_export_includes_documented_models() -> None:
 def test_root_api_exports_documented_models_and_functions() -> None:
     required = {
         "ActivitySummaryRow",
+        "CacheCallRow",
+        "CacheClusterRow",
         "CostTotals",
         "FinalizedManualRun",
         "HarnessDefinition",
@@ -72,6 +75,7 @@ def test_root_api_exports_documented_models_and_functions() -> None:
         "StateExportResult",
         "StateImportConflict",
         "StateImportResult",
+        "SessionCacheAnalysisReport",
         "SubscriptionBillingPeriod",
         "SubscriptionUsagePeriod",
         "SubscriptionUsageRow",
@@ -111,6 +115,7 @@ def test_root_api_exports_documented_models_and_functions() -> None:
         "resolve_toktrail_config_path",
         "resolve_toktrail_db_path",
         "scan_usage",
+        "session_cache_analysis",
         "default_archive_name",
         "export_state_archive",
         "import_state_archive",
