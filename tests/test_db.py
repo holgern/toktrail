@@ -117,6 +117,22 @@ def test_migrate_creates_tables_and_is_idempotent(tmp_path: Path) -> None:
     assert user_version == 5
 
 
+def test_migrate_v3_to_v4_idempotent_with_existing_column(tmp_path: Path) -> None:
+    conn = connect(tmp_path / "toktrail.db")
+
+    # Fresh init creates the full schema including cache_output_tokens.
+    migrate(conn)
+
+    # Simulate being at version 3 (before the cache_output_tokens migration).
+    conn.execute("PRAGMA user_version = 3")
+    conn.commit()
+
+    # Re-running migrate must not crash on duplicate column.
+    migrate(conn)
+
+    assert int(conn.execute("PRAGMA user_version").fetchone()[0]) == 5
+
+
 def test_source_costs_are_stored_and_aggregated_as_exact_decimals(
     tmp_path: Path,
 ) -> None:

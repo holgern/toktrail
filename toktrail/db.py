@@ -143,9 +143,7 @@ def _add_column_if_missing(
 ) -> None:
     if _table_has_column(conn, table_name, column_name):
         return
-    conn.execute(
-        f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type_sql}"
-    )
+    conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type_sql}")
 
 
 def _read_state_metadata(conn: sqlite3.Connection, key: str) -> str | None:
@@ -324,11 +322,11 @@ def _migrate_v2_to_v3(conn: sqlite3.Connection) -> None:
 
 
 def _migrate_v3_to_v4(conn: sqlite3.Connection) -> None:
-    conn.execute(
-        """
-        ALTER TABLE usage_events
-        ADD COLUMN cache_output_tokens INTEGER NOT NULL DEFAULT 0
-        """
+    _add_column_if_missing(
+        conn,
+        "usage_events",
+        "cache_output_tokens",
+        "INTEGER NOT NULL DEFAULT 0",
     )
 
 
@@ -368,9 +366,7 @@ def _migrate_v4_to_v5(conn: sqlite3.Connection) -> None:
     ).fetchall()
     for row in run_rows:
         sync_id = (
-            str(row["sync_id"])
-            if row["sync_id"] is not None
-            else uuid.uuid4().hex
+            str(row["sync_id"]) if row["sync_id"] is not None else uuid.uuid4().hex
         )
         origin_machine_id = (
             str(row["origin_machine_id"])
@@ -688,33 +684,33 @@ def insert_usage_events(
                      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
                  )
                  """,
-                 (
-                     tracking_session_id,
-                     harness_session_id,
-                     event.harness,
-                     event.source_session_id,
-                     event.source_row_id,
-                     event.source_message_id,
-                     event.source_dedup_key,
-                     event.global_dedup_key,
-                     event.fingerprint_hash,
-                     event.provider_id,
-                     event.model_id,
-                     event.thinking_level,
-                     event.agent,
-                     event.created_ms,
-                     event.completed_ms,
-                     event.tokens.input,
-                     event.tokens.output,
-                     event.tokens.reasoning,
-                     event.tokens.cache_read,
-                     event.tokens.cache_write,
-                     event.tokens.cache_output,
-                     _source_cost_to_storage(event.source_cost_usd),
-                     event.raw_json,
-                     imported_at_ms,
-                 ),
-             )
+                (
+                    tracking_session_id,
+                    harness_session_id,
+                    event.harness,
+                    event.source_session_id,
+                    event.source_row_id,
+                    event.source_message_id,
+                    event.source_dedup_key,
+                    event.global_dedup_key,
+                    event.fingerprint_hash,
+                    event.provider_id,
+                    event.model_id,
+                    event.thinking_level,
+                    event.agent,
+                    event.created_ms,
+                    event.completed_ms,
+                    event.tokens.input,
+                    event.tokens.output,
+                    event.tokens.reasoning,
+                    event.tokens.cache_read,
+                    event.tokens.cache_write,
+                    event.tokens.cache_output,
+                    _source_cost_to_storage(event.source_cost_usd),
+                    event.raw_json,
+                    imported_at_ms,
+                ),
+            )
             rows_inserted += cursor.rowcount
             if tracking_session_id is None:
                 continue
