@@ -230,7 +230,7 @@ and used/remaining/over-limit cost values based on each subscription
 ### Configured import
 
 Use `import_configured_usage()` when the caller wants the same behavior as plain
-`toktrail import`: read enabled harnesses from `[imports].harnesses`, source
+`toktrail refresh`: read enabled harnesses from `[imports].harnesses`, source
 paths from `[imports.sources]` (each configured value may be a string or list
 of strings), raw JSON behavior from `[imports].include_raw_json`, and
 missing-source handling from

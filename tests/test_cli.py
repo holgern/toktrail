@@ -25,7 +25,36 @@ from toktrail.models import TokenBreakdown, UsageEvent
 
 @pytest.fixture(autouse=True)
 def isolate_default_config(monkeypatch, tmp_path) -> None:
-    monkeypatch.setenv("TOKTRAIL_CONFIG", str(tmp_path / "missing-config.toml"))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    default_config = tmp_path / "default-config.toml"
+    default_config.write_text(
+        f"""
+config_version = 1
+
+[imports]
+harnesses = ["opencode"]
+missing_source = "warn"
+include_raw_json = false
+
+[imports.sources]
+opencode = "{tmp_path / 'missing-opencode.db'}"
+""".strip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("TOKTRAIL_CONFIG", str(default_config))
+    for key in (
+        "TOKTRAIL_PI_SESSIONS",
+        "TOKTRAIL_COPILOT_FILE",
+        "COPILOT_OTEL_FILE_EXPORTER_PATH",
+        "TOKTRAIL_COPILOT_OTEL_DIR",
+        "TOKTRAIL_CODEX_SESSIONS",
+        "CODEX_HOME",
+        "TOKTRAIL_GOOSE_SESSIONS",
+        "GOOSE_PATH_ROOT",
+        "TOKTRAIL_DROID_SESSIONS",
+        "TOKTRAIL_AMP_THREADS",
+    ):
+        monkeypatch.delenv(key, raising=False)
 
 
 def write_jsonl_rows(path: Path, rows: list[dict[str, object]]) -> None:
@@ -288,7 +317,7 @@ def setup_pricing_status_fixture(tmp_path: Path) -> tuple[CliRunner, Path, Path]
             str(state_db),
             "--config",
             str(config_path),
-            "import",
+            "refresh",
             "--harness",
             "opencode",
             "--source",
@@ -404,7 +433,7 @@ def create_pi_session_file(path: Path) -> None:
     )
 
 
-def test_cli_init_start_import_status_stop(tmp_path) -> None:
+def test_cli_init_start_refresh_status_stop(tmp_path) -> None:
     runner = CliRunner()
     state_db = tmp_path / "toktrail.db"
     source_db = tmp_path / "opencode.db"
@@ -421,7 +450,7 @@ def test_cli_init_start_import_status_stop(tmp_path) -> None:
         [
             "--db",
             str(state_db),
-            "import",
+            "refresh",
             "--harness",
             "opencode",
             "--source",
@@ -466,7 +495,7 @@ def test_cli_sessions_without_subcommand_lists_tracking_sessions(tmp_path) -> No
     assert "started=17" not in result.output
 
 
-def test_cli_import_missing_opencode_db_fails(tmp_path) -> None:
+def test_cli_refresh_missing_opencode_db_fails(tmp_path) -> None:
     runner = CliRunner()
     state_db = tmp_path / "toktrail.db"
 
@@ -479,7 +508,7 @@ def test_cli_import_missing_opencode_db_fails(tmp_path) -> None:
         [
             "--db",
             str(state_db),
-            "import",
+            "refresh",
             "--harness",
             "opencode",
             "--source",
@@ -570,7 +599,7 @@ opencode = "{missing_db}"
     assert "OpenCode database not found" in payload[0]["warning"]
 
 
-def test_cli_import_copilot_status(tmp_path) -> None:
+def test_cli_refresh_copilot_status(tmp_path) -> None:
     runner = CliRunner()
     state_db = tmp_path / "toktrail.db"
     copilot_file = tmp_path / "copilot.jsonl"
@@ -585,7 +614,7 @@ def test_cli_import_copilot_status(tmp_path) -> None:
         [
             "--db",
             str(state_db),
-            "import",
+            "refresh",
             "--harness",
             "copilot",
             "--source",
@@ -594,7 +623,7 @@ def test_cli_import_copilot_status(tmp_path) -> None:
     )
 
     assert result.exit_code == 0, result.output
-    assert "Imported Copilot usage:" in result.output
+    assert "Refreshed Copilot usage:" in result.output
     assert "rows imported: 1" in result.output
 
     status = runner.invoke(app, ["--db", str(state_db), "run", "status", "1", "--json"])
@@ -604,7 +633,7 @@ def test_cli_import_copilot_status(tmp_path) -> None:
     assert payload["totals"]["output"] == 5
 
 
-def test_cli_import_codex_status(tmp_path) -> None:
+def test_cli_refresh_codex_status(tmp_path) -> None:
     runner = CliRunner()
     state_db = tmp_path / "toktrail.db"
     codex_file = tmp_path / "codex" / "session-001.jsonl"
@@ -619,7 +648,7 @@ def test_cli_import_codex_status(tmp_path) -> None:
         [
             "--db",
             str(state_db),
-            "import",
+            "refresh",
             "--harness",
             "codex",
             "--source",
@@ -628,7 +657,7 @@ def test_cli_import_codex_status(tmp_path) -> None:
     )
 
     assert result.exit_code == 0, result.output
-    assert "Imported Codex usage:" in result.output
+    assert "Refreshed Codex usage:" in result.output
     assert "rows imported: 1" in result.output
 
     status = runner.invoke(app, ["--db", str(state_db), "run", "status", "1", "--json"])
@@ -640,7 +669,7 @@ def test_cli_import_codex_status(tmp_path) -> None:
     assert payload["totals"]["reasoning"] == 5
 
 
-def test_cli_import_goose_status(tmp_path) -> None:
+def test_cli_refresh_goose_status(tmp_path) -> None:
     runner = CliRunner()
     state_db = tmp_path / "toktrail.db"
     goose_db = tmp_path / "goose" / "sessions.db"
@@ -655,7 +684,7 @@ def test_cli_import_goose_status(tmp_path) -> None:
         [
             "--db",
             str(state_db),
-            "import",
+            "refresh",
             "--harness",
             "goose",
             "--source",
@@ -664,7 +693,7 @@ def test_cli_import_goose_status(tmp_path) -> None:
     )
 
     assert result.exit_code == 0, result.output
-    assert "Imported Goose usage:" in result.output
+    assert "Refreshed Goose usage:" in result.output
     assert "rows imported: 1" in result.output
 
     status = runner.invoke(app, ["--db", str(state_db), "run", "status", "1", "--json"])
@@ -677,7 +706,7 @@ def test_cli_import_goose_status(tmp_path) -> None:
     assert payload["totals"]["source_cost_usd"] in ("0", "0.0")
 
 
-def test_cli_import_droid_status(tmp_path) -> None:
+def test_cli_refresh_droid_status(tmp_path) -> None:
     runner = CliRunner()
     state_db = tmp_path / "toktrail.db"
     source_path = tmp_path / "factory" / "sessions"
@@ -690,7 +719,7 @@ def test_cli_import_droid_status(tmp_path) -> None:
         [
             "--db",
             str(state_db),
-            "import",
+            "refresh",
             "--harness",
             "droid",
             "--source",
@@ -699,7 +728,7 @@ def test_cli_import_droid_status(tmp_path) -> None:
     )
 
     assert result.exit_code == 0, result.output
-    assert "Imported Droid usage:" in result.output
+    assert "Refreshed Droid usage:" in result.output
     assert "rows imported: 1" in result.output
 
     status = runner.invoke(app, ["--db", str(state_db), "run", "status", "1", "--json"])
@@ -713,7 +742,7 @@ def test_cli_import_droid_status(tmp_path) -> None:
     assert payload["totals"]["total"] == 1936
 
 
-def test_cli_import_amp_status(tmp_path) -> None:
+def test_cli_refresh_amp_status(tmp_path) -> None:
     runner = CliRunner()
     state_db = tmp_path / "toktrail.db"
     source_path = tmp_path / "amp" / "threads"
@@ -726,7 +755,7 @@ def test_cli_import_amp_status(tmp_path) -> None:
         [
             "--db",
             str(state_db),
-            "import",
+            "refresh",
             "--harness",
             "amp",
             "--source",
@@ -735,7 +764,7 @@ def test_cli_import_amp_status(tmp_path) -> None:
     )
 
     assert result.exit_code == 0, result.output
-    assert "Imported Amp usage:" in result.output
+    assert "Refreshed Amp usage:" in result.output
     assert "rows imported: 1" in result.output
 
     status = runner.invoke(app, ["--db", str(state_db), "run", "status", "1", "--json"])
@@ -790,7 +819,7 @@ def test_cli_status_supports_thinking_filter_and_collapse(tmp_path) -> None:
         [
             "--db",
             str(state_db),
-            "import",
+            "refresh",
             "--harness",
             "opencode",
             "--source",
@@ -845,7 +874,7 @@ def test_cli_status_supports_thinking_filter_and_collapse(tmp_path) -> None:
     assert "reasoning" in human.output
 
 
-def test_cli_plain_import_uses_config_without_active_session(tmp_path) -> None:
+def test_cli_plain_refresh_uses_config_without_active_session(tmp_path) -> None:
     runner = CliRunner()
     state_db = tmp_path / "toktrail.db"
     source_db = tmp_path / "opencode.db"
@@ -871,7 +900,7 @@ opencode = "{source_db}"
 
     result = runner.invoke(
         app,
-        ["--db", str(state_db), "--config", str(config_path), "import", "--json"],
+        ["--db", str(state_db), "--config", str(config_path), "refresh", "--json"],
     )
     payload = json.loads(result.output)
 
@@ -882,7 +911,85 @@ opencode = "{source_db}"
     assert payload[0]["rows_linked"] == 0
 
 
-def test_cli_usage_today_reports_unscoped_imports(tmp_path, monkeypatch) -> None:
+def test_cli_import_command_removed_pre_release() -> None:
+    runner = CliRunner()
+    result = runner.invoke(app, ["import"])
+    assert result.exit_code != 0
+
+
+def test_cli_refresh_respects_raw_json_config_default_false(tmp_path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    source_db = tmp_path / "opencode.db"
+    config_path = tmp_path / "toktrail.toml"
+    create_source_db(source_db)
+    config_path.write_text(
+        f"""
+config_version = 1
+
+[imports]
+harnesses = ["opencode"]
+missing_source = "warn"
+include_raw_json = false
+
+[imports.sources]
+opencode = "{source_db}"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    result = runner.invoke(
+        app,
+        ["--db", str(state_db), "--config", str(config_path), "refresh"],
+    )
+    assert result.exit_code == 0, result.output
+
+    conn = sqlite3.connect(state_db)
+    count = conn.execute(
+        "SELECT COUNT(*) FROM usage_events WHERE raw_json IS NOT NULL"
+    ).fetchone()[0]
+    conn.close()
+    assert count == 0
+
+
+def test_cli_refresh_raw_overrides_config(tmp_path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    source_db = tmp_path / "opencode.db"
+    config_path = tmp_path / "toktrail.toml"
+    create_source_db(source_db)
+    config_path.write_text(
+        f"""
+config_version = 1
+
+[imports]
+harnesses = ["opencode"]
+missing_source = "warn"
+include_raw_json = false
+
+[imports.sources]
+opencode = "{source_db}"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    result = runner.invoke(
+        app,
+        ["--db", str(state_db), "--config", str(config_path), "refresh", "--raw"],
+    )
+    assert result.exit_code == 0, result.output
+
+    conn = sqlite3.connect(state_db)
+    count = conn.execute(
+        "SELECT COUNT(*) FROM usage_events WHERE raw_json IS NOT NULL"
+    ).fetchone()[0]
+    conn.close()
+    assert count > 0
+
+
+def test_cli_usage_today_reports_unscoped_refreshes(tmp_path, monkeypatch) -> None:
     runner = CliRunner()
     state_db = tmp_path / "toktrail.db"
     source_db = tmp_path / "opencode.db"
@@ -908,10 +1015,18 @@ opencode = "{source_db}"
     )
 
     runner.invoke(app, ["--db", str(state_db), "init"])
-    runner.invoke(app, ["--db", str(state_db), "--config", str(config_path), "import"])
     result = runner.invoke(
         app,
-        ["--db", str(state_db), "usage", "today", "--utc", "--json"],
+        [
+            "--db",
+            str(state_db),
+            "--config",
+            str(config_path),
+            "usage",
+            "today",
+            "--utc",
+            "--json",
+        ],
     )
     payload = json.loads(result.output)
 
@@ -920,6 +1035,137 @@ opencode = "{source_db}"
     assert payload["filters"]["period"] == "today"
     assert payload["filters"]["timezone"] == "UTC"
     assert payload["totals"]["total"] == 1850
+    assert "refresh" not in payload
+
+
+def test_cli_usage_no_refresh_uses_existing_state_only(tmp_path, monkeypatch) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    source_db = tmp_path / "opencode.db"
+    config_path = tmp_path / "toktrail.toml"
+    create_source_db(source_db)
+    config_path.write_text(
+        f"""
+config_version = 1
+
+[imports]
+harnesses = ["opencode"]
+missing_source = "warn"
+include_raw_json = false
+
+[imports.sources]
+opencode = "{source_db}"
+""".strip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "toktrail.periods.current_time_in_zone",
+        lambda tz: datetime.now(tz=tz),
+    )
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "--config",
+            str(config_path),
+            "usage",
+            "today",
+            "--utc",
+            "--json",
+            "--no-refresh",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["totals"]["total"] == 0
+
+
+def test_cli_usage_refresh_details_prints_compact_refresh_summary(tmp_path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    source_db = tmp_path / "opencode.db"
+    config_path = tmp_path / "toktrail.toml"
+    create_source_db(source_db)
+    config_path.write_text(
+        f"""
+config_version = 1
+
+[imports]
+harnesses = ["opencode"]
+missing_source = "warn"
+include_raw_json = false
+
+[imports.sources]
+opencode = "{source_db}"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "--config",
+            str(config_path),
+            "usage",
+            "today",
+            "--refresh-details",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Refreshed usage" in result.output
+    assert "inserted" in result.output
+    assert "source path" not in result.output.lower()
+
+
+def test_cli_usage_refresh_details_json_wraps_refresh_and_report(tmp_path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    source_db = tmp_path / "opencode.db"
+    config_path = tmp_path / "toktrail.toml"
+    create_source_db(source_db)
+    config_path.write_text(
+        f"""
+config_version = 1
+
+[imports]
+harnesses = ["opencode"]
+missing_source = "warn"
+include_raw_json = false
+
+[imports.sources]
+opencode = "{source_db}"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "--config",
+            str(config_path),
+            "usage",
+            "today",
+            "--json",
+            "--refresh-details",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert "refresh" in payload
+    assert "report" in payload
+    assert payload["report"]["totals"]["total"] == 1850
 
 
 def test_cli_usage_supports_explicit_since_until_boundaries(tmp_path) -> None:
@@ -944,7 +1190,7 @@ opencode = "{source_db}"
     )
 
     runner.invoke(app, ["--db", str(state_db), "init"])
-    runner.invoke(app, ["--db", str(state_db), "--config", str(config_path), "import"])
+    runner.invoke(app, ["--db", str(state_db), "--config", str(config_path), "refresh"])
     result = runner.invoke(
         app,
         [
@@ -969,7 +1215,7 @@ opencode = "{source_db}"
     assert payload["totals"]["total"] == 1850
 
 
-def test_cli_plain_import_supports_harness_override_and_source(tmp_path) -> None:
+def test_cli_plain_refresh_supports_harness_override_and_source(tmp_path) -> None:
     runner = CliRunner()
     state_db = tmp_path / "toktrail.db"
     source_db = tmp_path / "opencode.db"
@@ -996,7 +1242,7 @@ include_raw_json = false
             str(state_db),
             "--config",
             str(config_path),
-            "import",
+            "refresh",
             "--harness",
             "opencode",
             "--source",
@@ -1011,7 +1257,7 @@ include_raw_json = false
     assert payload[0]["rows_imported"] == 1
 
 
-def test_cli_plain_import_supports_codex_harness_override_and_source(tmp_path) -> None:
+def test_cli_plain_refresh_supports_codex_harness_override_and_source(tmp_path) -> None:
     runner = CliRunner()
     state_db = tmp_path / "toktrail.db"
     codex_file = tmp_path / "codex" / "session-001.jsonl"
@@ -1038,7 +1284,7 @@ include_raw_json = false
             str(state_db),
             "--config",
             str(config_path),
-            "import",
+            "refresh",
             "--harness",
             "codex",
             "--source",
@@ -1053,7 +1299,7 @@ include_raw_json = false
     assert payload[0]["rows_imported"] == 1
 
 
-def test_cli_plain_import_supports_amp_harness_override_and_source(tmp_path) -> None:
+def test_cli_plain_refresh_supports_amp_harness_override_and_source(tmp_path) -> None:
     runner = CliRunner()
     state_db = tmp_path / "toktrail.db"
     source_path = tmp_path / "amp" / "threads"
@@ -1080,7 +1326,7 @@ include_raw_json = false
             str(state_db),
             "--config",
             str(config_path),
-            "import",
+            "refresh",
             "--harness",
             "amp",
             "--source",
@@ -1095,7 +1341,7 @@ include_raw_json = false
     assert payload[0]["rows_imported"] == 1
 
 
-def test_cli_import_with_no_session_inserts_unscoped_rows(tmp_path) -> None:
+def test_cli_refresh_with_no_session_inserts_unscoped_rows(tmp_path) -> None:
     runner = CliRunner()
     state_db = tmp_path / "toktrail.db"
     source_db = tmp_path / "opencode.db"
@@ -1108,7 +1354,7 @@ def test_cli_import_with_no_session_inserts_unscoped_rows(tmp_path) -> None:
         [
             "--db",
             str(state_db),
-            "import",
+            "refresh",
             "--no-session",
             "--harness",
             "opencode",
@@ -1124,7 +1370,7 @@ def test_cli_import_with_no_session_inserts_unscoped_rows(tmp_path) -> None:
     assert payload[0]["rows_imported"] == 1
 
 
-def test_cli_import_with_no_session_is_idempotent(tmp_path) -> None:
+def test_cli_refresh_with_no_session_is_idempotent(tmp_path) -> None:
     runner = CliRunner()
     state_db = tmp_path / "toktrail.db"
     source_db = tmp_path / "opencode.db"
@@ -1138,7 +1384,7 @@ def test_cli_import_with_no_session_is_idempotent(tmp_path) -> None:
         [
             "--db",
             str(state_db),
-            "import",
+            "refresh",
             "--no-session",
             "--harness",
             "opencode",
@@ -1156,7 +1402,7 @@ def test_cli_import_with_no_session_is_idempotent(tmp_path) -> None:
         [
             "--db",
             str(state_db),
-            "import",
+            "refresh",
             "--no-session",
             "--harness",
             "opencode",
@@ -1170,7 +1416,7 @@ def test_cli_import_with_no_session_is_idempotent(tmp_path) -> None:
     assert payload2[0]["rows_skipped"] == 1
 
 
-def test_cli_import_with_no_session_dry_run_does_not_persist(tmp_path) -> None:
+def test_cli_refresh_with_no_session_dry_run_does_not_persist(tmp_path) -> None:
     runner = CliRunner()
     state_db = tmp_path / "toktrail.db"
     source_db = tmp_path / "opencode.db"
@@ -1184,7 +1430,7 @@ def test_cli_import_with_no_session_dry_run_does_not_persist(tmp_path) -> None:
         [
             "--db",
             str(state_db),
-            "import",
+            "refresh",
             "--no-session",
             "--harness",
             "opencode",
@@ -1204,7 +1450,7 @@ def test_cli_import_with_no_session_dry_run_does_not_persist(tmp_path) -> None:
     assert count == 0
 
 
-def test_cli_import_missing_copilot_file_fails(tmp_path) -> None:
+def test_cli_refresh_missing_copilot_file_fails(tmp_path) -> None:
     runner = CliRunner()
     state_db = tmp_path / "toktrail.db"
 
@@ -1217,7 +1463,7 @@ def test_cli_import_missing_copilot_file_fails(tmp_path) -> None:
         [
             "--db",
             str(state_db),
-            "import",
+            "refresh",
             "--harness",
             "copilot",
             "--source",
@@ -1229,7 +1475,7 @@ def test_cli_import_missing_copilot_file_fails(tmp_path) -> None:
     assert "Copilot telemetry file not found" in result.output
 
 
-def test_cli_import_codex_without_path_or_env_fails(tmp_path, monkeypatch) -> None:
+def test_cli_refresh_codex_without_path_or_env_fails(tmp_path, monkeypatch) -> None:
     runner = CliRunner()
     state_db = tmp_path / "toktrail.db"
     monkeypatch.setenv("HOME", str(tmp_path))
@@ -1244,7 +1490,7 @@ def test_cli_import_codex_without_path_or_env_fails(tmp_path, monkeypatch) -> No
         [
             "--db",
             str(state_db),
-            "import",
+            "refresh",
             "--harness",
             "codex",
             "--source",
@@ -1256,7 +1502,7 @@ def test_cli_import_codex_without_path_or_env_fails(tmp_path, monkeypatch) -> No
     assert "Codex source path not found" in result.output
 
 
-def test_cli_import_copilot_without_file_or_env_fails(tmp_path) -> None:
+def test_cli_refresh_copilot_without_file_or_env_fails(tmp_path) -> None:
     runner = CliRunner()
     state_db = tmp_path / "toktrail.db"
     env = {
@@ -1275,7 +1521,7 @@ def test_cli_import_copilot_without_file_or_env_fails(tmp_path) -> None:
         [
             "--db",
             str(state_db),
-            "import",
+            "refresh",
             "--harness",
             "copilot",
             "--source",
@@ -1288,7 +1534,7 @@ def test_cli_import_copilot_without_file_or_env_fails(tmp_path) -> None:
     assert "Copilot telemetry file not found" in result.output
 
 
-def test_cli_import_pi_status(tmp_path) -> None:
+def test_cli_refresh_pi_status(tmp_path) -> None:
     runner = CliRunner()
     state_db = tmp_path / "toktrail.db"
     session_file = tmp_path / "sessions" / "encoded-cwd" / "session.jsonl"
@@ -1303,7 +1549,7 @@ def test_cli_import_pi_status(tmp_path) -> None:
         [
             "--db",
             str(state_db),
-            "import",
+            "refresh",
             "--harness",
             "pi",
             "--source",
@@ -1312,7 +1558,7 @@ def test_cli_import_pi_status(tmp_path) -> None:
     )
 
     assert result.exit_code == 0, result.output
-    assert "Imported Pi usage:" in result.output
+    assert "Refreshed Pi usage:" in result.output
     assert "rows imported: 1" in result.output
 
     status = runner.invoke(app, ["--db", str(state_db), "run", "status", "1", "--json"])
@@ -1348,7 +1594,7 @@ def test_cli_status_filters_by_harness_and_source_session(tmp_path) -> None:
         [
             "--db",
             str(state_db),
-            "import",
+            "refresh",
             "--harness",
             "opencode",
             "--source",
@@ -1360,7 +1606,7 @@ def test_cli_status_filters_by_harness_and_source_session(tmp_path) -> None:
         [
             "--db",
             str(state_db),
-            "import",
+            "refresh",
             "--harness",
             "pi",
             "--source",
@@ -1448,6 +1694,138 @@ def test_cli_run_status_reports_only_usage_since_run_started(tmp_path: Path) -> 
     assert payload["totals"]["output"] == 3
     assert payload["totals"]["total"] == 10
     assert payload["filters"]["since_ms"] == 1_000
+
+
+def test_cli_run_status_auto_refreshes_active_session(tmp_path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    source_db = tmp_path / "opencode.db"
+    config_path = tmp_path / "toktrail.toml"
+    create_source_db(source_db)
+    config_path.write_text(
+        f"""
+config_version = 1
+
+[imports]
+harnesses = ["opencode"]
+missing_source = "warn"
+include_raw_json = false
+
+[imports.sources]
+opencode = "{source_db}"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    runner.invoke(app, ["--db", str(state_db), "run", "start", "--name", "test"])
+    result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "--config",
+            str(config_path),
+            "run",
+            "status",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["totals"]["total"] > 0
+    assert "refresh" not in payload
+
+
+def test_cli_run_status_no_refresh_uses_stale_state(tmp_path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    source_db = tmp_path / "opencode.db"
+    config_path = tmp_path / "toktrail.toml"
+    create_source_db(source_db)
+    config_path.write_text(
+        f"""
+config_version = 1
+
+[imports]
+harnesses = ["opencode"]
+missing_source = "warn"
+include_raw_json = false
+
+[imports.sources]
+opencode = "{source_db}"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    runner.invoke(app, ["--db", str(state_db), "run", "start", "--name", "test"])
+    result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "--config",
+            str(config_path),
+            "run",
+            "status",
+            "--json",
+            "--no-refresh",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["totals"]["total"] == 0
+
+
+def test_cli_run_stop_refreshes_before_closing_session(tmp_path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    source_db = tmp_path / "opencode.db"
+    config_path = tmp_path / "toktrail.toml"
+    conn = create_opencode_db(source_db)
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    message = deepcopy(VALID_ASSISTANT)
+    message["time"] = {
+        "created": float(now_ms),
+        "completed": float(now_ms + 500),
+    }
+    insert_message(conn, row_id="row-1", session_id="ses-1", data=message)
+    conn.commit()
+    conn.close()
+    config_path.write_text(
+        f"""
+config_version = 1
+
+[imports]
+harnesses = ["opencode"]
+missing_source = "warn"
+include_raw_json = false
+
+[imports.sources]
+opencode = "{source_db}"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    start_run(state_db, name="test", started_at_ms=0)
+    stop = runner.invoke(
+        app,
+        ["--db", str(state_db), "--config", str(config_path), "run", "stop"],
+    )
+    assert stop.exit_code == 0, stop.output
+    assert "Refreshed usage" not in stop.output
+
+    status = runner.invoke(
+        app,
+        ["--db", str(state_db), "run", "status", "1", "--json", "--no-refresh"],
+    )
+    assert status.exit_code == 0, status.output
+    payload = json.loads(status.output)
+    assert payload["totals"]["total"] > 0
 
 
 def test_cli_config_path_init_and_validate(tmp_path) -> None:
@@ -1611,7 +1989,7 @@ def test_cli_status_with_template_config_computes_copilot_virtual_cost(
         [
             "--db",
             str(state_db),
-            "import",
+            "refresh",
             "--harness",
             "copilot",
             "--source",
@@ -1656,7 +2034,7 @@ def test_cli_status_human_output_contains_actual_virtual_and_savings(tmp_path) -
         [
             "--db",
             str(state_db),
-            "import",
+            "refresh",
             "--harness",
             "opencode",
             "--source",
@@ -1882,6 +2260,63 @@ def test_cli_pricing_list_missing_only_reports_unconfigured_used_models(
             "total": 450,
         }
     ]
+
+
+def test_cli_pricing_list_used_only_auto_refreshes_configured_sources(tmp_path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    source_db = tmp_path / "opencode.db"
+    config_path = tmp_path / "toktrail.toml"
+    create_source_db(source_db)
+    config_path.write_text(
+        f"""
+config_version = 1
+
+[imports]
+harnesses = ["opencode"]
+missing_source = "warn"
+include_raw_json = false
+
+[imports.sources]
+opencode = "{source_db}"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    stale = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "--config",
+            str(config_path),
+            "pricing",
+            "list",
+            "--used-only",
+            "--json",
+            "--no-refresh",
+        ],
+    )
+    assert stale.exit_code == 0, stale.output
+    assert json.loads(stale.output) == []
+
+    refreshed = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "--config",
+            str(config_path),
+            "pricing",
+            "list",
+            "--used-only",
+            "--json",
+        ],
+    )
+    assert refreshed.exit_code == 0, refreshed.output
+    payload = json.loads(refreshed.output)
+    assert len(payload) > 0
 
 
 def test_cli_status_rejects_invalid_display_filter_values(tmp_path) -> None:
@@ -2284,7 +2719,7 @@ def test_cli_sessions_copilot_supports_virtual_and_savings_sort(tmp_path) -> Non
         assert "conv-1" not in result.output
 
 
-def test_cli_import_pi_without_path_or_env_fails(tmp_path, monkeypatch) -> None:
+def test_cli_refresh_pi_without_path_or_env_fails(tmp_path, monkeypatch) -> None:
     runner = CliRunner()
     state_db = tmp_path / "toktrail.db"
     monkeypatch.setenv("HOME", str(tmp_path))
@@ -2299,7 +2734,7 @@ def test_cli_import_pi_without_path_or_env_fails(tmp_path, monkeypatch) -> None:
         [
             "--db",
             str(state_db),
-            "import",
+            "refresh",
             "--harness",
             "pi",
             "--source",
@@ -2718,6 +3153,86 @@ reset_at = "2023-11-01T00:00:00+00:00"
     )
 
 
+def test_cli_subscriptions_auto_refreshes_before_summarizing(tmp_path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    source_db = tmp_path / "opencode-go.db"
+    config_path = tmp_path / "toktrail.toml"
+    create_opencode_go_source_db(source_db)
+    config_path.write_text(
+        f"""
+config_version = 1
+
+[imports]
+harnesses = ["opencode"]
+missing_source = "warn"
+include_raw_json = false
+
+[imports.sources]
+opencode = "{source_db}"
+
+[[subscriptions]]
+provider = "opencode-go"
+display_name = "OpenCode Go"
+timezone = "UTC"
+cost_basis = "source"
+
+[[subscriptions.windows]]
+period = "5h"
+limit_usd = 10
+reset_mode = "fixed"
+reset_at = "2023-11-01T00:00:00+00:00"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    stale = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "--config",
+            str(config_path),
+            "subscriptions",
+            "--json",
+            "--no-refresh",
+            "--now-ms",
+            "1700000000000",
+        ],
+    )
+    assert stale.exit_code == 0, stale.output
+    stale_payload = json.loads(stale.output)
+    stale_used = sum(
+        float(period["used_usd"])
+        for sub in stale_payload["subscriptions"]
+        for period in sub["periods"]
+    )
+    assert stale_used == 0.0
+
+    refreshed = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "--config",
+            str(config_path),
+            "subscriptions",
+            "--json",
+            "--now-ms",
+            "1700000000000",
+        ],
+    )
+    assert refreshed.exit_code == 0, refreshed.output
+    refreshed_payload = json.loads(refreshed.output)
+    refreshed_used = sum(
+        float(period["used_usd"])
+        for sub in refreshed_payload["subscriptions"]
+        for period in sub["periods"]
+    )
+    assert refreshed_used > 0.0
+
+
 def test_cli_usage_summary_human_output_contains_by_provider(tmp_path) -> None:
     runner = CliRunner()
     state_db = tmp_path / "toktrail.db"
@@ -2731,7 +3246,7 @@ def test_cli_usage_summary_human_output_contains_by_provider(tmp_path) -> None:
         [
             "--db",
             str(state_db),
-            "import",
+            "refresh",
             "--harness",
             "opencode",
             "--source",
@@ -2758,7 +3273,7 @@ def test_cli_usage_summary_json_contains_by_provider(tmp_path) -> None:
         [
             "--db",
             str(state_db),
-            "import",
+            "refresh",
             "--harness",
             "opencode",
             "--source",
@@ -2788,7 +3303,7 @@ def test_cli_subscriptions_prints_5h_window(tmp_path) -> None:
         [
             "--db",
             str(state_db),
-            "import",
+            "refresh",
             "--no-session",
             "--harness",
             "opencode",
@@ -2831,7 +3346,7 @@ def test_cli_subscriptions_provider_filter_json_shape(tmp_path) -> None:
         [
             "--db",
             str(state_db),
-            "import",
+            "refresh",
             "--no-session",
             "--harness",
             "opencode",
@@ -2885,7 +3400,7 @@ def test_cli_subscriptions_period_filter_accepts_5h(tmp_path) -> None:
         [
             "--db",
             str(state_db),
-            "import",
+            "refresh",
             "--no-session",
             "--harness",
             "opencode",
@@ -3032,7 +3547,7 @@ def test_cli_subscriptions_unknown_provider_filter_is_clear(tmp_path) -> None:
         [
             "--db",
             str(state_db),
-            "import",
+            "refresh",
             "--no-session",
             "--harness",
             "opencode",

@@ -76,8 +76,8 @@ from toktrail.reporting import (
 )
 
 app = typer.Typer(help="Track harness token usage in local SQLite sessions.")
-import_app = typer.Typer(help="Import usage from external harnesses.")
-watch_app = typer.Typer(help="Watch external harnesses and import new usage.")
+refresh_app = typer.Typer(help="Refresh usage from configured harness sources.")
+watch_app = typer.Typer(help="Watch external harnesses and refresh new usage.")
 run_app = typer.Typer(help="Manage toktrail tracking runs.")
 sessions_app = typer.Typer(
     invoke_without_command=True,
@@ -89,7 +89,7 @@ config_app = typer.Typer(help="Inspect toktrail pricing config.")
 pricing_app = typer.Typer(help="Inspect configured and used model pricing.")
 subscriptions_app = typer.Typer(help="Inspect provider subscription limits.")
 
-app.add_typer(import_app, name="import")
+app.add_typer(refresh_app, name="refresh")
 app.add_typer(watch_app, name="watch")
 app.add_typer(run_app, name="run")
 app.add_typer(source_sessions_app, name="source-sessions")
@@ -281,17 +281,41 @@ VibePathOption = Annotated[
 SinceStartOption = Annotated[bool, typer.Option("--since-start")]
 NoRawOption = Annotated[bool, typer.Option("--no-raw")]
 NoSessionOption = Annotated[
-    bool, typer.Option("--no-session", help="Import without a tracking session.")
+    bool, typer.Option("--no-session", help="Refresh without a tracking session.")
 ]
 IntervalOption = Annotated[float, typer.Option("--interval", min=0.1)]
 CopilotRunArgs = Annotated[list[str], typer.Argument(help="Command to run after --.")]
 SourcePathOption = Annotated[Path | None, typer.Option("--source")]
 RawOption = Annotated[bool | None, typer.Option("--raw/--no-raw")]
+RefreshOption = Annotated[
+    bool,
+    typer.Option(
+        "--refresh/--no-refresh",
+        help="Refresh configured harness usage before producing the report.",
+    ),
+]
+RefreshDetailsOption = Annotated[
+    bool,
+    typer.Option(
+        "--refresh-details",
+        help="Print a compact refresh summary before the requested output.",
+    ),
+]
+RawModeOption = Annotated[
+    bool | None,
+    typer.Option(
+        "--raw/--no-raw",
+        help=(
+            "Override imports.include_raw_json for this refresh. "
+            "Omit to use config."
+        ),
+    ),
+]
 DryRunOption = Annotated[
-    bool, typer.Option("--dry-run", help="Simulate import without persisting changes.")
+    bool, typer.Option("--dry-run", help="Simulate refresh without persisting changes.")
 ]
 RequiredHarnessOption = Annotated[
-    str | None, typer.Option("--harness", help="Name of the harness to import from.")
+    str | None, typer.Option("--harness", help="Name of the harness to refresh from.")
 ]
 RequiredSourceOption = Annotated[
     Path | None, typer.Option("--source", help="Path to source data.")
@@ -335,11 +359,14 @@ def start(
 def stop(
     ctx: typer.Context,
     session_id: SessionArgument = None,
+    refresh: RefreshOption = True,
+    refresh_details: RefreshDetailsOption = False,
+    raw: RawModeOption = None,
 ) -> None:
     conn = _open_toktrail_connection(ctx)
     session = None
+    selected_session_id = session_id
     try:
-        selected_session_id = session_id
         if selected_session_id is None:
             selected_session_id = get_active_tracking_session(conn)
         if selected_session_id is None:
@@ -348,6 +375,20 @@ def stop(
         session = get_tracking_session(conn, selected_session_id)
         if session is None:
             _exit_with_error(f"Tracking session not found: {selected_session_id}")
+    finally:
+        conn.close()
+    _refresh_before_report(
+        ctx,
+        enabled=refresh,
+        details=refresh_details,
+        json_output=False,
+        session_id=selected_session_id,
+        use_active_session=False,
+        include_raw_json=raw,
+        since_start=True,
+    )
+    conn = _open_toktrail_connection(ctx)
+    try:
         end_tracking_session(conn, selected_session_id)
     finally:
         conn.close()
@@ -376,6 +417,9 @@ def status(
     min_tokens: MinTokensOption = None,
     sort: ReportSortOption = "actual",
     limit: ReportLimitOption = None,
+    refresh: RefreshOption = True,
+    refresh_details: RefreshDetailsOption = False,
+    raw: RawModeOption = None,
 ) -> None:
     costing_config = _load_costing_config_or_exit(ctx)
     display_filters = _normalize_report_display_filter(
@@ -385,14 +429,32 @@ def status(
         sort=sort,
         limit=limit,
     )
+    selected_session_id = session_id
     conn = _open_toktrail_connection(ctx)
     try:
-        selected_session_id = session_id
         if selected_session_id is None:
             selected_session_id = get_active_tracking_session(conn)
         if selected_session_id is None:
             _exit_with_error("No active tracking session found.")
+        if get_tracking_session(conn, selected_session_id) is None:
+            _exit_with_error(f"Tracking session not found: {selected_session_id}")
+    finally:
+        conn.close()
 
+    refresh_results = _refresh_before_report(
+        ctx,
+        enabled=refresh,
+        details=refresh_details,
+        json_output=json_output,
+        harness=harness,
+        session_id=selected_session_id,
+        use_active_session=False,
+        include_raw_json=raw,
+        since_start=True,
+    )
+
+    conn = _open_toktrail_connection(ctx)
+    try:
         report = summarize_usage(
             conn,
             UsageReportFilter(
@@ -434,7 +496,16 @@ def status(
             row.as_dict() for row in filtered_unconfigured
         ]
         payload["display_filters"] = display_filters.as_dict()
-        typer.echo(json.dumps(payload, indent=2))
+        typer.echo(
+            json.dumps(
+                _wrap_refresh_json_payload(
+                    payload,
+                    refresh_results=refresh_results,
+                    include_refresh=refresh_details,
+                ),
+                indent=2,
+            )
+        )
         return
 
     session = report.session
@@ -501,11 +572,21 @@ def subscriptions_status(
     json_output: JsonOption = False,
     rich_output: RichOption = False,
     now_ms: Annotated[int | None, typer.Option("--now-ms", hidden=True)] = None,
+    refresh: RefreshOption = True,
+    refresh_details: RefreshDetailsOption = False,
+    raw: RawModeOption = None,
 ) -> None:
     normalized_period = period.strip().lower()
     if normalized_period not in {"all", "5h", "daily", "weekly", "monthly"}:
         _exit_with_error("--period must be one of: all, 5h, daily, weekly, monthly.")
 
+    refresh_results = _refresh_before_report(
+        ctx,
+        enabled=refresh,
+        details=refresh_details,
+        json_output=json_output,
+        include_raw_json=raw,
+    )
     costing_config = _load_costing_config_or_exit(ctx)
     conn = _open_toktrail_connection(ctx)
     try:
@@ -526,7 +607,16 @@ def subscriptions_status(
     )
 
     if json_output:
-        typer.echo(json.dumps(filtered_report.as_dict(), indent=2))
+        typer.echo(
+            json.dumps(
+                _wrap_refresh_json_payload(
+                    filtered_report.as_dict(),
+                    refresh_results=refresh_results,
+                    include_refresh=refresh_details,
+                ),
+                indent=2,
+            )
+        )
         return
 
     _print_subscription_usage_report(
@@ -573,6 +663,9 @@ def usage(
     order: Annotated[str, typer.Option("--order")] = "desc",
     locale: Annotated[str | None, typer.Option("--locale")] = None,
     start_of_week: Annotated[str, typer.Option("--start-of-week")] = "monday",
+    refresh: RefreshOption = True,
+    refresh_details: RefreshDetailsOption = False,
+    raw: RawModeOption = None,
 ) -> None:
     if timezone_name is not None and utc:
         _exit_with_error("Use either --timezone or --utc, not both.")
@@ -588,8 +681,17 @@ def usage(
         "last-month",
     }
 
+    refresh_results = _refresh_before_report(
+        ctx,
+        enabled=refresh,
+        details=refresh_details,
+        json_output=json_output,
+        harness=harness,
+        include_raw_json=raw,
+    )
+
     if normalized_view in series_views:
-        _usage_series(
+        payload = _usage_series(
             ctx=ctx,
             view=normalized_view,
             json_output=json_output,
@@ -617,10 +719,24 @@ def usage(
             sort=sort,
             limit=limit,
         )
+        if json_output:
+            if payload is None:
+                msg = "Usage series payload unexpectedly missing."
+                raise TypeError(msg)
+            typer.echo(
+                json.dumps(
+                    _wrap_refresh_json_payload(
+                        payload,
+                        refresh_results=refresh_results,
+                        include_refresh=refresh_details,
+                    ),
+                    indent=2,
+                )
+            )
         return
 
     if normalized_view == "summary" or normalized_view in named_periods:
-        _usage_aggregate(
+        payload = _usage_aggregate(
             ctx=ctx,
             period=None if normalized_view == "summary" else normalized_view,
             json_output=json_output,
@@ -642,6 +758,20 @@ def usage(
             sort=sort,
             limit=limit,
         )
+        if json_output:
+            if payload is None:
+                msg = "Usage aggregate payload unexpectedly missing."
+                raise TypeError(msg)
+            typer.echo(
+                json.dumps(
+                    _wrap_refresh_json_payload(
+                        payload,
+                        refresh_results=refresh_results,
+                        include_refresh=refresh_details,
+                    ),
+                    indent=2,
+                )
+            )
         return
 
     _exit_with_error(
@@ -678,7 +808,7 @@ def _usage_series(
     min_tokens: int | None,
     sort: str,
     limit: int | None,
-) -> None:
+) -> dict[str, object] | None:
     from toktrail.db import summarize_usage_series
     from toktrail.periods import _resolve_timezone, parse_cli_boundary
     from toktrail.reporting import UsageSeriesFilter
@@ -717,8 +847,7 @@ def _usage_series(
         conn.close()
 
     if json_output:
-        typer.echo(json.dumps(series_report.as_dict(), indent=2))
-        return
+        return series_report.as_dict()
 
     _print_usage_series(
         series_report,
@@ -731,6 +860,7 @@ def _usage_series(
         sort=sort,
         limit=limit,
     )
+    return None
 
 
 def _print_usage_series(
@@ -807,7 +937,8 @@ def _print_usage_series_bucket_table(
                 f"{_format_int(tokens.input)}  {_format_int(tokens.output)}  "
                 f"{_format_int(tokens.reasoning)}  "
                 f"{_format_int(tokens.cache_read)}  "
-                f"{_format_int(tokens.cache_write)}  {_format_int(tokens.cache_output)}  "
+                f"{_format_int(tokens.cache_write)}  "
+                f"{_format_int(tokens.cache_output)}  "
                 f"{_format_int(tokens.total)}  "
                 f"{_format_cost(costs.source_cost_usd)}  "
                 f"{_format_cost(costs.actual_cost_usd)}  "
@@ -855,7 +986,7 @@ def _usage_aggregate(
     min_tokens: int | None,
     sort: str,
     limit: int | None,
-) -> None:
+) -> dict[str, object] | None:
     try:
         resolved_range = resolve_time_range(
             period=period,
@@ -932,8 +1063,7 @@ def _usage_aggregate(
             or until is not None
         ):
             filters["timezone"] = resolved_range.timezone
-        typer.echo(json.dumps(payload, indent=2))
-        return
+        return payload
 
     title = "toktrail usage"
     if resolved_range.period is not None:
@@ -946,6 +1076,7 @@ def _usage_aggregate(
         unconfigured_models=filtered_unconfigured,
         missing_price_mode=costing_config.missing_price,
     )
+    return None
 
 
 def _print_usage_summary(
@@ -1387,10 +1518,20 @@ def pricing_list(
     aliases: AliasesOption = False,
     json_output: JsonOption = False,
     rich_output: RichOption = False,
+    refresh: RefreshOption = True,
+    refresh_details: RefreshDetailsOption = False,
+    raw: RawModeOption = None,
 ) -> None:
     if used_only and missing_only:
         _exit_with_error("Use either --used-only or --missing-only, not both.")
     if used_only or missing_only:
+        refresh_results = _refresh_before_report(
+            ctx,
+            enabled=refresh,
+            details=refresh_details,
+            json_output=json_output,
+            include_raw_json=raw,
+        )
         costing_config = _load_costing_config_or_exit(ctx)
         conn = _open_toktrail_connection(ctx)
         try:
@@ -1409,7 +1550,16 @@ def pricing_list(
                 min_tokens=None,
             )
             if json_output:
-                typer.echo(json.dumps([row.as_dict() for row in rows], indent=2))
+                typer.echo(
+                    json.dumps(
+                        _wrap_refresh_json_payload(
+                            [row.as_dict() for row in rows],
+                            refresh_results=refresh_results,
+                            include_refresh=refresh_details,
+                        ),
+                        indent=2,
+                    )
+                )
                 return
             _print_unconfigured_model_table(rows, rich_output=rich_output)
             return
@@ -1422,7 +1572,16 @@ def pricing_list(
             limit=limit,
         )
         if json_output:
-            typer.echo(json.dumps([row.as_dict() for row in model_rows], indent=2))
+            typer.echo(
+                json.dumps(
+                    _wrap_refresh_json_payload(
+                        [row.as_dict() for row in model_rows],
+                        refresh_results=refresh_results,
+                        include_refresh=refresh_details,
+                    ),
+                    indent=2,
+                )
+            )
             return
         _print_model_table(model_rows, rich_output=rich_output)
         return
@@ -1468,20 +1627,20 @@ def sessions(ctx: typer.Context) -> None:
         )
 
 
-@import_app.callback(invoke_without_command=True)
-def import_usage(
+@refresh_app.callback(invoke_without_command=True)
+def refresh_usage(
     ctx: typer.Context,
     harness: RequiredHarnessOption = None,
     source: RequiredSourceOption = None,
     session_id: SessionOption = None,
     source_session_id: SourceSessionOption = None,
     since_start: SinceStartOption = False,
-    no_raw: NoRawOption = False,
+    raw: RawModeOption = None,
     no_session: NoSessionOption = False,
     dry_run: DryRunOption = False,
     json_output: JsonOption = False,
 ) -> None:
-    """Import usage from external harnesses.
+    """Refresh usage from configured sources or a single explicit harness.
 
     Can operate in two modes:
     - Explicit: with --harness and --source parameters
@@ -1490,8 +1649,9 @@ def import_usage(
     if ctx.invoked_subcommand is not None:
         return
 
-    # If both harness and source are provided, use explicit import mode
+    # If both harness and source are provided, use explicit refresh mode
     if harness is not None and source is not None:
+        explicit_include_raw = False if raw is None else raw
         try:
             result = _run_harness_import_with_dry_run(
                 ctx,
@@ -1500,7 +1660,7 @@ def import_usage(
                 tracking_session_id=session_id,
                 source_session_id=source_session_id,
                 since_start=since_start,
-                no_raw=no_raw,
+                include_raw_json=explicit_include_raw,
                 no_session=no_session,
                 dry_run=dry_run,
             )
@@ -1521,11 +1681,11 @@ def import_usage(
             typer.echo(json.dumps([output], indent=2))
             return
 
-        _print_import_result(result)
+        _print_refresh_result(result)
         if dry_run:
             typer.echo("\n[dry-run: changes were not persisted]")
 
-    # Otherwise, use config-based import mode
+    # Otherwise, use config-based refresh mode
     elif harness is None and source is None:
         try:
             results = import_configured_usage_api(
@@ -1534,7 +1694,7 @@ def import_usage(
                 source_path=None,
                 session_id=session_id,
                 use_active_session=not no_session,
-                include_raw_json=not no_raw,
+                include_raw_json=raw,
                 config_path=_resolve_config_path(ctx),
                 since_start=since_start,
             )
@@ -1544,12 +1704,12 @@ def import_usage(
         if json_output:
             typer.echo(json.dumps([result.as_dict() for result in results], indent=2))
             return
-        _print_configured_import_results(results)
+        _print_configured_refresh_results(results)
 
     else:
         _exit_with_error(
             "Either provide both --harness and --source, "
-            "or neither for config-based import"
+            "or neither for config-based refresh"
         )
 
 
@@ -1559,7 +1719,7 @@ def watch(
     session_id: SessionOption = None,
     harnesses: HarnessesOption = None,
     interval: IntervalOption = 2.0,
-    no_raw: NoRawOption = False,
+    raw: RawModeOption = None,
     json_output: JsonOption = False,
 ) -> None:
     """Watch configured harnesses and print token usage deltas for the active run."""
@@ -1570,7 +1730,7 @@ def watch(
             tracking_session_id=session_id,
             harnesses=harness_list,
             interval=interval,
-            no_raw=no_raw,
+            include_raw_json=raw,
             json_output=json_output,
         )
     except (ToktrailError, OSError, ValueError) as exc:
@@ -1882,9 +2042,9 @@ def copilot_run(
             tracking_session_id=session_id,
             source_session_id=None,
             since_start=False,
-            no_raw=no_raw,
+            include_raw_json=not no_raw,
         )
-        _print_import_result(result)
+        _print_refresh_result(result)
 
     raise typer.Exit(completed.returncode)
 
@@ -1965,7 +2125,7 @@ def _run_harness_import(
     tracking_session_id: int | None,
     source_session_id: str | None,
     since_start: bool,
-    no_raw: bool,
+    include_raw_json: bool = False,
 ) -> ImportExecutionResult:
     harness = get_harness(harness_name)
     conn = _open_toktrail_connection(ctx)
@@ -1993,7 +2153,7 @@ def _run_harness_import(
         scan = harness.scan(
             resolved_source,
             source_session_id=source_session_id,
-            include_raw_json=not no_raw,
+            include_raw_json=include_raw_json,
         )
         since_ms = tracking_session.started_at_ms
         if since_start:
@@ -2032,7 +2192,7 @@ def _run_harness_import_with_dry_run(
     tracking_session_id: int | None,
     source_session_id: str | None,
     since_start: bool,
-    no_raw: bool,
+    include_raw_json: bool,
     no_session: bool,
     dry_run: bool,
 ) -> ImportExecutionResult:
@@ -2069,7 +2229,7 @@ def _run_harness_import_with_dry_run(
         scan = harness.scan(
             resolved_source,
             source_session_id=source_session_id,
-            include_raw_json=not no_raw,
+            include_raw_json=include_raw_json,
         )
 
         since_ms = None
@@ -2389,7 +2549,7 @@ def _watch_configured(
     tracking_session_id: int | None,
     harnesses: list[str] | None,
     interval: float,
-    no_raw: bool,
+    include_raw_json: bool | None,
     json_output: bool,
 ) -> None:
     selected_session_id = _resolve_watch_session_id(ctx, tracking_session_id)
@@ -2413,7 +2573,7 @@ def _watch_configured(
                 source_path=None,
                 session_id=selected_session_id,
                 use_active_session=False,
-                include_raw_json=not no_raw,
+                include_raw_json=include_raw_json,
                 config_path=_resolve_config_path(ctx),
                 since_start=True,
             )
@@ -3429,6 +3589,55 @@ def _required_row_float(row: dict[str, object], key: str) -> float:
     return value
 
 
+def _refresh_before_report(
+    ctx: typer.Context,
+    *,
+    enabled: bool,
+    details: bool,
+    json_output: bool,
+    harness: str | None = None,
+    session_id: int | None = None,
+    use_active_session: bool = True,
+    include_raw_json: bool | None = None,
+    since_start: bool = False,
+) -> tuple[ImportUsageResult, ...]:
+    if not enabled:
+        return ()
+
+    harnesses = [harness] if harness is not None else None
+    try:
+        results = import_configured_usage_api(
+            _resolve_state_db(ctx),
+            harnesses=harnesses,
+            source_path=None,
+            session_id=session_id,
+            use_active_session=use_active_session,
+            include_raw_json=include_raw_json,
+            config_path=_resolve_config_path(ctx),
+            since_start=since_start,
+        )
+    except (OSError, ValueError, ToktrailError) as exc:
+        _exit_with_error(str(exc))
+
+    if details and not json_output:
+        _print_configured_refresh_results(results)
+    return results
+
+
+def _wrap_refresh_json_payload(
+    report_payload: object,
+    *,
+    refresh_results: tuple[ImportUsageResult, ...],
+    include_refresh: bool,
+) -> object:
+    if not include_refresh:
+        return report_payload
+    return {
+        "refresh": [result.as_dict() for result in refresh_results],
+        "report": report_payload,
+    }
+
+
 def _missing_source_path_message(
     harness_name: str,
     resolved_source: Path | None,
@@ -3448,10 +3657,10 @@ def _missing_source_path_message(
     return f"{display_name} source path not found: {resolved_source}"
 
 
-def _print_import_result(
+def _print_refresh_result(
     result: ImportExecutionResult,
 ) -> None:
-    typer.echo(f"Imported {result.harness} usage:")
+    typer.echo(f"Refreshed {result.harness} usage:")
     typer.echo(f"  source path: {result.source_path}")
     typer.echo(f"  tracking session: {result.tracking_session_id}")
     typer.echo(f"  rows seen: {result.rows_seen}")
@@ -3459,18 +3668,13 @@ def _print_import_result(
     typer.echo(f"  rows skipped: {result.rows_skipped}")
 
 
-def _print_configured_import_results(results: tuple[ImportUsageResult, ...]) -> None:
-    typer.echo("Imported usage")
+def _print_configured_refresh_results(results: tuple[ImportUsageResult, ...]) -> None:
+    typer.echo("Refreshed usage")
     rows = []
     for result in results:
         rows.append(
             {
                 "harness": result.harness,
-                "source": (
-                    str(result.source_path)
-                    if result.source_path is not None
-                    else "(none)"
-                ),
                 "inserted": _format_int(result.rows_imported),
                 "linked": _format_int(result.rows_linked),
                 "skipped": _format_int(result.rows_skipped),
@@ -3479,10 +3683,9 @@ def _print_configured_import_results(results: tuple[ImportUsageResult, ...]) -> 
         )
     _print_table(
         rows,
-        ["harness", "source", "inserted", "linked", "skipped", "status"],
+        ["harness", "inserted", "linked", "skipped", "status"],
         {
             "harness": "harness",
-            "source": "source",
             "inserted": "inserted",
             "linked": "linked",
             "skipped": "skipped",

@@ -1,7 +1,7 @@
 Configuration
 =============
 
-toktrail reads pricing, import defaults, and optional provider subscription quota
+toktrail reads pricing, refresh defaults, and optional provider subscription quota
 settings from ``config.toml``.
 
 Key sections:
@@ -13,6 +13,9 @@ Key sections:
 - ``[[pricing.virtual]]``
 - ``[[pricing.actual]]``
 - ``[[subscriptions]]``
+
+Report commands use ``[imports]`` as their automatic refresh policy by default.
+Use ``toktrail refresh`` for manual refresh operations.
 
 Example
 -------

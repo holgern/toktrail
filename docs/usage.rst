@@ -12,15 +12,35 @@ The preferred CLI workflow is:
    toktrail config init
    toktrail sources
    toktrail run start --name <name>
-   toktrail import
+   toktrail refresh
    toktrail run status
    toktrail usage today
    toktrail subscriptions
    toktrail sessions
    toktrail run stop
 
-Use ``toktrail import`` for normal operation. It reads enabled harnesses and
-source paths from ``config.toml``:
+Report commands refresh configured sources first by default:
+
+.. code-block:: bash
+
+   toktrail usage today
+   toktrail run status
+   toktrail subscriptions
+   toktrail pricing list --used-only
+   toktrail pricing list --missing-only
+
+Use ``--no-refresh`` to read stale local state without touching source logs:
+
+.. code-block:: bash
+
+   toktrail usage today --no-refresh
+   toktrail run status --no-refresh
+   toktrail subscriptions --no-refresh
+
+Use ``--refresh-details`` to show a compact refresh summary before the report.
+
+Use ``toktrail refresh`` for explicit/manual refresh operation. It reads enabled
+harnesses and source paths from ``config.toml``:
 
 .. code-block:: toml
 
@@ -39,8 +59,8 @@ source paths from ``config.toml``:
    amp = "~/.local/share/amp/threads"
 
 ``imports.sources.<harness>`` accepts either a single path string or a list of
-paths. Use ``toktrail import --harness <name> --source <path>`` for one-off
-imports. The canonical pre-release CLI no longer documents harness-specific
+paths. Use ``toktrail refresh --harness <name> --source <path>`` for one-off
+refreshes. The canonical pre-release CLI no longer documents harness-specific
 compatibility commands.
 
 Core commands
@@ -59,9 +79,9 @@ Core commands
    toktrail sessions pi
    toktrail sessions codex
    toktrail sessions goose
-   toktrail import --harness goose --source ~/.local/share/goose/sessions/sessions.db
-   toktrail import --harness droid --source ~/.factory/sessions
-   toktrail import --harness amp --source ~/.local/share/amp/threads
+   toktrail refresh --harness goose --source ~/.local/share/goose/sessions/sessions.db
+   toktrail refresh --harness droid --source ~/.factory/sessions
+   toktrail refresh --harness amp --source ~/.local/share/amp/threads
    toktrail pricing list
    toktrail pricing list --missing-only
 

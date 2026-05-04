@@ -84,23 +84,23 @@ Start a tracking session:
 toktrail run start --name refactor-auth-flow
 ```
 
-Import usage from config or a single harness:
+Refresh usage from config or a single harness:
 
 ```bash
 toktrail config init
-toktrail import
-toktrail import --harness codex --source ~/.codex/sessions
-toktrail import --harness amp --source ~/.local/share/amp/threads
-toktrail import --harness claude --source ~/.claude/projects
-toktrail import --dry-run
-toktrail import --no-session
+toktrail refresh
+toktrail refresh --harness codex --source ~/.codex/sessions
+toktrail refresh --harness amp --source ~/.local/share/amp/threads
+toktrail refresh --harness claude --source ~/.claude/projects
+toktrail refresh --dry-run
+toktrail refresh --no-session
 ```
 
 For local acceptance and testing, the repository includes a sample OpenCode
 source database at `tests/fixtures/opencode.db`:
 
 ```bash
-toktrail import --harness opencode --source tests/fixtures/opencode.db
+toktrail refresh --harness opencode --source tests/fixtures/opencode.db
 ```
 
 Show the current session totals:
@@ -111,7 +111,7 @@ toktrail run status --json
 toktrail run status --thinking high --json
 toktrail run status --split-thinking
 toktrail run status --price-state unpriced --sort tokens --limit 20
-toktrail --config ~/.config/toktrail/config.toml status --json
+toktrail --config ~/.config/toktrail/config.toml run status --json
 toktrail run status --harness pi --source-session pi_ses_001 --json
 ```
 
@@ -123,6 +123,8 @@ toktrail usage today
 toktrail usage last-week --utc --json
 toktrail usage --since 2026-05-01 --until 2026-06-01 --timezone Europe/Berlin
 toktrail usage --price-state priced --sort provider --limit 10 --json
+toktrail usage today --no-refresh
+toktrail usage today --refresh-details
 toktrail subscriptions
 toktrail subscriptions --provider opencode-go --json
 ```
@@ -142,7 +144,7 @@ toktrail init
 toktrail config init
 toktrail sources
 toktrail run start --name <name>
-toktrail import
+toktrail refresh
 toktrail run status
 toktrail usage today
 toktrail sessions
@@ -150,8 +152,13 @@ toktrail subscriptions
 toktrail run stop
 ```
 
-Use `toktrail import` for normal operation. It reads enabled harnesses and
-source paths from `config.toml`:
+Report commands (`toktrail usage`, `toktrail run status`, and
+`toktrail subscriptions`) refresh configured sources first by default. Use
+`--no-refresh` for stale local-state reads, and `--refresh-details` to print a
+compact refresh summary.
+
+Use `toktrail refresh` for explicit/manual refresh operations. It reads enabled
+harnesses and source paths from `config.toml`:
 
 ```toml
 [imports]
@@ -197,9 +204,9 @@ reset_at = "2026-05-01T00:00:00+02:00"
 ```
 
 `imports.sources.<harness>` accepts either a single path string or a list of
-paths. Use `toktrail import --harness <name> --source <path>` for one-off
-imports. The pre-release contract does not preserve harness-specific
-`import`, `watch`, `sessions`, or `env` compatibility subcommands.
+paths. Use `toktrail refresh --harness <name> --source <path>` for one-off
+refreshes. The pre-release contract does not preserve harness-specific
+`refresh`, `watch`, `sessions`, or `env` compatibility subcommands.
 
 ## Commands
 
@@ -221,7 +228,7 @@ toktrail sessions pi
 toktrail sessions pi pi_ses_001
 ```
 
-Discover configured source paths before importing:
+Discover configured source paths before refreshing:
 
 ```bash
 toktrail sources
@@ -245,42 +252,42 @@ toktrail pricing list --used-only
 toktrail pricing list --missing-only
 toktrail config validate
 toktrail subscriptions
-toktrail --config /path/to/config.toml status --json
+toktrail --config /path/to/config.toml run status --json
 ```
 
-Import usage:
+Refresh usage:
 
 ```bash
-toktrail import
-toktrail import --harness opencode --source /path/to/opencode.db
-toktrail import --harness pi --source ~/.pi/agent/sessions
-toktrail import --harness codex --source ~/.codex/sessions
-toktrail import --harness goose --source ~/.local/share/goose/sessions/sessions.db
-toktrail import --harness droid --source ~/.factory/sessions
-toktrail import --harness amp --source ~/.local/share/amp/threads
-toktrail import --dry-run
-toktrail import --session 3
-toktrail import --no-session
-toktrail import --no-raw
+toktrail refresh
+toktrail refresh --harness opencode --source /path/to/opencode.db
+toktrail refresh --harness pi --source ~/.pi/agent/sessions
+toktrail refresh --harness codex --source ~/.codex/sessions
+toktrail refresh --harness goose --source ~/.local/share/goose/sessions/sessions.db
+toktrail refresh --harness droid --source ~/.factory/sessions
+toktrail refresh --harness amp --source ~/.local/share/amp/threads
+toktrail refresh --dry-run
+toktrail refresh --session 3
+toktrail refresh --no-session
+toktrail refresh --no-raw
 ```
 
-The plain `toktrail import` command reads enabled harnesses and source paths from
+The plain `toktrail refresh` command reads enabled harnesses and source paths from
 `[imports]` and `[imports.sources]` in `config.toml`.
 
-## Advanced: generic import, watch, environment, and harness-session flows
+## Advanced: generic refresh, watch, environment, and harness-session flows
 
 Use the generic command surface for every harness:
 
 ```bash
-toktrail import --harness opencode --source /path/to/opencode.db
-toktrail import --harness pi --source ~/.pi/agent/sessions
-toktrail import --harness copilot --source ~/.copilot/otel
-toktrail import --harness codex --source ~/.codex/sessions
-toktrail import --harness goose --source ~/.local/share/goose/sessions/sessions.db
-toktrail import --harness droid --source ~/.factory/sessions
-toktrail import --harness amp --source ~/.local/share/amp/threads
-toktrail import --harness claude --source ~/.claude/projects
-toktrail import --harness vibe --source ~/.vibe/logs/session
+toktrail refresh --harness opencode --source /path/to/opencode.db
+toktrail refresh --harness pi --source ~/.pi/agent/sessions
+toktrail refresh --harness copilot --source ~/.copilot/otel
+toktrail refresh --harness codex --source ~/.codex/sessions
+toktrail refresh --harness goose --source ~/.local/share/goose/sessions/sessions.db
+toktrail refresh --harness droid --source ~/.factory/sessions
+toktrail refresh --harness amp --source ~/.local/share/amp/threads
+toktrail refresh --harness claude --source ~/.claude/projects
+toktrail refresh --harness vibe --source ~/.vibe/logs/session
 
 toktrail watch
 
@@ -390,14 +397,14 @@ Example workflow:
 ```bash
 toktrail config init --template copilot
 toktrail copilot env bash
-toktrail import --harness copilot --source ~/.copilot/otel/copilot-otel-20260429-090000.jsonl
+toktrail refresh --harness copilot --source ~/.copilot/otel/copilot-otel-20260429-090000.jsonl
 toktrail run status --price-state unpriced --sort tokens --limit 20
 toktrail pricing list --missing-only
 toktrail sessions copilot
 ```
 
 Virtual and pricing-based actual costs are computed at report time, not during
-import. Updating `config.toml` immediately changes future `status` and
+refresh. Updating `config.toml` immediately changes future `status` and
 `sessions` output for already imported data without re-importing source files.
 
 Pricing is provider-aware. If an event already has a real provider, toktrail
