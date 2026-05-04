@@ -37,7 +37,7 @@ missing_source = "warn"
 include_raw_json = false
 
 [imports.sources]
-opencode = "{tmp_path / 'missing-opencode.db'}"
+opencode = "{tmp_path / "missing-opencode.db"}"
 """.strip(),
         encoding="utf-8",
     )
@@ -4087,3 +4087,221 @@ def test_cli_sync_export_and_import_dry_run_json_shape(tmp_path) -> None:
     assert "usage_events_skipped" in payload
     assert "run_events_inserted" in payload
     assert "conflicts" in payload
+
+
+def test_cli_usage_sessions_human_output(tmp_path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    source_db = tmp_path / "opencode.db"
+    create_source_db(source_db)
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "refresh",
+            "--harness",
+            "opencode",
+            "--source",
+            str(source_db),
+        ],
+    )
+
+    result = runner.invoke(
+        app,
+        ["--db", str(state_db), "usage", "sessions", "--no-refresh"],
+    )
+    assert result.exit_code == 0, result.output
+    assert "toktrail usage sessions" in result.output
+    assert "cache_r" in result.output or "total" in result.output
+
+
+def test_cli_usage_sessions_last_human_output(tmp_path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    source_db = tmp_path / "opencode.db"
+    create_source_db(source_db)
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "refresh",
+            "--harness",
+            "opencode",
+            "--source",
+            str(source_db),
+        ],
+    )
+
+    result = runner.invoke(
+        app,
+        ["--db", str(state_db), "usage", "sessions", "--last", "--no-refresh"],
+    )
+    assert result.exit_code == 0, result.output
+    # should print exactly one session row (header + one data row)
+    lines = [
+        line
+        for line in result.output.strip().split("\n")
+        if line.strip()
+        and "toktrail usage sessions" not in line
+        and not line.startswith("session ")
+    ]
+    assert len(lines) == 1
+
+
+def test_cli_usage_sessions_limit_json_shape(tmp_path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    source_db = tmp_path / "opencode.db"
+    create_source_db(source_db)
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "refresh",
+            "--harness",
+            "opencode",
+            "--source",
+            str(source_db),
+        ],
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "usage",
+            "sessions",
+            "--limit",
+            "5",
+            "--json",
+            "--no-refresh",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["type"] == "usage_sessions"
+    assert isinstance(payload["sessions"], list)
+    assert len(payload["sessions"]) <= 5
+
+
+def test_cli_usage_sessions_breakdown(tmp_path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    source_db = tmp_path / "opencode.db"
+    create_source_db(source_db)
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "refresh",
+            "--harness",
+            "opencode",
+            "--source",
+            str(source_db),
+        ],
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "usage",
+            "sessions",
+            "--breakdown",
+            "--no-refresh",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "└─" in result.output
+
+
+def test_cli_usage_sessions_filters_harness_and_source_session(
+    tmp_path,
+) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    source_db = tmp_path / "opencode.db"
+    create_source_db(source_db)
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "refresh",
+            "--harness",
+            "opencode",
+            "--source",
+            str(source_db),
+        ],
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "usage",
+            "sessions",
+            "--harness",
+            "opencode",
+            "--source-session",
+            "ses-1",
+            "--no-refresh",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "ses-1" in result.output
+
+
+def test_cli_usage_sessions_no_refresh_uses_existing_state_only(
+    tmp_path,
+) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    source_db = tmp_path / "opencode.db"
+    create_source_db(source_db)
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    # Import once
+    runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "refresh",
+            "--harness",
+            "opencode",
+            "--source",
+            str(source_db),
+        ],
+    )
+
+    # --no-refresh should not import new rows
+    result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "usage",
+            "sessions",
+            "--no-refresh",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "toktrail usage sessions" in result.output

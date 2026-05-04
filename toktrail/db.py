@@ -44,6 +44,9 @@ from toktrail.reporting import (
     UsageSeriesFilter,
     UsageSeriesInstance,
     UsageSeriesReport,
+    UsageSessionRow,
+    UsageSessionsFilter,
+    UsageSessionsReport,
 )
 
 SCHEMA_VERSION = 5
@@ -1550,6 +1553,205 @@ def summarize_usage_series(
     )
 
 
+def summarize_usage_sessions(
+    conn: sqlite3.Connection,
+    filters: UsageSessionsFilter,
+    *,
+    costing_config: CostingConfig | None = None,
+) -> UsageSessionsReport:
+    if filters.order not in ("asc", "desc"):
+        msg = f"Invalid order: {filters.order!r}. Use asc or desc."
+        raise ValueError(msg)
+    if filters.limit is not None and filters.limit < 0:
+        msg = f"Invalid limit: {filters.limit}. Must be non-negative."
+        raise ValueError(msg)
+
+    usage_filters, _ = _apply_tracking_session_time_window(
+        conn,
+        filters.to_usage_report_filter(),
+    )
+    source_clause, where_clause, params = _usage_report_query_parts(usage_filters)
+    thinking_select = (
+        "ue.thinking_level AS thinking_level"
+        if filters.split_thinking
+        else "NULL AS thinking_level"
+    )
+    atom_rows = conn.execute(
+        """
+        SELECT
+            ue.harness,
+            ue.source_session_id,
+            ue.provider_id,
+            ue.model_id,
+        """
+        + thinking_select
+        + """
+            ,
+            ue.agent AS agent,
+            MIN(ue.created_ms) AS first_ms,
+            MAX(COALESCE(ue.completed_ms, ue.created_ms)) AS last_ms,
+            COUNT(*) AS message_count,
+            COALESCE(SUM(ue.input_tokens), 0) AS input_tokens,
+            COALESCE(SUM(ue.output_tokens), 0) AS output_tokens,
+            COALESCE(SUM(ue.reasoning_tokens), 0) AS reasoning_tokens,
+            COALESCE(SUM(ue.cache_read_tokens), 0) AS cache_read_tokens,
+            COALESCE(SUM(ue.cache_write_tokens), 0) AS cache_write_tokens,
+            COALESCE(SUM(ue.cache_output_tokens), 0) AS cache_output_tokens,
+            COALESCE(DECIMAL_SUM(ue.source_cost_usd), '0') AS source_cost_usd
+        """
+        + source_clause
+        + where_clause
+        + """
+        GROUP BY
+            ue.harness,
+            ue.source_session_id,
+            ue.provider_id,
+            ue.model_id,
+        """
+        + ("ue.thinking_level," if filters.split_thinking else "")
+        + """
+            ue.agent
+        """,
+        params,
+    ).fetchall()
+
+    config = costing_config or default_costing_config()
+
+    # Per-session aggregation keyed by (harness, source_session_id)
+    session_atoms: dict[tuple[str, str], list[_SessionAtom]] = {}
+
+    for row in atom_rows:
+        harness = str(row["harness"])
+        source_session_id = str(row["source_session_id"])
+        key = (harness, source_session_id)
+
+        atom = UsageCostAtom(
+            harness=harness,
+            provider_id=str(row["provider_id"]),
+            model_id=str(row["model_id"]),
+            thinking_level=(
+                str(row["thinking_level"])
+                if row["thinking_level"] is not None
+                else None
+            ),
+            agent=row["agent"],
+            message_count=_required_int(row["message_count"]),
+            tokens=_row_tokens(row),
+            source_cost_usd=_required_decimal(row["source_cost_usd"]),
+        )
+        cost_breakdown = atom.compute_costs(config)
+        session_atoms.setdefault(key, []).append(
+            _SessionAtom(
+                first_ms=_required_int(row["first_ms"]),
+                last_ms=_required_int(row["last_ms"]),
+                atom=atom,
+                breakdown=cost_breakdown,
+            )
+        )
+
+    # Build session rows
+    rows: list[UsageSessionRow] = []
+    for (harness, source_session_id), atoms in session_atoms.items():
+        session_key = f"{harness}/{source_session_id}"
+        first_ms = min(a.first_ms for a in atoms)
+        last_ms = max(a.last_ms for a in atoms)
+        message_count = sum(a.atom.message_count for a in atoms)
+        tokens = TokenBreakdown()
+        costs = CostTotals()
+        models: set[str] = set()
+        providers: set[str] = set()
+        by_model_list: list[ModelSummaryRow] = []
+        by_model_accum: dict[tuple[str, str | None], _SessionModelAccum] = {}
+
+        for sa in atoms:
+            tokens = _add_tokens(tokens, sa.atom.tokens)
+            costs = costs.add(
+                source_cost_usd=sa.breakdown.source_cost_usd,
+                actual_cost_usd=sa.breakdown.actual_cost_usd,
+                virtual_cost_usd=sa.breakdown.virtual_cost_usd,
+                unpriced_count=sa.breakdown.unpriced_count,
+            )
+            model_key_str = f"{sa.atom.provider_id}/{sa.atom.model_id}"
+            models.add(model_key_str)
+            providers.add(sa.atom.provider_id)
+
+            if filters.breakdown:
+                mk = (sa.atom.provider_id, sa.atom.model_id)
+                by_model_accum.setdefault(mk, _SessionModelAccum()).add(sa)
+
+        if filters.breakdown:
+            for (prov, mid), accum in sorted(by_model_accum.items()):
+                by_model_list.append(
+                    ModelSummaryRow(
+                        provider_id=prov,
+                        model_id=mid or "",
+                        thinking_level=None,
+                        message_count=accum.message_count,
+                        tokens=accum.tokens,
+                        costs=accum.costs,
+                    )
+                )
+
+        rows.append(
+            UsageSessionRow(
+                key=session_key,
+                harness=harness,
+                source_session_id=source_session_id,
+                first_ms=first_ms,
+                last_ms=last_ms,
+                message_count=message_count,
+                tokens=tokens,
+                costs=costs,
+                models=tuple(sorted(models)),
+                providers=tuple(sorted(providers)),
+                by_model=tuple(by_model_list),
+            )
+        )
+
+    # Sort and limit
+    reverse = filters.order == "desc"
+    rows = sorted(
+        rows,
+        key=lambda r: (r.last_ms, r.harness, r.source_session_id),
+        reverse=reverse,
+    )
+    if filters.limit is not None:
+        rows = rows[: filters.limit]
+
+    # Totals from returned rows only
+    totals_tokens = TokenBreakdown()
+    totals_costs = CostTotals()
+    for row in rows:
+        totals_tokens = _add_tokens(totals_tokens, row.tokens)
+        totals_costs = totals_costs.add(
+            source_cost_usd=row.costs.source_cost_usd,
+            actual_cost_usd=row.costs.actual_cost_usd,
+            virtual_cost_usd=row.costs.virtual_cost_usd,
+            unpriced_count=row.costs.unpriced_count,
+        )
+
+    report_filters: dict[str, object] = {
+        "since_ms": usage_filters.since_ms,
+        "until_ms": usage_filters.until_ms,
+        "harness": filters.harness,
+        "source_session_id": filters.source_session_id,
+        "provider_id": filters.provider_id,
+        "model_id": filters.model_id,
+        "thinking_level": filters.thinking_level,
+        "agent": filters.agent,
+        "split_thinking": filters.split_thinking,
+        "limit": filters.limit,
+        "order": filters.order,
+        "breakdown": filters.breakdown,
+    }
+
+    return UsageSessionsReport(
+        filters=report_filters,
+        sessions=tuple(rows),
+        totals=SessionTotals(tokens=totals_tokens, costs=totals_costs),
+    )
+
+
 def _apply_tracking_session_time_window(
     conn: sqlite3.Connection,
     filters: UsageReportFilter,
@@ -1945,3 +2147,25 @@ class _SeriesInstanceAccum:
                 )
             )
         return result
+
+
+@dataclass(frozen=True)
+class _SessionAtom:
+    first_ms: int
+    last_ms: int
+    atom: UsageCostAtom
+    breakdown: CostBreakdown
+
+
+class _SessionModelAccum:
+    __slots__ = ("message_count", "tokens", "costs")
+
+    def __init__(self) -> None:
+        self.message_count = 0
+        self.tokens = TokenBreakdown()
+        self.costs = CostTotals()
+
+    def add(self, sa: _SessionAtom) -> None:
+        self.message_count += sa.atom.message_count
+        self.tokens = _add_tokens(self.tokens, sa.atom.tokens)
+        self.costs = _add_cost_breakdown(self.costs, sa.breakdown)

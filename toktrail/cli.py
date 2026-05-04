@@ -312,8 +312,7 @@ RawModeOption = Annotated[
     typer.Option(
         "--raw/--no-raw",
         help=(
-            "Override imports.include_raw_json for this refresh. "
-            "Omit to use config."
+            "Override imports.include_raw_json for this refresh. Omit to use config."
         ),
     ),
 ]
@@ -641,7 +640,7 @@ def usage(
         str | None,
         typer.Argument(
             help=(
-                "daily, weekly, monthly, summary, today, yesterday, "
+                "daily, weekly, monthly, sessions, summary, today, yesterday, "
                 "this-week, last-week, this-month, last-month"
             )
         ),
@@ -674,6 +673,9 @@ def usage(
     refresh: RefreshOption = True,
     refresh_details: RefreshDetailsOption = False,
     raw: RawModeOption = None,
+    last: Annotated[
+        bool, typer.Option("--last", help="Show only the newest source session.")
+    ] = False,
 ) -> None:
     if timezone_name is not None and utc:
         _exit_with_error("Use either --timezone or --utc, not both.")
@@ -782,8 +784,49 @@ def usage(
             )
         return
 
+    if normalized_view in {"sessions", "session"}:
+        if instances:
+            _exit_with_error("--instances is not supported for sessions view.")
+        if project is not None:
+            _exit_with_error("--project is not supported for sessions view.")
+        payload = _usage_sessions(
+            ctx=ctx,
+            json_output=json_output,
+            harness=harness,
+            source_session_id=source_session_id,
+            provider_id=provider_id,
+            model_id=model_id,
+            thinking_level=thinking_level,
+            agent=agent,
+            since=since,
+            until=until,
+            timezone_name=timezone_name,
+            utc=utc,
+            split_thinking=split_thinking,
+            breakdown=breakdown,
+            compact=compact,
+            order=order,
+            limit=limit,
+            last=last,
+        )
+        if json_output:
+            if payload is None:
+                msg = "Usage sessions payload unexpectedly missing."
+                raise TypeError(msg)
+            typer.echo(
+                json.dumps(
+                    _wrap_refresh_json_payload(
+                        payload,
+                        refresh_results=refresh_results,
+                        include_refresh=refresh_details,
+                    ),
+                    indent=2,
+                )
+            )
+        return
+
     _exit_with_error(
-        "Unsupported usage view. Use daily, weekly, monthly, summary, "
+        "Unsupported usage view. Use daily, weekly, monthly, sessions, summary, "
         "today, yesterday, this-week, last-week, this-month, or last-month."
     )
 
@@ -970,6 +1013,164 @@ def _print_usage_series_bucket_table(
                     f"{_format_cost(row.costs.virtual_cost_usd)}"
                 )
                 typer.echo(line)
+
+
+def _usage_sessions(
+    *,
+    ctx: typer.Context,
+    json_output: bool,
+    harness: str | None,
+    source_session_id: str | None,
+    provider_id: str | None,
+    model_id: str | None,
+    thinking_level: str | None,
+    agent: str | None,
+    since: str | None,
+    until: str | None,
+    timezone_name: str | None,
+    utc: bool,
+    split_thinking: bool,
+    breakdown: bool,
+    compact: bool,
+    order: str,
+    limit: int | None,
+    last: bool,
+) -> dict[str, object] | None:
+    from toktrail.db import summarize_usage_sessions
+    from toktrail.periods import _resolve_timezone, parse_cli_boundary
+    from toktrail.reporting import UsageSessionsFilter
+
+    if last and limit is not None and limit != 1:
+        _exit_with_error("Use either --last or --limit, not both.")
+    effective_limit = 1 if last else (10 if limit is None else limit)
+    if effective_limit is not None and effective_limit < 0:
+        _exit_with_error("--limit must be non-negative.")
+
+    tz = _resolve_timezone(timezone_name=timezone_name, utc=utc)
+    since_ms = parse_cli_boundary(since, tz=tz, is_until=False)
+    until_ms = parse_cli_boundary(until, tz=tz, is_until=True)
+
+    costing_config = _load_costing_config_or_exit(ctx)
+    conn = _open_toktrail_connection(ctx)
+    try:
+        report = summarize_usage_sessions(
+            conn,
+            UsageSessionsFilter(
+                harness=harness,
+                source_session_id=source_session_id,
+                provider_id=provider_id,
+                model_id=model_id,
+                thinking_level=thinking_level,
+                agent=agent,
+                since_ms=since_ms,
+                until_ms=until_ms,
+                split_thinking=split_thinking,
+                limit=effective_limit,
+                order=order,
+                breakdown=breakdown,
+            ),
+            costing_config=costing_config,
+        )
+    finally:
+        conn.close()
+
+    if json_output:
+        return report.as_dict()
+
+    _print_usage_sessions(
+        report,
+        compact=compact,
+        breakdown=breakdown,
+        utc=utc,
+    )
+    return None
+
+
+def _print_usage_sessions(
+    report: object,
+    *,
+    compact: bool,
+    breakdown: bool,
+    utc: bool,
+) -> None:
+    from toktrail.formatting import format_epoch_ms_compact
+    from toktrail.reporting import UsageSessionsReport
+
+    if not isinstance(report, UsageSessionsReport):
+        msg = "Expected UsageSessionsReport."
+        raise TypeError(msg)
+
+    typer.echo("toktrail usage sessions")
+
+    if not report.sessions:
+        typer.echo("No usage data.")
+        return
+
+    if compact:
+        header = "session  last  msgs  total  actual  virtual  savings  models"
+    elif breakdown:
+        header = (
+            "session  last  provider/model  msgs  input  output  reasoning  "
+            "cache_r  cache_w  cache_o  total  actual  virtual"
+        )
+    else:
+        header = (
+            "session  last  msgs  models  input  output  reasoning  "
+            "cache_r  cache_w  cache_o  total  source  actual  virtual  "
+            "savings  unpriced"
+        )
+    typer.echo(header)
+
+    for session in report.sessions:
+        tokens = session.tokens
+        costs = session.costs
+        models = ", ".join(session.models)
+        last_str = format_epoch_ms_compact(session.last_ms, utc=utc)
+
+        if compact:
+            line = (
+                f"{session.key}  {last_str}  {session.message_count}  "
+                f"{_format_int(tokens.total)}  "
+                f"{_format_cost(costs.actual_cost_usd)}  "
+                f"{_format_cost(costs.virtual_cost_usd)}  "
+                f"{_format_cost(costs.savings_usd)}  {models}"
+            )
+            typer.echo(line)
+        else:
+            line = (
+                f"{session.key}  {last_str}  {session.message_count}  "
+                f"{models}  "
+                f"{_format_int(tokens.input)}  "
+                f"{_format_int(tokens.output)}  "
+                f"{_format_int(tokens.reasoning)}  "
+                f"{_format_int(tokens.cache_read)}  "
+                f"{_format_int(tokens.cache_write)}  "
+                f"{_format_int(tokens.cache_output)}  "
+                f"{_format_int(tokens.total)}  "
+                f"{_format_cost(costs.source_cost_usd)}  "
+                f"{_format_cost(costs.actual_cost_usd)}  "
+                f"{_format_cost(costs.virtual_cost_usd)}  "
+                f"{_format_cost(costs.savings_usd)}  "
+                f"{costs.unpriced_count}"
+            )
+            typer.echo(line)
+
+        if breakdown:
+            for row in session.by_model:
+                label = f"{row.provider_id}/{row.model_id}"
+                bline = (
+                    f"  └─  {label}  {row.message_count}  "
+                    f"{_format_int(row.tokens.input)}  "
+                    f"{_format_int(row.tokens.output)}  "
+                    f"{_format_int(row.tokens.reasoning)}  "
+                    f"{_format_int(row.tokens.cache_read)}  "
+                    f"{_format_int(row.tokens.cache_write)}  "
+                    f"{_format_int(row.tokens.cache_output)}  "
+                    f"{_format_int(row.tokens.total)}  "
+                    f"{_format_cost(row.costs.actual_cost_usd)}  "
+                    f"{_format_cost(row.costs.virtual_cost_usd)}"
+                )
+                typer.echo(bline)
 
 
 def _usage_aggregate(
@@ -1393,7 +1594,7 @@ def _format_subscription_window(
     tz = resolve_timezone(timezone_name=timezone_name, utc=False)
     since_dt = datetime.datetime.fromtimestamp(since_ms / 1000, tz=tz)
     until_dt = datetime.datetime.fromtimestamp(until_ms / 1000, tz=tz)
-    
+
     # For windows less than 24 hours, include time
     duration_ms = until_ms - since_ms
     if duration_ms < 24 * 60 * 60 * 1000:  # Less than 24 hours

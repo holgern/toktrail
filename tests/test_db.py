@@ -22,10 +22,11 @@ from toktrail.db import (
     summarize_tracking_session,
     summarize_usage,
     summarize_usage_series,
+    summarize_usage_sessions,
 )
 from toktrail.models import TokenBreakdown, UsageEvent
 from toktrail.periods import resolve_fixed_subscription_window
-from toktrail.reporting import UsageReportFilter, UsageSeriesFilter
+from toktrail.reporting import UsageReportFilter, UsageSeriesFilter, UsageSessionsFilter
 
 
 def make_price(
@@ -1583,6 +1584,248 @@ def test_summarize_usage_series_bounds_tracking_session_by_run_lifetime(
             UsageSeriesFilter(
                 granularity="daily",
                 tracking_session_id=session_id,
+            ),
+        )
+    finally:
+        conn.close()
+
+    assert report.totals.tokens.input == 7
+    assert report.totals.tokens.output == 3
+    assert report.totals.tokens.total == 10
+    assert report.filters["since_ms"] == 1_000
+    assert report.filters["until_ms"] == 1_500
+
+
+def test_summarize_usage_sessions_last_n_source_sessions(tmp_path: Path) -> None:
+    conn = connect(tmp_path / "toktrail.db")
+    migrate(conn)
+    try:
+        insert_usage_events(
+            conn,
+            None,
+            [
+                make_usage_event(
+                    dedup_suffix="new1",
+                    source_session_id="ses-new",
+                    created_ms=3000,
+                    tokens=TokenBreakdown(input=100, output=10, cache_read=50),
+                ),
+                make_usage_event(
+                    dedup_suffix="new2",
+                    source_session_id="ses-new",
+                    created_ms=3200,
+                    tokens=TokenBreakdown(input=50, output=5, cache_write=20),
+                ),
+                make_usage_event(
+                    dedup_suffix="mid1",
+                    source_session_id="ses-mid",
+                    harness="pi",
+                    provider_id="openai",
+                    model_id="gpt-5.1",
+                    created_ms=2000,
+                    tokens=TokenBreakdown(input=30, output=3, cache_output=10),
+                ),
+                make_usage_event(
+                    dedup_suffix="old1",
+                    source_session_id="ses-old",
+                    created_ms=1000,
+                    tokens=TokenBreakdown(input=200, output=20),
+                ),
+            ],
+        )
+
+        # desc, limit=2
+        report = summarize_usage_sessions(
+            conn,
+            UsageSessionsFilter(limit=2, order="desc"),
+        )
+        assert [s.source_session_id for s in report.sessions] == ["ses-new", "ses-mid"]
+        assert report.totals.tokens.input == 100 + 50 + 30
+        assert report.totals.tokens.cache_read == 50
+        assert report.totals.tokens.cache_write == 20
+        assert report.totals.tokens.cache_output == 10
+
+        # asc
+        report_asc = summarize_usage_sessions(
+            conn,
+            UsageSessionsFilter(limit=2, order="asc"),
+        )
+        assert [s.source_session_id for s in report_asc.sessions] == [
+            "ses-old",
+            "ses-mid",
+        ]
+
+        # totals reflect only returned rows
+        assert report_asc.totals.tokens.input == 200 + 30
+    finally:
+        conn.close()
+
+
+def test_summarize_usage_sessions_filters(tmp_path: Path) -> None:
+    conn = connect(tmp_path / "toktrail.db")
+    migrate(conn)
+    try:
+        insert_usage_events(
+            conn,
+            None,
+            [
+                make_usage_event(
+                    dedup_suffix="f1",
+                    harness="opencode",
+                    source_session_id="ses-a",
+                    provider_id="anthropic",
+                    model_id="claude-sonnet-4",
+                    created_ms=1000,
+                    tokens=TokenBreakdown(input=100),
+                ),
+                make_usage_event(
+                    dedup_suffix="f2",
+                    harness="pi",
+                    source_session_id="ses-b",
+                    provider_id="openai",
+                    model_id="gpt-5.1",
+                    created_ms=2000,
+                    tokens=TokenBreakdown(input=50),
+                ),
+            ],
+        )
+
+        # harness filter
+        report = summarize_usage_sessions(
+            conn,
+            UsageSessionsFilter(harness="pi", limit=None),
+        )
+        assert len(report.sessions) == 1
+        assert report.sessions[0].source_session_id == "ses-b"
+
+        # source_session_id filter
+        report_sid = summarize_usage_sessions(
+            conn,
+            UsageSessionsFilter(source_session_id="ses-a", limit=None),
+        )
+        assert len(report_sid.sessions) == 1
+        assert report_sid.sessions[0].source_session_id == "ses-a"
+
+        # provider_id filter
+        report_prov = summarize_usage_sessions(
+            conn,
+            UsageSessionsFilter(provider_id="openai", limit=None),
+        )
+        assert len(report_prov.sessions) == 1
+
+        # model_id filter
+        report_model = summarize_usage_sessions(
+            conn,
+            UsageSessionsFilter(model_id="claude-sonnet-4", limit=None),
+        )
+        assert len(report_model.sessions) == 1
+
+        # since_ms filter
+        report_since = summarize_usage_sessions(
+            conn,
+            UsageSessionsFilter(since_ms=1500, limit=None),
+        )
+        assert len(report_since.sessions) == 1
+        assert report_since.sessions[0].source_session_id == "ses-b"
+
+        # until_ms filter
+        report_until = summarize_usage_sessions(
+            conn,
+            UsageSessionsFilter(until_ms=1500, limit=None),
+        )
+        assert len(report_until.sessions) == 1
+        assert report_until.sessions[0].source_session_id == "ses-a"
+    finally:
+        conn.close()
+
+
+def test_summarize_usage_sessions_breakdown(tmp_path: Path) -> None:
+    conn = connect(tmp_path / "toktrail.db")
+    migrate(conn)
+    try:
+        insert_usage_events(
+            conn,
+            None,
+            [
+                make_usage_event(
+                    dedup_suffix="bd1",
+                    source_session_id="ses-x",
+                    provider_id="anthropic",
+                    model_id="claude-sonnet-4",
+                    created_ms=1000,
+                    tokens=TokenBreakdown(input=100),
+                ),
+                make_usage_event(
+                    dedup_suffix="bd2",
+                    source_session_id="ses-x",
+                    provider_id="openai",
+                    model_id="gpt-5.1",
+                    created_ms=1100,
+                    tokens=TokenBreakdown(input=50),
+                ),
+            ],
+        )
+
+        # without breakdown
+        report_no = summarize_usage_sessions(
+            conn,
+            UsageSessionsFilter(limit=None, breakdown=False),
+        )
+        assert report_no.sessions[0].by_model == ()
+
+        # with breakdown
+        report_bd = summarize_usage_sessions(
+            conn,
+            UsageSessionsFilter(limit=None, breakdown=True),
+        )
+        assert len(report_bd.sessions) == 1
+        by_model = report_bd.sessions[0].by_model
+        assert len(by_model) == 2
+        model_ids = {m.model_id for m in by_model}
+        assert model_ids == {"claude-sonnet-4", "gpt-5.1"}
+    finally:
+        conn.close()
+
+
+def test_summarize_usage_sessions_tracking_session_bounds(
+    tmp_path: Path,
+) -> None:
+    conn = connect(tmp_path / "toktrail.db")
+    try:
+        migrate(conn)
+        session_id = create_tracking_session(
+            conn,
+            "bounded-sessions",
+            started_at_ms=1_000,
+        )
+        insert_usage_events(
+            conn,
+            session_id,
+            [
+                make_usage_event(
+                    dedup_suffix="before1",
+                    created_ms=999,
+                    tokens=TokenBreakdown(input=100),
+                ),
+                make_usage_event(
+                    dedup_suffix="during2",
+                    created_ms=1_000,
+                    tokens=TokenBreakdown(input=7, output=3),
+                ),
+                make_usage_event(
+                    dedup_suffix="after3",
+                    created_ms=2_000,
+                    tokens=TokenBreakdown(output=10),
+                ),
+            ],
+        )
+        end_tracking_session(conn, session_id, ended_at_ms=1_500)
+
+        report = summarize_usage_sessions(
+            conn,
+            UsageSessionsFilter(
+                tracking_session_id=session_id,
+                limit=None,
             ),
         )
     finally:

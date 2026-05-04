@@ -614,3 +614,82 @@ class UsageSeriesReport:
             result["buckets"] = [b.as_dict() for b in self.buckets]
         result["totals"] = self.totals.as_dict()
         return result
+
+
+@dataclass(frozen=True)
+class UsageSessionsFilter:
+    tracking_session_id: int | None = None
+    harness: str | None = None
+    source_session_id: str | None = None
+    provider_id: str | None = None
+    model_id: str | None = None
+    thinking_level: str | None = None
+    agent: str | None = None
+    since_ms: int | None = None
+    until_ms: int | None = None
+    split_thinking: bool = False
+    limit: int | None = 10
+    order: str = "desc"
+    breakdown: bool = False
+
+    def to_usage_report_filter(self) -> UsageReportFilter:
+        return UsageReportFilter(
+            tracking_session_id=self.tracking_session_id,
+            harness=self.harness,
+            source_session_id=self.source_session_id,
+            provider_id=self.provider_id,
+            model_id=self.model_id,
+            thinking_level=self.thinking_level,
+            agent=self.agent,
+            since_ms=self.since_ms,
+            until_ms=self.until_ms,
+            split_thinking=self.split_thinking,
+        )
+
+
+@dataclass(frozen=True)
+class UsageSessionRow:
+    key: str
+    harness: str
+    source_session_id: str
+    first_ms: int
+    last_ms: int
+    message_count: int
+    tokens: TokenBreakdown
+    costs: CostTotals
+    models: tuple[str, ...] = ()
+    providers: tuple[str, ...] = ()
+    by_model: tuple[ModelSummaryRow, ...] = ()
+
+    def as_dict(self) -> dict[str, object]:
+        result: dict[str, object] = {
+            "key": self.key,
+            "harness": self.harness,
+            "source_session_id": self.source_session_id,
+            "first_ms": self.first_ms,
+            "last_ms": self.last_ms,
+            "message_count": self.message_count,
+            "providers": list(self.providers),
+            "models": list(self.models),
+            "tokens": self.tokens.as_dict(),
+            "costs": self.costs.as_dict(),
+        }
+        if self.by_model:
+            result["by_model"] = [row.as_dict() for row in self.by_model]
+        return result
+
+
+@dataclass(frozen=True)
+class UsageSessionsReport:
+    filters: dict[str, object]
+    sessions: tuple[UsageSessionRow, ...]
+    totals: SessionTotals
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "type": "usage_sessions",
+            "order": self.filters.get("order", "desc"),
+            "filters": dict(self.filters),
+            "sessions": [row.as_dict() for row in self.sessions],
+            "totals": self.totals.as_dict(),
+        }

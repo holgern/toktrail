@@ -992,6 +992,59 @@ class SessionCacheAnalysisReport:
         return payload
 
 
+@dataclass(frozen=True)
+class UsageSessionRow:
+    key: str
+    harness: str
+    source_session_id: str
+    first_ms: int
+    last_ms: int
+    message_count: int
+    tokens: TokenBreakdown
+    costs: CostTotals
+    models: tuple[str, ...] = ()
+    providers: tuple[str, ...] = ()
+    by_model: tuple[ModelSummaryRow, ...] = ()
+
+    def as_dict(self) -> dict[str, object]:
+        result: dict[str, object] = {
+            "key": self.key,
+            "harness": self.harness,
+            "source_session_id": self.source_session_id,
+            "first_ms": self.first_ms,
+            "last_ms": self.last_ms,
+            "message_count": self.message_count,
+            "providers": list(self.providers),
+            "models": list(self.models),
+            "tokens": self.tokens.as_dict(),
+            "costs": self.costs.as_dict(),
+        }
+        if self.by_model:
+            result["by_model"] = [row.as_dict() for row in self.by_model]
+        return result
+
+
+@dataclass(frozen=True)
+class UsageSessionsReport:
+    filters: dict[str, object]
+    sessions: tuple[UsageSessionRow, ...]
+    totals: SessionTotals = field(
+        default_factory=lambda: SessionTotals(
+            tokens=TokenBreakdown(),
+            costs=CostTotals(),
+        )
+    )
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "type": "usage_sessions",
+            "order": self.filters.get("order", "desc"),
+            "filters": dict(self.filters),
+            "sessions": [row.as_dict() for row in self.sessions],
+            "totals": self.totals.as_dict(),
+        }
+
+
 __all__ = [
     "ActivitySummaryRow",
     "CacheCallRow",
@@ -1026,4 +1079,6 @@ __all__ = [
     "UsageSeriesBucket",
     "UsageSeriesInstance",
     "UsageSeriesReport",
+    "UsageSessionRow",
+    "UsageSessionsReport",
 ]

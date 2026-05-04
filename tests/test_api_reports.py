@@ -22,6 +22,7 @@ from toktrail.api.reports import (
     subscription_usage_report,
     usage_report,
     usage_series_report,
+    usage_sessions_report,
 )
 from toktrail.api.sessions import init_state, start_run
 from toktrail.db import (
@@ -452,6 +453,86 @@ def test_usage_series_report_session_id_bounds_to_run_lifetime(tmp_path: Path) -
         state_db,
         granularity="daily",
         session_id=session_id,
+    )
+
+    assert report.totals.tokens.total == 7
+    assert report.filters["since_ms"] == 1_000
+    assert report.filters["until_ms"] == 1_500
+
+
+def test_usage_sessions_report_json_shape(tmp_path: Path) -> None:
+    state_db = tmp_path / "toktrail.db"
+    source_db = tmp_path / "opencode.db"
+    conn = create_opencode_db(source_db)
+    insert_message(conn, row_id="row-1", session_id="ses-1", data=VALID_ASSISTANT)
+    conn.commit()
+    conn.close()
+    init_state(state_db)
+    import_usage(state_db, "opencode", source_path=source_db)
+
+    report = usage_sessions_report(
+        state_db,
+        limit=10,
+        breakdown=True,
+        config_path=tmp_path / "missing-config.toml",
+    )
+    payload = report.as_dict()
+
+    assert payload["type"] == "usage_sessions"
+    assert payload["order"] == "desc"
+    sessions = cast(list[dict[str, object]], payload["sessions"])
+    assert len(sessions) >= 1
+    session = sessions[0]
+    assert "key" in session
+    assert "harness" in session
+    assert "source_session_id" in session
+    assert "tokens" in session
+    assert "costs" in session
+    # costs serialized as strings
+    costs = cast(dict[str, object], session["costs"])
+    assert isinstance(costs["actual_cost_usd"], str)
+    assert isinstance(costs["source_cost_usd"], str)
+    # no raw JSON leakage
+    assert "raw_json" not in session
+    # by_model present when breakdown=True
+    by_model = cast(list[dict[str, object]], session["by_model"])
+    assert len(by_model) >= 1
+
+
+def test_usage_sessions_report_session_id_bounds_to_run_lifetime(
+    tmp_path: Path,
+) -> None:
+    state_db = tmp_path / "toktrail.db"
+    conn = connect(state_db)
+    try:
+        migrate(conn)
+        session_id = create_tracking_session(
+            conn, "bounded-sessions", started_at_ms=1_000
+        )
+        insert_usage_events(
+            conn,
+            session_id,
+            [
+                make_api_usage_event(
+                    "before",
+                    created_ms=999,
+                    tokens=TokenBreakdown(input=100),
+                ),
+                make_api_usage_event(
+                    "during",
+                    created_ms=1_100,
+                    tokens=TokenBreakdown(input=5, output=2),
+                ),
+            ],
+        )
+        end_tracking_session(conn, session_id, ended_at_ms=1_500)
+    finally:
+        conn.close()
+
+    report = usage_sessions_report(
+        state_db,
+        session_id=session_id,
+        limit=None,
     )
 
     assert report.totals.tokens.total == 7

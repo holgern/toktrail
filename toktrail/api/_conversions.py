@@ -24,6 +24,8 @@ from toktrail.api.models import (
     UsageSeriesBucket,
     UsageSeriesInstance,
     UsageSeriesReport,
+    UsageSessionRow,
+    UsageSessionsReport,
 )
 from toktrail.models import (
     Run as InternalTrackingSession,
@@ -69,6 +71,12 @@ from toktrail.reporting import (
 )
 from toktrail.reporting import (
     UnconfiguredModelRow as InternalUnconfiguredModelRow,
+)
+from toktrail.reporting import (
+    UsageSessionRow as InternalUsageSessionRow,
+)
+from toktrail.reporting import (
+    UsageSessionsReport as InternalUsageSessionsReport,
 )
 from toktrail.sync import (
     StateExportResult as InternalStateExportResult,
@@ -429,6 +437,37 @@ def _to_public_state_import_result(
     )
 
 
+def _to_public_usage_session_row(
+    value: InternalUsageSessionRow,
+) -> UsageSessionRow:
+    return UsageSessionRow(
+        key=value.key,
+        harness=value.harness,
+        source_session_id=value.source_session_id,
+        first_ms=value.first_ms,
+        last_ms=value.last_ms,
+        message_count=value.message_count,
+        tokens=_to_public_token_breakdown(value.tokens),
+        costs=_to_public_cost_totals(value.costs),
+        models=value.models,
+        providers=value.providers,
+        by_model=tuple(_to_public_model_row(m) for m in value.by_model),
+    )
+
+
+def _to_public_usage_sessions_report(
+    value: InternalUsageSessionsReport,
+) -> UsageSessionsReport:
+    return UsageSessionsReport(
+        filters=value.filters,
+        sessions=tuple(_to_public_usage_session_row(s) for s in value.sessions),
+        totals=_to_public_session_totals(
+            value.totals,
+            message_count=sum(s.message_count for s in value.sessions),
+        ),
+    )
+
+
 __all__ = [
     "_to_public_activity_row",
     "_to_public_cost_totals",
@@ -446,4 +485,6 @@ __all__ = [
     "_to_public_series_report",
     "_to_public_state_export_result",
     "_to_public_state_import_result",
+    "_to_public_usage_session_row",
+    "_to_public_usage_sessions_report",
 ]

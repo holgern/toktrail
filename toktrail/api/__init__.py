@@ -53,6 +53,8 @@ from toktrail.api.models import (
     UsageSeriesBucket,
     UsageSeriesInstance,
     UsageSeriesReport,
+    UsageSessionRow,
+    UsageSessionsReport,
 )
 from toktrail.api.paths import (
     default_source_path,
@@ -65,6 +67,7 @@ from toktrail.api.reports import (
     subscription_usage_report,
     usage_report,
     usage_series_report,
+    usage_sessions_report,
 )
 from toktrail.api.sessions import (
     get_active_run,
@@ -122,6 +125,8 @@ __all__ = [
     "UsageSeriesBucket",
     "UsageSeriesInstance",
     "UsageSeriesReport",
+    "UsageSessionRow",
+    "UsageSessionsReport",
     "capture_source_snapshot",
     "config_exists",
     "config_summary",
@@ -160,4 +165,5 @@ __all__ = [
     "supported_harnesses",
     "usage_report",
     "usage_series_report",
+    "usage_sessions_report",
 ]
