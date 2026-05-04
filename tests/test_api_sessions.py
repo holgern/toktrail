@@ -36,6 +36,7 @@ def test_api_start_and_stop_session_round_trip(tmp_path) -> None:
     stopped = stop_run(db_path, started.id, ended_at_ms=456)
 
     assert started.active is True
+    assert started.sync_id
     assert started.started_at_ms == 123
     assert active is not None
     assert active.id == started.id

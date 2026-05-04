@@ -24,6 +24,7 @@ from toktrail.db import (
     summarize_usage_series,
 )
 from toktrail.models import TokenBreakdown, UsageEvent
+from toktrail.periods import resolve_fixed_subscription_window
 from toktrail.reporting import UsageReportFilter, UsageSeriesFilter
 
 
@@ -111,8 +112,9 @@ def test_migrate_creates_tables_and_is_idempotent(tmp_path: Path) -> None:
         "source_sessions",
         "usage_events",
         "run_events",
+        "state_metadata",
     } <= table_names
-    assert user_version == 4
+    assert user_version == 5
 
 
 def test_source_costs_are_stored_and_aggregated_as_exact_decimals(
@@ -154,6 +156,21 @@ def test_create_tracking_session_and_end_session(tmp_path: Path) -> None:
     end_tracking_session(conn, session_id)
 
     assert get_active_tracking_session(conn) is None
+
+
+def test_tracking_session_has_sync_id_and_origin_machine_id(tmp_path: Path) -> None:
+    conn = connect(tmp_path / "toktrail.db")
+    migrate(conn)
+
+    session_id = create_tracking_session(conn, "test")
+    row = conn.execute(
+        "SELECT sync_id, origin_machine_id FROM runs WHERE id = ?",
+        (session_id,),
+    ).fetchone()
+
+    assert row is not None
+    assert row["sync_id"]
+    assert row["origin_machine_id"]
 
 
 def test_insert_usage_events_attaches_multiple_source_sessions(tmp_path: Path) -> None:
@@ -1033,6 +1050,249 @@ def test_summarize_subscription_usage_first_use_expired_waiting_returns_zero(
     assert period.since_ms is None
     assert period.until_ms is None
     assert period.used_usd == Decimal("0")
+
+
+def test_subscription_billing_break_even_not_reached(tmp_path: Path) -> None:
+    conn = connect(tmp_path / "toktrail.db")
+    migrate(conn)
+    insert_usage_events(
+        conn,
+        None,
+        [
+            make_usage_event(
+                dedup_suffix="1",
+                provider_id="opencode-go",
+                source_cost_usd=7.0,
+                created_ms=1777799400000,
+            )
+        ],
+    )
+    config = CostingConfig(
+        subscriptions=(
+            SubscriptionConfig(
+                provider="opencode-go",
+                timezone="UTC",
+                cost_basis="source",
+                fixed_cost_usd=10.0,
+                fixed_cost_period="monthly",
+                fixed_cost_reset_at="2026-05-01T00:00:00+00:00",
+                windows=(
+                    SubscriptionWindowConfig(
+                        period="monthly",
+                        limit_usd=200,
+                        reset_mode="fixed",
+                        reset_at="2026-05-01T00:00:00+00:00",
+                    ),
+                ),
+            ),
+        ),
+    )
+
+    report = summarize_subscription_usage(conn, config, now_ms=1777802400000)
+    billing = report.subscriptions[0].billing
+
+    assert billing is not None
+    assert billing.fixed_cost_usd == Decimal("10")
+    assert billing.value_usd == Decimal("7.0")
+    assert billing.net_savings_usd == Decimal("-3.0")
+    assert billing.break_even_remaining_usd == Decimal("3.0")
+
+
+def test_subscription_billing_break_even_reached(tmp_path: Path) -> None:
+    conn = connect(tmp_path / "toktrail.db")
+    migrate(conn)
+    insert_usage_events(
+        conn,
+        None,
+        [
+            make_usage_event(
+                dedup_suffix="1",
+                provider_id="opencode-go",
+                source_cost_usd=13.0,
+                created_ms=1777799400000,
+            )
+        ],
+    )
+    config = CostingConfig(
+        subscriptions=(
+            SubscriptionConfig(
+                provider="opencode-go",
+                timezone="UTC",
+                cost_basis="source",
+                fixed_cost_usd=10.0,
+                fixed_cost_period="monthly",
+                fixed_cost_reset_at="2026-05-01T00:00:00+00:00",
+                windows=(
+                    SubscriptionWindowConfig(
+                        period="monthly",
+                        limit_usd=200,
+                        reset_mode="fixed",
+                        reset_at="2026-05-01T00:00:00+00:00",
+                    ),
+                ),
+            ),
+        ),
+    )
+
+    report = summarize_subscription_usage(conn, config, now_ms=1777802400000)
+    billing = report.subscriptions[0].billing
+
+    assert billing is not None
+    assert billing.net_savings_usd == Decimal("3.0")
+    assert billing.break_even_remaining_usd == Decimal("0")
+
+
+def test_subscription_billing_basis_selects_configured_cost_basis(
+    tmp_path: Path,
+) -> None:
+    conn = connect(tmp_path / "toktrail.db")
+    migrate(conn)
+    insert_usage_events(
+        conn,
+        None,
+        [
+            make_usage_event(
+                dedup_suffix="1",
+                provider_id="opencode-go",
+                source_cost_usd=7.0,
+                created_ms=1777799400000,
+                tokens=TokenBreakdown(input=0, output=1_000_000),
+            )
+        ],
+    )
+    virtual_price = make_price(
+        provider="opencode-go",
+        model="claude-sonnet-4",
+        input_usd_per_1m=0.0,
+        output_usd_per_1m=13.0,
+    )
+    source_basis = CostingConfig(
+        subscriptions=(
+            SubscriptionConfig(
+                provider="opencode-go",
+                timezone="UTC",
+                cost_basis="source",
+                fixed_cost_usd=10.0,
+                fixed_cost_period="monthly",
+                fixed_cost_reset_at="2026-05-01T00:00:00+00:00",
+                fixed_cost_basis="source",
+                windows=(
+                    SubscriptionWindowConfig(
+                        period="monthly",
+                        limit_usd=200,
+                        reset_mode="fixed",
+                        reset_at="2026-05-01T00:00:00+00:00",
+                    ),
+                ),
+            ),
+        ),
+        virtual_prices=(virtual_price,),
+    )
+    virtual_basis = CostingConfig(
+        subscriptions=(
+            SubscriptionConfig(
+                provider="opencode-go",
+                timezone="UTC",
+                cost_basis="source",
+                fixed_cost_usd=10.0,
+                fixed_cost_period="monthly",
+                fixed_cost_reset_at="2026-05-01T00:00:00+00:00",
+                fixed_cost_basis="virtual",
+                windows=(
+                    SubscriptionWindowConfig(
+                        period="monthly",
+                        limit_usd=200,
+                        reset_mode="fixed",
+                        reset_at="2026-05-01T00:00:00+00:00",
+                    ),
+                ),
+            ),
+        ),
+        virtual_prices=(virtual_price,),
+    )
+
+    source_report = summarize_subscription_usage(
+        conn,
+        source_basis,
+        now_ms=1777802400000,
+    )
+    virtual_report = summarize_subscription_usage(
+        conn,
+        virtual_basis,
+        now_ms=1777802400000,
+    )
+
+    source_billing = source_report.subscriptions[0].billing
+    virtual_billing = virtual_report.subscriptions[0].billing
+    assert source_billing is not None
+    assert virtual_billing is not None
+    assert source_billing.value_usd == Decimal("7.0")
+    assert virtual_billing.value_usd == Decimal("13.0")
+
+
+def test_subscription_billing_window_is_independent_from_quota_windows(
+    tmp_path: Path,
+) -> None:
+    conn = connect(tmp_path / "toktrail.db")
+    migrate(conn)
+    insert_usage_events(
+        conn,
+        None,
+        [
+            make_usage_event(
+                dedup_suffix="1",
+                provider_id="opencode-go",
+                source_cost_usd=5.0,
+                created_ms=1777799400000,
+            )
+        ],
+    )
+    config = CostingConfig(
+        subscriptions=(
+            SubscriptionConfig(
+                provider="opencode-go",
+                timezone="UTC",
+                cost_basis="source",
+                fixed_cost_usd=10.0,
+                fixed_cost_period="monthly",
+                fixed_cost_reset_at="2026-05-01T00:00:00+00:00",
+                windows=(
+                    SubscriptionWindowConfig(
+                        period="5h",
+                        limit_usd=10,
+                        reset_mode="first_use",
+                        reset_at="2026-05-01T00:00:00+00:00",
+                    ),
+                    SubscriptionWindowConfig(
+                        period="weekly",
+                        limit_usd=50,
+                        reset_mode="first_use",
+                        reset_at="2026-05-01T00:00:00+00:00",
+                    ),
+                    SubscriptionWindowConfig(
+                        period="monthly",
+                        limit_usd=200,
+                        reset_mode="first_use",
+                        reset_at="2026-05-01T00:00:00+00:00",
+                    ),
+                ),
+            ),
+        ),
+    )
+
+    report = summarize_subscription_usage(conn, config, now_ms=1777802400000)
+    billing = report.subscriptions[0].billing
+    assert billing is not None
+    expected = resolve_fixed_subscription_window(
+        period="monthly",
+        reset_at="2026-05-01T00:00:00+00:00",
+        timezone_name="UTC",
+        now_ms=1777802400000,
+    )
+    assert billing.period == "monthly"
+    assert billing.reset_at == "2026-05-01T00:00:00+00:00"
+    assert billing.since_ms == expected.since_ms
+    assert billing.until_ms == expected.until_ms
 
 
 def test_summarize_usage_bounds_tracking_session_by_run_lifetime(

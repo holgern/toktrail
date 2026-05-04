@@ -30,6 +30,9 @@ from toktrail.api import (
     SourceSessionDiff,
     SourceSessionSnapshot,
     SourceSessionSummary,
+    StateExportResult,
+    StateImportConflict,
+    StateImportResult,
     TokenBreakdown,
     Run,
     RunReport,
@@ -77,6 +80,7 @@ from toktrail.api.sources import (
     scan_usage,
 )
 from toktrail.api.imports import import_configured_usage, import_usage
+from toktrail.api.sync import default_archive_name, export_state_archive, import_state_archive
 from toktrail.api.reports import session_report, subscription_usage_report, usage_report
 from toktrail.api.environment import prepare_environment
 from toktrail.api.workflow import finalize_manual_run, prepare_manual_run
@@ -96,6 +100,7 @@ valid for callers that want narrower imports.
 - `toktrail.api.sessions`
 - `toktrail.api.sources`
 - `toktrail.api.imports`
+- `toktrail.api.sync`
 - `toktrail.api.reports`
 - `toktrail.api.environment`
 - `toktrail.api.workflow`
@@ -122,8 +127,8 @@ Key public models:
   `cache_write`, `total`
 - `CostTotals`: `source_cost_usd`, `actual_cost_usd`, `virtual_cost_usd`,
   `savings_usd`, `unpriced_count`
-- `Run`: uses `started_at_ms` / `ended_at_ms` as the primary field
-  names
+- `Run`: includes local integer `id`, durable cross-machine `sync_id`, and
+  `started_at_ms` / `ended_at_ms`
 - `SourceSessionSummary`, `SourceSessionSnapshot`, `SourceSessionDiff`
 - `ImportUsageResult`
 - `RunReport`
@@ -226,6 +231,26 @@ period/time-range reporting, it returns `RunReport(session=None, ...)`.
 status (`active`, `waiting_for_first_use`, `expired_waiting_for_next_use`),
 and used/remaining/over-limit cost values based on each subscription
 `cost_basis` (`source`, `actual`, or `virtual`).
+
+When configured, subscription rows also expose a `billing` object with
+`fixed_cost_usd`, `value_usd`, `net_savings_usd`, and break-even metrics.
+
+### Sync archive API
+
+Use `toktrail.api.sync` to export/import normalized toktrail state archives:
+
+```python
+from pathlib import Path
+
+from toktrail.api.sync import default_archive_name, export_state_archive, import_state_archive
+
+archive = Path(default_archive_name())
+exported = export_state_archive(Path(".toktrail/toktrail.db"), archive)
+preview = import_state_archive(Path(".toktrail/other.db"), archive, dry_run=True)
+```
+
+Import validates archive member paths, manifest checksums, schema version, and
+usage-event fingerprint conflicts before merge.
 
 ### Configured import
 

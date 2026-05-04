@@ -358,6 +358,7 @@ class RunReport:
             if self.session is None
             else {
                 "id": self.session.id,
+                "sync_id": self.session.sync_id,
                 "name": self.session.name,
                 "started_at_ms": self.session.started_at_ms,
                 "ended_at_ms": self.session.ended_at_ms,
@@ -414,21 +415,61 @@ class SubscriptionUsagePeriod:
 
 
 @dataclass(frozen=True)
+class SubscriptionBillingPeriod:
+    period: str
+    reset_at: str
+    since_ms: int
+    until_ms: int
+    cost_basis: str
+    fixed_cost_usd: Decimal
+    value_usd: Decimal
+    net_savings_usd: Decimal
+    break_even_remaining_usd: Decimal
+    break_even_percent: Decimal | None
+    message_count: int
+    tokens: TokenBreakdown
+    costs: CostTotals
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "period": self.period,
+            "reset_at": self.reset_at,
+            "since_ms": self.since_ms,
+            "until_ms": self.until_ms,
+            "cost_basis": self.cost_basis,
+            "fixed_cost_usd": str(self.fixed_cost_usd),
+            "value_usd": str(self.value_usd),
+            "net_savings_usd": str(self.net_savings_usd),
+            "break_even_remaining_usd": str(self.break_even_remaining_usd),
+            "break_even_percent": None
+            if self.break_even_percent is None
+            else str(self.break_even_percent),
+            "message_count": self.message_count,
+            "tokens": self.tokens.as_dict(),
+            "costs": self.costs.as_dict(),
+        }
+
+
+@dataclass(frozen=True)
 class SubscriptionUsageRow:
     provider_id: str
     display_name: str
     timezone: str | None
     cost_basis: str
     periods: tuple[SubscriptionUsagePeriod, ...]
+    billing: SubscriptionBillingPeriod | None = None
 
     def as_dict(self) -> dict[str, object]:
-        return {
+        payload: dict[str, object] = {
             "provider_id": self.provider_id,
             "display_name": self.display_name,
             "timezone": self.timezone,
             "cost_basis": self.cost_basis,
             "periods": [period.as_dict() for period in self.periods],
         }
+        if self.billing is not None:
+            payload["billing"] = self.billing.as_dict()
+        return payload
 
 
 @dataclass(frozen=True)

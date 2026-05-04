@@ -3130,6 +3130,9 @@ provider = "opencode-go"
 display_name = "OpenCode Go"
 timezone = "UTC"
 cost_basis = "source"
+fixed_cost_usd = 10
+fixed_cost_period = "monthly"
+fixed_cost_reset_at = "2023-11-01T00:00:00+00:00"
 
 [[subscriptions.windows]]
 period = "5h"
@@ -3327,6 +3330,8 @@ def test_cli_subscriptions_prints_5h_window(tmp_path) -> None:
 
     assert result.exit_code == 0, result.output
     assert "OpenCode Go (opencode-go)" in result.output
+    assert "Billing" in result.output
+    assert "net savings" in result.output
     assert "5h" in result.output
     assert "weekly" in result.output
     assert "monthly" in result.output
@@ -3381,6 +3386,7 @@ def test_cli_subscriptions_provider_filter_json_shape(tmp_path) -> None:
         "weekly",
         "monthly",
     ]
+    assert "billing" in payload["subscriptions"][0]
     assert "status" in payload["subscriptions"][0]["periods"][0]
     assert "reset_mode" in payload["subscriptions"][0]["periods"][0]
     assert "reset_at" in payload["subscriptions"][0]["periods"][0]
@@ -3429,6 +3435,7 @@ def test_cli_subscriptions_period_filter_accepts_5h(tmp_path) -> None:
     payload = json.loads(result.output)
     periods = payload["subscriptions"][0]["periods"]
     assert [period["period"] for period in periods] == ["5h"]
+    assert "billing" in payload["subscriptions"][0]
 
 
 def test_cli_subscriptions_disabled_window_is_not_printed(tmp_path) -> None:
@@ -3571,3 +3578,65 @@ def test_cli_subscriptions_unknown_provider_filter_is_clear(tmp_path) -> None:
 
     assert result.exit_code == 0, result.output
     assert "No subscriptions matched provider unknown-provider." in result.output
+
+
+def test_cli_sync_export_and_import_dry_run_json_shape(tmp_path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    import_db = tmp_path / "toktrail-import.db"
+    source_db = tmp_path / "opencode.db"
+    archive_path = tmp_path / "state.tar.gz"
+    create_source_db(source_db)
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    refresh_result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "refresh",
+            "--no-session",
+            "--harness",
+            "opencode",
+            "--source",
+            str(source_db),
+        ],
+    )
+    assert refresh_result.exit_code == 0, refresh_result.output
+
+    export_result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "sync",
+            "export",
+            "--out",
+            str(archive_path),
+            "--no-refresh",
+        ],
+    )
+    assert export_result.exit_code == 0, export_result.output
+    assert archive_path.exists()
+
+    import_result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(import_db),
+            "sync",
+            "import",
+            str(archive_path),
+            "--dry-run",
+            "--json",
+        ],
+    )
+    assert import_result.exit_code == 0, import_result.output
+    payload = json.loads(import_result.output)
+    assert payload["dry_run"] is True
+    assert "runs_inserted" in payload
+    assert "source_sessions_inserted" in payload
+    assert "usage_events_inserted" in payload
+    assert "usage_events_skipped" in payload
+    assert "run_events_inserted" in payload
+    assert "conflicts" in payload

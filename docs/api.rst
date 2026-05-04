@@ -33,12 +33,18 @@ Runnable manual-run examples for the stable API are documented in
 .. automodule:: toktrail.api.imports
    :members:
 
+.. automodule:: toktrail.api.sync
+   :members:
+
 .. automodule:: toktrail.api.reports
    :members:
 
 The reports module includes ``subscription_usage_report()`` for provider
 subscription quota windows and ``usage_report()``/``session_report()`` for
 run and period usage summaries with provider-level breakdowns.
+
+The sync module provides ``export_state_archive()`` and
+``import_state_archive()`` for cross-machine state archive workflows.
 
 .. automodule:: toktrail.api.environment
    :members:

@@ -127,6 +127,9 @@ toktrail usage today --no-refresh
 toktrail usage today --refresh-details
 toktrail subscriptions
 toktrail subscriptions --provider opencode-go --json
+toktrail sync export --out toktrail-state.tar.gz --no-refresh
+toktrail sync import toktrail-state.tar.gz
+toktrail sync import toktrail-state.tar.gz --dry-run --json
 ```
 
 Stop the active tracking session:
@@ -149,6 +152,7 @@ toktrail run status
 toktrail usage today
 toktrail sessions
 toktrail subscriptions
+toktrail sync export --out toktrail-state.tar.gz
 toktrail run stop
 ```
 
@@ -156,6 +160,9 @@ Report commands (`toktrail usage`, `toktrail run status`, and
 `toktrail subscriptions`) refresh configured sources first by default. Use
 `--no-refresh` for stale local-state reads, and `--refresh-details` to print a
 compact refresh summary.
+
+`toktrail sync import` validates archive paths, manifest checksums, schema
+version, and usage-event fingerprints before merging.
 
 Use `toktrail refresh` for explicit/manual refresh operations. It reads enabled
 harnesses and source paths from `config.toml`:
@@ -183,6 +190,10 @@ provider = "opencode-go"
 display_name = "OpenCode Go"
 timezone = "Europe/Berlin"
 cost_basis = "virtual"
+fixed_cost_usd = 10.00
+fixed_cost_period = "monthly"
+fixed_cost_reset_at = "2026-05-01T00:00:00+02:00"
+fixed_cost_basis = "virtual"
 
 [[subscriptions.windows]]
 period = "5h"
@@ -224,6 +235,8 @@ toktrail run stop
 toktrail run stop 3
 toktrail sessions
 toktrail subscriptions
+toktrail sync export --out toktrail-state.tar.gz
+toktrail sync import toktrail-state.tar.gz --dry-run --json
 toktrail sessions pi
 toktrail sessions pi pi_ses_001
 ```

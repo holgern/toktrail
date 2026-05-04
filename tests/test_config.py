@@ -307,9 +307,108 @@ reset_at = "2026-05-01"
 
     subscription = config.subscriptions[0]
     assert subscription.cost_basis == "source"
+    assert subscription.fixed_cost_period == "monthly"
+    assert subscription.fixed_cost_basis == "source"
+    assert subscription.fixed_cost_usd is None
+    assert subscription.fixed_cost_reset_at == "2026-05-01"
     assert subscription.enabled is True
     assert subscription.windows[0].reset_mode == "fixed"
     assert subscription.windows[0].enabled is True
+
+
+def test_load_costing_config_parses_fixed_subscription_billing_fields(tmp_path) -> None:
+    config_path = tmp_path / "toktrail.toml"
+    config_path.write_text(
+        """
+config_version = 1
+
+[[subscriptions]]
+provider = "opencode-go"
+cost_basis = "virtual"
+fixed_cost_usd = 10
+fixed_cost_period = "monthly"
+fixed_cost_reset_at = "2026-05-01T00:00:00+02:00"
+fixed_cost_basis = "source"
+
+[[subscriptions.windows]]
+period = "monthly"
+limit_usd = 100
+reset_at = "2026-05-01T00:00:00+02:00"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    config = load_costing_config(config_path)
+    subscription = config.subscriptions[0]
+    assert subscription.fixed_cost_usd == 10.0
+    assert subscription.fixed_cost_period == "monthly"
+    assert subscription.fixed_cost_reset_at == "2026-05-01T00:00:00+02:00"
+    assert subscription.fixed_cost_basis == "source"
+
+
+def test_load_costing_config_rejects_negative_fixed_cost_usd(tmp_path) -> None:
+    config_path = tmp_path / "toktrail.toml"
+    config_path.write_text(
+        """
+config_version = 1
+
+[[subscriptions]]
+provider = "opencode-go"
+fixed_cost_usd = -1
+[[subscriptions.windows]]
+period = "monthly"
+limit_usd = 100
+reset_at = "2026-05-01"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="fixed_cost_usd"):
+        load_costing_config(config_path)
+
+
+def test_load_costing_config_rejects_invalid_fixed_cost_period(tmp_path) -> None:
+    config_path = tmp_path / "toktrail.toml"
+    config_path.write_text(
+        """
+config_version = 1
+
+[[subscriptions]]
+provider = "opencode-go"
+fixed_cost_usd = 10
+fixed_cost_period = "5h"
+[[subscriptions.windows]]
+period = "monthly"
+limit_usd = 100
+reset_at = "2026-05-01"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="fixed_cost_period"):
+        load_costing_config(config_path)
+
+
+def test_load_costing_config_rejects_fixed_cost_without_reset_anchor(tmp_path) -> None:
+    config_path = tmp_path / "toktrail.toml"
+    config_path.write_text(
+        """
+config_version = 1
+
+[[subscriptions]]
+provider = "opencode-go"
+fixed_cost_usd = 10
+fixed_cost_period = "monthly"
+[[subscriptions.windows]]
+period = "weekly"
+limit_usd = 100
+reset_at = "2026-05-01"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="fixed_cost_reset_at"):
+        load_costing_config(config_path)
 
 
 def test_load_costing_config_rejects_subscription_without_windows(tmp_path) -> None:

@@ -29,6 +29,7 @@ from toktrail.api.imports import import_configured_usage as import_configured_us
 from toktrail.api.models import ImportUsageResult
 from toktrail.api.sessions import list_runs
 from toktrail.api.sources import capture_source_snapshot
+from toktrail.cli_sync import sync_app
 from toktrail.config import (
     DEFAULT_TEMPLATE_NAME,
     CostingConfig,
@@ -67,6 +68,7 @@ from toktrail.reporting import (
     CostTotals,
     ModelSummaryRow,
     ProviderSummaryRow,
+    SubscriptionBillingPeriod,
     SubscriptionUsageReport,
     UnconfiguredModelRow,
     UsageReportFilter,
@@ -98,6 +100,7 @@ app.add_typer(copilot_app, name="copilot")
 app.add_typer(config_app, name="config")
 app.add_typer(pricing_app, name="pricing")
 app.add_typer(subscriptions_app, name="subscriptions")
+app.add_typer(sync_app, name="sync")
 
 _VALID_REPORT_PRICE_STATES = {"all", "priced", "unpriced"}
 _VALID_REPORT_SORTS = {
@@ -1213,6 +1216,39 @@ def _print_subscription_usage_report(
             f"basis={subscription.cost_basis}  "
             f"timezone={timezone_label}"
         )
+        if subscription.billing is not None:
+            typer.echo("")
+            typer.echo("Billing")
+            billing = subscription.billing
+            _print_table(
+                [
+                    {
+                        "period": billing.period,
+                        "window": _format_subscription_window(
+                            billing.since_ms,
+                            billing.until_ms,
+                            timezone_name=subscription.timezone,
+                            status="active",
+                        ),
+                        "fixed": _format_cost(billing.fixed_cost_usd),
+                        "value": _format_cost(billing.value_usd),
+                        "net_savings": _format_cost(billing.net_savings_usd),
+                        "break_even": _format_break_even(billing),
+                    }
+                ],
+                ["period", "window", "fixed", "value", "net_savings", "break_even"],
+                {
+                    "period": "period",
+                    "window": "window",
+                    "fixed": "fixed",
+                    "value": "value",
+                    "net_savings": "net savings",
+                    "break_even": "break-even",
+                },
+                rich_output=rich_output,
+            )
+            typer.echo("")
+            typer.echo("Quota windows")
         rows: list[dict[str, str]] = []
         all_warnings: list[dict[str, object]] = []
         for period in subscription.periods:
@@ -1274,6 +1310,17 @@ def _print_subscription_usage_report(
                         f"  {provider}/{model} has {msg_count} messages but "
                         f"zero cost for basis={cost_basis}"
                     )
+
+
+def _format_break_even(billing: SubscriptionBillingPeriod) -> str:
+    remaining = billing.break_even_remaining_usd
+    percent = billing.break_even_percent
+    if remaining > 0:
+        percent_text = _format_percent(percent)
+        return f"{_format_cost(remaining)} left ({percent_text})"
+    if percent is None:
+        return "reached"
+    return f"reached ({_format_percent(percent)})"
 
 
 def _format_subscription_window(

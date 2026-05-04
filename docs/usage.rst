@@ -16,6 +16,7 @@ The preferred CLI workflow is:
    toktrail run status
    toktrail usage today
    toktrail subscriptions
+   toktrail sync export --out toktrail-state.tar.gz
    toktrail sessions
    toktrail run stop
 
@@ -38,6 +39,9 @@ Use ``--no-refresh`` to read stale local state without touching source logs:
    toktrail subscriptions --no-refresh
 
 Use ``--refresh-details`` to show a compact refresh summary before the report.
+
+``toktrail sync import`` validates archive paths, manifest checksums, schema
+version, and usage-event fingerprints before merging.
 
 Use ``toktrail refresh`` for explicit/manual refresh operation. It reads enabled
 harnesses and source paths from ``config.toml``:
@@ -74,6 +78,8 @@ Core commands
    toktrail usage today
    toktrail usage last-week --utc --json
    toktrail subscriptions --provider opencode-go --json
+   toktrail sync export --out toktrail-state.tar.gz --no-refresh
+   toktrail sync import toktrail-state.tar.gz --dry-run --json
    toktrail sessions
    toktrail sessions opencode
    toktrail sessions pi
@@ -103,3 +109,7 @@ status, used, remaining, and over-limit values.
    toktrail subscriptions --provider opencode-go
    toktrail subscriptions --period 5h --json
    toktrail subscriptions --period monthly --json
+
+If ``fixed_cost_usd`` is configured for a provider subscription, the output also
+includes a billing row with fixed fee, value, net savings, and break-even
+progress for the configured billing period.

@@ -1,12 +1,20 @@
 from __future__ import annotations
 
 import sqlite3
+import uuid
 from dataclasses import dataclass, field, replace
 from decimal import Decimal
+from hashlib import sha256
 from pathlib import Path
 from time import time
+from typing import Any, cast
 
-from toktrail.config import CostingConfig, default_costing_config, normalize_identity
+from toktrail.config import (
+    CostingConfig,
+    SubscriptionWindowConfig,
+    default_costing_config,
+    normalize_identity,
+)
 from toktrail.costing import (
     CostBreakdown,
     SimulationTarget,
@@ -25,6 +33,7 @@ from toktrail.reporting import (
     RunReport,
     SessionTotals,
     SimulationSummaryRow,
+    SubscriptionBillingPeriod,
     SubscriptionUsagePeriod,
     SubscriptionUsageReport,
     SubscriptionUsageRow,
@@ -36,8 +45,10 @@ from toktrail.reporting import (
     UsageSeriesReport,
 )
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 _PERIOD_SORT: dict[str, int] = {"5h": 0, "daily": 1, "weekly": 2, "monthly": 3}
+_STATE_METADATA_MACHINE_ID_KEY = "machine_id"
+_STATE_METADATA_CREATED_AT_MS_KEY = "created_at_ms"
 
 
 @dataclass(frozen=True)
@@ -55,17 +66,22 @@ def connect(path: Path) -> sqlite3.Connection:
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
-    conn.create_aggregate("DECIMAL_SUM", 1, _DecimalSum)
+    conn.create_aggregate("DECIMAL_SUM", 1, cast(Any, _new_decimal_sum))
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA synchronous = NORMAL")
     return conn
 
 
+def _new_decimal_sum() -> _DecimalSum:
+    return _DecimalSum()
+
+
 def migrate(conn: sqlite3.Connection) -> None:
     current_version = _read_user_version(conn)
     if current_version == 0:
         _create_schema(conn)
+        _ensure_machine_id(conn)
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         conn.commit()
         return
@@ -86,7 +102,11 @@ def migrate(conn: sqlite3.Connection) -> None:
     if current_version == 3:
         _migrate_v3_to_v4(conn)
         current_version = 4
+    if current_version == 4:
+        _migrate_v4_to_v5(conn)
+        current_version = 5
 
+    _ensure_machine_id(conn)
     conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     conn.commit()
 
@@ -99,23 +119,106 @@ def _read_user_version(conn: sqlite3.Connection) -> int:
     return _required_int(row[0])
 
 
+def _table_has_column(
+    conn: sqlite3.Connection,
+    table_name: str,
+    column_name: str,
+) -> bool:
+    rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+    return any(str(row["name"]) == column_name for row in rows)
+
+
+def _add_column_if_missing(
+    conn: sqlite3.Connection,
+    table_name: str,
+    column_name: str,
+    column_type_sql: str,
+) -> None:
+    if _table_has_column(conn, table_name, column_name):
+        return
+    conn.execute(
+        f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type_sql}"
+    )
+
+
+def _read_state_metadata(conn: sqlite3.Connection, key: str) -> str | None:
+    row = conn.execute(
+        """
+        SELECT value
+        FROM state_metadata
+        WHERE key = ?
+        """,
+        (key,),
+    ).fetchone()
+    if row is None:
+        return None
+    return str(row["value"])
+
+
+def _write_state_metadata(conn: sqlite3.Connection, key: str, value: str) -> None:
+    conn.execute(
+        """
+        INSERT INTO state_metadata (key, value)
+        VALUES (?, ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value
+        """,
+        (key, value),
+    )
+
+
+def _ensure_machine_id(conn: sqlite3.Connection) -> str:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS state_metadata (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )
+        """
+    )
+    machine_id = _read_state_metadata(conn, _STATE_METADATA_MACHINE_ID_KEY)
+    if machine_id is None:
+        machine_id = uuid.uuid4().hex
+        _write_state_metadata(conn, _STATE_METADATA_MACHINE_ID_KEY, machine_id)
+    created_at_ms = _read_state_metadata(conn, _STATE_METADATA_CREATED_AT_MS_KEY)
+    if created_at_ms is None:
+        _write_state_metadata(conn, _STATE_METADATA_CREATED_AT_MS_KEY, str(_now_ms()))
+    return machine_id
+
+
+def _build_source_session_sync_id(
+    *,
+    run_sync_id: str,
+    harness: str,
+    source_session_id: str,
+) -> str:
+    payload = f"{run_sync_id}\0{harness}\0{source_session_id}".encode()
+    return sha256(payload).hexdigest()
+
+
 def _create_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(
         """
         CREATE TABLE IF NOT EXISTS runs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sync_id TEXT NOT NULL UNIQUE,
+            origin_machine_id TEXT,
             name TEXT,
             started_at_ms INTEGER NOT NULL,
             ended_at_ms INTEGER,
             created_at_ms INTEGER NOT NULL,
-            updated_at_ms INTEGER NOT NULL
+            updated_at_ms INTEGER NOT NULL,
+            imported_at_ms INTEGER
         );
 
         CREATE INDEX IF NOT EXISTS idx_runs_started
         ON runs(started_at_ms);
 
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_runs_sync_id
+        ON runs(sync_id);
+
         CREATE TABLE IF NOT EXISTS source_sessions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sync_id TEXT NOT NULL UNIQUE,
             tracking_session_id INTEGER NOT NULL
                 REFERENCES runs(id) ON DELETE CASCADE,
             harness TEXT NOT NULL,
@@ -129,6 +232,9 @@ def _create_schema(conn: sqlite3.Connection) -> None:
 
         CREATE INDEX IF NOT EXISTS idx_source_sessions_lookup
         ON source_sessions(harness, source_session_id);
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_source_sessions_sync_id
+        ON source_sessions(sync_id);
 
         CREATE TABLE IF NOT EXISTS usage_events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -188,6 +294,11 @@ def _create_schema(conn: sqlite3.Connection) -> None:
 
         CREATE INDEX IF NOT EXISTS idx_run_events_usage
         ON run_events(usage_event_id);
+
+        CREATE TABLE IF NOT EXISTS state_metadata (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
         """
     )
 
@@ -214,6 +325,91 @@ def _migrate_v3_to_v4(conn: sqlite3.Connection) -> None:
     )
 
 
+def _migrate_v4_to_v5(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS state_metadata (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )
+        """
+    )
+    _add_column_if_missing(conn, "runs", "sync_id", "TEXT")
+    _add_column_if_missing(conn, "runs", "origin_machine_id", "TEXT")
+    _add_column_if_missing(conn, "runs", "imported_at_ms", "INTEGER")
+    _add_column_if_missing(conn, "source_sessions", "sync_id", "TEXT")
+
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_runs_sync_id
+        ON runs(sync_id)
+        """
+    )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_source_sessions_sync_id
+        ON source_sessions(sync_id)
+        """
+    )
+
+    machine_id = _ensure_machine_id(conn)
+    run_rows = conn.execute(
+        """
+        SELECT id, sync_id, origin_machine_id
+        FROM runs
+        """
+    ).fetchall()
+    for row in run_rows:
+        sync_id = (
+            str(row["sync_id"])
+            if row["sync_id"] is not None
+            else uuid.uuid4().hex
+        )
+        origin_machine_id = (
+            str(row["origin_machine_id"])
+            if row["origin_machine_id"] is not None
+            else machine_id
+        )
+        conn.execute(
+            """
+            UPDATE runs
+            SET sync_id = ?, origin_machine_id = ?
+            WHERE id = ?
+            """,
+            (sync_id, origin_machine_id, _required_int(row["id"])),
+        )
+
+    source_rows = conn.execute(
+        """
+        SELECT
+            ss.id,
+            ss.sync_id,
+            ss.harness,
+            ss.source_session_id,
+            r.sync_id AS run_sync_id
+        FROM source_sessions AS ss
+        JOIN runs AS r ON r.id = ss.tracking_session_id
+        """
+    ).fetchall()
+    for row in source_rows:
+        if row["sync_id"] is not None:
+            continue
+        run_sync_id = str(row["run_sync_id"])
+        sync_id = _build_source_session_sync_id(
+            run_sync_id=run_sync_id,
+            harness=str(row["harness"]),
+            source_session_id=str(row["source_session_id"]),
+        )
+        conn.execute(
+            """
+            UPDATE source_sessions
+            SET sync_id = ?
+            WHERE id = ?
+            """,
+            (sync_id, _required_int(row["id"])),
+        )
+
+
 def create_tracking_session(
     conn: sqlite3.Connection,
     name: str | None,
@@ -225,17 +421,21 @@ def create_tracking_session(
         msg = f"Tracking session {active_session_id} is already active."
         raise ValueError(msg)
     now_ms = started_at_ms if started_at_ms is not None else _now_ms()
+    sync_id = uuid.uuid4().hex
+    origin_machine_id = _ensure_machine_id(conn)
     cursor = conn.execute(
         """
         INSERT INTO runs (
+            sync_id,
+            origin_machine_id,
             name,
             started_at_ms,
             created_at_ms,
             updated_at_ms
         )
-        VALUES (?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?)
         """,
-        (name, now_ms, now_ms, now_ms),
+        (sync_id, origin_machine_id, name, now_ms, now_ms, now_ms),
     )
     conn.commit()
     return _required_lastrowid(cursor.lastrowid)
@@ -282,7 +482,7 @@ def get_tracking_session(
 ) -> TrackingSession | None:
     row = conn.execute(
         """
-        SELECT id, name, started_at_ms, ended_at_ms
+        SELECT id, sync_id, name, started_at_ms, ended_at_ms
         FROM runs
         WHERE id = ?
         """,
@@ -296,12 +496,16 @@ def get_tracking_session(
 def list_tracking_sessions(conn: sqlite3.Connection) -> list[TrackingSession]:
     rows = conn.execute(
         """
-        SELECT id, name, started_at_ms, ended_at_ms
+        SELECT id, sync_id, name, started_at_ms, ended_at_ms
         FROM runs
         ORDER BY started_at_ms DESC, id DESC
         """
     ).fetchall()
     return [_tracking_session_from_row(row) for row in rows]
+
+
+def get_machine_id(conn: sqlite3.Connection) -> str:
+    return _ensure_machine_id(conn)
 
 
 def attach_harness_session(
@@ -314,9 +518,15 @@ def attach_harness_session(
     last_seen_ms: int | None,
 ) -> int:
     now_ms = _now_ms()
+    run_sync_id = _get_run_sync_id(conn, tracking_session_id)
+    source_session_sync_id = _build_source_session_sync_id(
+        run_sync_id=run_sync_id,
+        harness=harness,
+        source_session_id=source_session_id,
+    )
     existing = conn.execute(
         """
-        SELECT id, first_seen_ms, last_seen_ms
+        SELECT id, sync_id, first_seen_ms, last_seen_ms
         FROM source_sessions
         WHERE tracking_session_id = ? AND harness = ? AND source_session_id = ?
         """,
@@ -326,6 +536,7 @@ def attach_harness_session(
         cursor = conn.execute(
             """
             INSERT INTO source_sessions (
+                sync_id,
                 tracking_session_id,
                 harness,
                 source_session_id,
@@ -334,9 +545,10 @@ def attach_harness_session(
                 created_at_ms,
                 updated_at_ms
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
+                source_session_sync_id,
                 tracking_session_id,
                 harness,
                 source_session_id,
@@ -363,12 +575,36 @@ def attach_harness_session(
     conn.execute(
         """
         UPDATE source_sessions
-        SET first_seen_ms = ?, last_seen_ms = ?, updated_at_ms = ?
+        SET sync_id = COALESCE(sync_id, ?),
+            first_seen_ms = ?,
+            last_seen_ms = ?,
+            updated_at_ms = ?
         WHERE id = ?
         """,
-        (merged_first, merged_last, now_ms, _required_int(existing["id"])),
+        (
+            source_session_sync_id,
+            merged_first,
+            merged_last,
+            now_ms,
+            _required_int(existing["id"]),
+        ),
     )
     return _required_int(existing["id"])
+
+
+def _get_run_sync_id(conn: sqlite3.Connection, tracking_session_id: int) -> str:
+    row = conn.execute(
+        """
+        SELECT sync_id
+        FROM runs
+        WHERE id = ?
+        """,
+        (tracking_session_id,),
+    ).fetchone()
+    if row is None or row["sync_id"] is None:
+        msg = f"Tracking session not found: {tracking_session_id}"
+        raise ValueError(msg)
+    return str(row["sync_id"])
 
 
 def insert_usage_events(
@@ -905,6 +1141,65 @@ def summarize_subscription_usage(
                 )
             )
 
+        billing: SubscriptionBillingPeriod | None = None
+        if subscription.fixed_cost_usd is not None:
+            billing_reset_at = (
+                subscription.fixed_cost_reset_at
+                or _subscription_reset_at_from_windows(
+                    subscription.windows,
+                    period=subscription.fixed_cost_period,
+                )
+            )
+            if billing_reset_at is None:
+                msg = (
+                    "fixed_cost_reset_at is required when fixed_cost_usd is set and "
+                    "no matching subscription window exists."
+                )
+                raise ValueError(msg)
+            billing_window = resolve_fixed_subscription_window(
+                period=subscription.fixed_cost_period,
+                reset_at=billing_reset_at,
+                timezone_name=subscription.timezone,
+                now_ms=generated_at_ms,
+            )
+            billing_report = summarize_usage(
+                conn,
+                UsageReportFilter(
+                    provider_id=subscription.provider,
+                    since_ms=billing_window.since_ms,
+                    until_ms=billing_window.until_ms,
+                ),
+                costing_config=config,
+            )
+            billing_basis = subscription.fixed_cost_basis or subscription.cost_basis
+            value_usd = _select_subscription_cost(
+                billing_report.totals.costs,
+                basis=billing_basis,
+            )
+            fixed_cost_usd = Decimal(str(subscription.fixed_cost_usd))
+            break_even_percent = (
+                None
+                if fixed_cost_usd == 0
+                else (value_usd / fixed_cost_usd) * Decimal(100)
+            )
+            billing = SubscriptionBillingPeriod(
+                period=subscription.fixed_cost_period,
+                reset_at=billing_reset_at,
+                since_ms=billing_window.since_ms,
+                until_ms=billing_window.until_ms,
+                cost_basis=billing_basis,
+                fixed_cost_usd=fixed_cost_usd,
+                value_usd=value_usd,
+                net_savings_usd=value_usd - fixed_cost_usd,
+                break_even_remaining_usd=max(fixed_cost_usd - value_usd, Decimal(0)),
+                break_even_percent=break_even_percent,
+                message_count=sum(
+                    row.message_count for row in billing_report.by_harness
+                ),
+                tokens=billing_report.totals.tokens,
+                costs=billing_report.totals.costs,
+            )
+
         rows.append(
             SubscriptionUsageRow(
                 provider_id=subscription.provider,
@@ -912,6 +1207,7 @@ def summarize_subscription_usage(
                 timezone=subscription.timezone,
                 cost_basis=subscription.cost_basis,
                 periods=tuple(periods),
+                billing=billing,
             )
         )
 
@@ -919,6 +1215,28 @@ def summarize_subscription_usage(
         generated_at_ms=generated_at_ms,
         subscriptions=tuple(rows),
     )
+
+
+def _subscription_reset_at_from_windows(
+    windows: tuple[SubscriptionWindowConfig, ...],
+    *,
+    period: str,
+) -> str | None:
+    for window in windows:
+        if window.enabled and window.period == period:
+            return window.reset_at
+    return None
+
+
+def _select_subscription_cost(costs: CostTotals, *, basis: str) -> Decimal:
+    if basis == "source":
+        return costs.source_cost_usd
+    if basis == "actual":
+        return costs.actual_cost_usd
+    if basis == "virtual":
+        return costs.virtual_cost_usd
+    msg = f"Unsupported subscription cost basis: {basis}"
+    raise ValueError(msg)
 
 
 def _provider_usage_timestamps(
@@ -1230,6 +1548,7 @@ def _usage_report_query_parts(
 def _tracking_session_from_row(row: sqlite3.Row) -> TrackingSession:
     return TrackingSession(
         id=_required_int(row["id"]),
+        sync_id=str(row["sync_id"]),
         name=str(row["name"]) if row["name"] is not None else None,
         started_at_ms=_required_int(row["started_at_ms"]),
         ended_at_ms=_optional_int(row["ended_at_ms"]),
@@ -1320,7 +1639,10 @@ class _DecimalSum:
     def __init__(self) -> None:
         self.total = Decimal(0)
 
-    def step(self, value: object) -> None:
+    def step(self, *values: object) -> None:
+        if not values:
+            return
+        value = values[0]
         if value is None:
             return
         self.total += _required_decimal(value)

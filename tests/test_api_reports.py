@@ -289,6 +289,9 @@ config_version = 1
 provider = "anthropic"
 timezone = "UTC"
 cost_basis = "source"
+fixed_cost_usd = 10
+fixed_cost_period = "monthly"
+fixed_cost_reset_at = "2023-11-01T00:00:00+00:00"
 
 [[subscriptions.windows]]
 period = "5h"
@@ -316,6 +319,7 @@ reset_at = "2023-11-01T00:00:00+00:00"
     assert periods[0]["reset_at"] == "2023-11-01T00:00:00+00:00"
     assert "since_ms" in periods[0]
     assert "until_ms" in periods[0]
+    assert "billing" in subscriptions[0]
 
 
 def test_session_report_bounds_to_run_lifetime(tmp_path: Path) -> None:

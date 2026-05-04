@@ -94,6 +94,7 @@ class CostTotals:
 @dataclass(frozen=True)
 class Run:
     id: int
+    sync_id: str
     name: str | None
     started_at_ms: int
     ended_at_ms: int | None
@@ -113,6 +114,7 @@ class Run:
     def as_dict(self) -> dict[str, object]:
         return {
             "id": self.id,
+            "sync_id": self.sync_id,
             "name": self.name,
             "started_at_ms": self.started_at_ms,
             "ended_at_ms": self.ended_at_ms,
@@ -339,6 +341,80 @@ class ImportUsageResult:
 
 
 @dataclass(frozen=True)
+class StateExportResult:
+    archive_path: Path
+    exported_at_ms: int
+    schema_version: int
+    machine_id: str
+    run_count: int
+    source_session_count: int
+    usage_event_count: int
+    run_event_count: int
+    raw_json_count: int
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "archive_path": str(self.archive_path),
+            "exported_at_ms": self.exported_at_ms,
+            "schema_version": self.schema_version,
+            "machine_id": self.machine_id,
+            "run_count": self.run_count,
+            "source_session_count": self.source_session_count,
+            "usage_event_count": self.usage_event_count,
+            "run_event_count": self.run_event_count,
+            "raw_json_count": self.raw_json_count,
+        }
+
+
+@dataclass(frozen=True)
+class StateImportConflict:
+    kind: str
+    harness: str | None = None
+    global_dedup_key: str | None = None
+    local_fingerprint: str | None = None
+    imported_fingerprint: str | None = None
+    message: str = ""
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "kind": self.kind,
+            "harness": self.harness,
+            "global_dedup_key": self.global_dedup_key,
+            "local_fingerprint": self.local_fingerprint,
+            "imported_fingerprint": self.imported_fingerprint,
+            "message": self.message,
+        }
+
+
+@dataclass(frozen=True)
+class StateImportResult:
+    archive_path: Path
+    dry_run: bool
+    runs_inserted: int
+    runs_updated: int
+    source_sessions_inserted: int
+    source_sessions_updated: int
+    usage_events_inserted: int
+    usage_events_skipped: int
+    run_events_inserted: int
+    conflicts: tuple[StateImportConflict, ...]
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "archive_path": str(self.archive_path),
+            "dry_run": self.dry_run,
+            "runs_inserted": self.runs_inserted,
+            "runs_updated": self.runs_updated,
+            "source_sessions_inserted": self.source_sessions_inserted,
+            "source_sessions_updated": self.source_sessions_updated,
+            "usage_events_inserted": self.usage_events_inserted,
+            "usage_events_skipped": self.usage_events_skipped,
+            "run_events_inserted": self.run_events_inserted,
+            "conflicts": [conflict.as_dict() for conflict in self.conflicts],
+        }
+
+
+@dataclass(frozen=True)
 class SessionTotals:
     tokens: TokenBreakdown
     costs: CostTotals
@@ -526,21 +602,61 @@ class SubscriptionUsagePeriod:
 
 
 @dataclass(frozen=True)
+class SubscriptionBillingPeriod:
+    period: str
+    reset_at: str
+    since_ms: int
+    until_ms: int
+    cost_basis: str
+    fixed_cost_usd: Decimal
+    value_usd: Decimal
+    net_savings_usd: Decimal
+    break_even_remaining_usd: Decimal
+    break_even_percent: Decimal | None
+    message_count: int
+    tokens: TokenBreakdown
+    costs: CostTotals
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "period": self.period,
+            "reset_at": self.reset_at,
+            "since_ms": self.since_ms,
+            "until_ms": self.until_ms,
+            "cost_basis": self.cost_basis,
+            "fixed_cost_usd": str(self.fixed_cost_usd),
+            "value_usd": str(self.value_usd),
+            "net_savings_usd": str(self.net_savings_usd),
+            "break_even_remaining_usd": str(self.break_even_remaining_usd),
+            "break_even_percent": None
+            if self.break_even_percent is None
+            else str(self.break_even_percent),
+            "message_count": self.message_count,
+            "tokens": self.tokens.as_dict(),
+            "costs": self.costs.as_dict(),
+        }
+
+
+@dataclass(frozen=True)
 class SubscriptionUsageRow:
     provider_id: str
     display_name: str
     timezone: str | None
     cost_basis: str
     periods: tuple[SubscriptionUsagePeriod, ...]
+    billing: SubscriptionBillingPeriod | None = None
 
     def as_dict(self) -> dict[str, object]:
-        return {
+        payload: dict[str, object] = {
             "provider_id": self.provider_id,
             "display_name": self.display_name,
             "timezone": self.timezone,
             "cost_basis": self.cost_basis,
             "periods": [period.as_dict() for period in self.periods],
         }
+        if self.billing is not None:
+            payload["billing"] = self.billing.as_dict()
+        return payload
 
 
 @dataclass(frozen=True)
@@ -737,6 +853,10 @@ __all__ = [
     "SourceSessionDiff",
     "SourceSessionSnapshot",
     "SourceSessionSummary",
+    "StateExportResult",
+    "StateImportConflict",
+    "StateImportResult",
+    "SubscriptionBillingPeriod",
     "SubscriptionUsagePeriod",
     "SubscriptionUsageReport",
     "SubscriptionUsageRow",

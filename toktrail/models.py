@@ -76,6 +76,7 @@ class UsageEvent:
 @dataclass(frozen=True)
 class Run:
     id: int
+    sync_id: str
     name: str | None
     started_at_ms: int
     ended_at_ms: int | None

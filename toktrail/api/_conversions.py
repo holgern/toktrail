@@ -11,6 +11,10 @@ from toktrail.api.models import (
     RunReport,
     SessionTotals,
     SourceSessionSummary,
+    StateExportResult,
+    StateImportConflict,
+    StateImportResult,
+    SubscriptionBillingPeriod,
     SubscriptionUsagePeriod,
     SubscriptionUsageReport,
     SubscriptionUsageRow,
@@ -52,6 +56,9 @@ from toktrail.reporting import (
     SessionTotals as InternalSessionTotals,
 )
 from toktrail.reporting import (
+    SubscriptionBillingPeriod as InternalSubscriptionBillingPeriod,
+)
+from toktrail.reporting import (
     SubscriptionUsagePeriod as InternalSubscriptionUsagePeriod,
 )
 from toktrail.reporting import (
@@ -62,6 +69,15 @@ from toktrail.reporting import (
 )
 from toktrail.reporting import (
     UnconfiguredModelRow as InternalUnconfiguredModelRow,
+)
+from toktrail.sync import (
+    StateExportResult as InternalStateExportResult,
+)
+from toktrail.sync import (
+    StateImportConflict as InternalStateImportConflict,
+)
+from toktrail.sync import (
+    StateImportResult as InternalStateImportResult,
 )
 
 
@@ -91,6 +107,7 @@ def _to_public_run(
         return None
     return Run(
         id=value.id,
+        sync_id=value.sync_id,
         name=value.name,
         started_at_ms=value.started_at_ms,
         ended_at_ms=value.ended_at_ms,
@@ -249,6 +266,26 @@ def _to_public_subscription_period(
     )
 
 
+def _to_public_subscription_billing(
+    value: InternalSubscriptionBillingPeriod,
+) -> SubscriptionBillingPeriod:
+    return SubscriptionBillingPeriod(
+        period=value.period,
+        reset_at=value.reset_at,
+        since_ms=value.since_ms,
+        until_ms=value.until_ms,
+        cost_basis=value.cost_basis,
+        fixed_cost_usd=value.fixed_cost_usd,
+        value_usd=value.value_usd,
+        net_savings_usd=value.net_savings_usd,
+        break_even_remaining_usd=value.break_even_remaining_usd,
+        break_even_percent=value.break_even_percent,
+        message_count=value.message_count,
+        tokens=_to_public_token_breakdown(value.tokens),
+        costs=_to_public_cost_totals(value.costs),
+    )
+
+
 def _to_public_subscription_row(
     value: InternalSubscriptionUsageRow,
 ) -> SubscriptionUsageRow:
@@ -259,6 +296,11 @@ def _to_public_subscription_row(
         cost_basis=value.cost_basis,
         periods=tuple(
             _to_public_subscription_period(period) for period in value.periods
+        ),
+        billing=(
+            None
+            if value.billing is None
+            else _to_public_subscription_billing(value.billing)
         ),
     )
 
@@ -334,6 +376,54 @@ def _to_public_series_instance(
     )
 
 
+def _to_public_state_export_result(
+    value: InternalStateExportResult,
+) -> StateExportResult:
+    return StateExportResult(
+        archive_path=value.archive_path,
+        exported_at_ms=value.exported_at_ms,
+        schema_version=value.schema_version,
+        machine_id=value.machine_id,
+        run_count=value.run_count,
+        source_session_count=value.source_session_count,
+        usage_event_count=value.usage_event_count,
+        run_event_count=value.run_event_count,
+        raw_json_count=value.raw_json_count,
+    )
+
+
+def _to_public_state_import_conflict(
+    value: InternalStateImportConflict,
+) -> StateImportConflict:
+    return StateImportConflict(
+        kind=value.kind,
+        harness=value.harness,
+        global_dedup_key=value.global_dedup_key,
+        local_fingerprint=value.local_fingerprint,
+        imported_fingerprint=value.imported_fingerprint,
+        message=value.message,
+    )
+
+
+def _to_public_state_import_result(
+    value: InternalStateImportResult,
+) -> StateImportResult:
+    return StateImportResult(
+        archive_path=value.archive_path,
+        dry_run=value.dry_run,
+        runs_inserted=value.runs_inserted,
+        runs_updated=value.runs_updated,
+        source_sessions_inserted=value.source_sessions_inserted,
+        source_sessions_updated=value.source_sessions_updated,
+        usage_events_inserted=value.usage_events_inserted,
+        usage_events_skipped=value.usage_events_skipped,
+        run_events_inserted=value.run_events_inserted,
+        conflicts=tuple(
+            _to_public_state_import_conflict(conflict) for conflict in value.conflicts
+        ),
+    )
+
+
 __all__ = [
     "_to_public_activity_row",
     "_to_public_cost_totals",
@@ -349,4 +439,6 @@ __all__ = [
     "_to_public_unconfigured_model_row",
     "_to_public_usage_event",
     "_to_public_series_report",
+    "_to_public_state_export_result",
+    "_to_public_state_import_result",
 ]

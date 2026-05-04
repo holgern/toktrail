@@ -145,6 +145,7 @@ def test_print_report_formats_public_dataclasses(capsys) -> None:
     report = RunReport(
         session=Run(
             id=1,
+            sync_id="run-sync-1",
             name="example",
             started_at_ms=1000,
             ended_at_ms=None,
@@ -269,6 +270,7 @@ def test_print_finalized_formats_import_and_source_session(capsys) -> None:
     finalized = FinalizedManualRun(
         run=Run(
             id=1,
+            sync_id="run-sync-1",
             name="example",
             started_at_ms=1000,
             ended_at_ms=3000,

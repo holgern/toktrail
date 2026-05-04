@@ -220,7 +220,12 @@ def _parse_pi_entry_line(
         reasoning=0,
         cache_read=_as_non_negative_int(usage.get("cacheRead")),
         cache_write=_as_non_negative_int(usage.get("cacheWrite")),
-        cache_output=_first_non_negative_int(usage, "cacheOutput", "cachedOutput", "cachedOutputTokens"),
+        cache_output=_first_non_negative_int(
+            usage,
+            "cacheOutput",
+            "cachedOutput",
+            "cachedOutputTokens",
+        ),
     )
 
     event = UsageEvent(

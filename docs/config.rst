@@ -46,6 +46,10 @@ Example
    display_name = "OpenCode Go"
    timezone = "Europe/Berlin"
    cost_basis = "virtual"
+   fixed_cost_usd = 10
+   fixed_cost_period = "monthly"
+   fixed_cost_reset_at = "2026-05-01T00:00:00+02:00"
+   fixed_cost_basis = "virtual"
    
    [[subscriptions.windows]]
    period = "5h"
@@ -68,6 +72,9 @@ Example
 ``[[subscriptions]]`` are config-only definitions. They are not stored in the
 state database. Use ``toktrail subscriptions`` to inspect current windows,
 used cost, and remaining quota per configured provider.
+
+When ``fixed_cost_usd`` is set, ``toktrail subscriptions`` also reports billing
+value, net savings, and break-even progress for the fixed billing period.
 
 See ``README.md`` for the canonical CLI workflow and ``API.md`` for the public
 Python integration surface.

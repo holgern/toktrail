@@ -20,6 +20,7 @@ ImportMissingSourceMode = Literal["warn", "error", "skip"]
 SubscriptionCostBasis = Literal["source", "actual", "virtual"]
 SubscriptionWindowPeriod = Literal["5h", "daily", "weekly", "monthly"]
 SubscriptionWindowResetMode = Literal["fixed", "first_use"]
+SubscriptionFixedCostPeriod = Literal["daily", "weekly", "monthly"]
 
 CONFIG_VERSION = 1
 DEFAULT_TEMPLATE_NAME = "default"
@@ -31,6 +32,7 @@ _VALID_IMPORT_MISSING_SOURCE_MODES = {"warn", "error", "skip"}
 _VALID_SUBSCRIPTION_COST_BASES = {"source", "actual", "virtual"}
 _VALID_SUBSCRIPTION_WINDOW_PERIODS = {"5h", "daily", "weekly", "monthly"}
 _VALID_SUBSCRIPTION_WINDOW_RESET_MODES = {"fixed", "first_use"}
+_VALID_SUBSCRIPTION_FIXED_COST_PERIODS = {"daily", "weekly", "monthly"}
 _PRICE_FIELDS = {
     "provider",
     "model",
@@ -58,6 +60,10 @@ _SUBSCRIPTION_FIELDS = {
     "display_name",
     "timezone",
     "cost_basis",
+    "fixed_cost_usd",
+    "fixed_cost_period",
+    "fixed_cost_reset_at",
+    "fixed_cost_basis",
     "windows",
     "enabled",
 }
@@ -122,6 +128,10 @@ missing_price = "warn"
 # display_name = "OpenCode Go"
 # timezone = "Europe/Berlin"
 # cost_basis = "source"
+# fixed_cost_usd = 10.00
+# fixed_cost_period = "monthly"
+# fixed_cost_reset_at = "2026-05-01T00:00:00+02:00"
+# fixed_cost_basis = "virtual"
 #
 # [[subscriptions.windows]]
 # period = "5h"
@@ -210,6 +220,10 @@ price_profile = "copilot-public-api-equivalent"
 # display_name = "OpenCode Go"
 # timezone = "Europe/Berlin"
 # cost_basis = "source"
+# fixed_cost_usd = 10.00
+# fixed_cost_period = "monthly"
+# fixed_cost_reset_at = "2026-05-01T00:00:00+02:00"
+# fixed_cost_basis = "virtual"
 #
 # [[subscriptions.windows]]
 # period = "5h"
@@ -561,6 +575,10 @@ class SubscriptionConfig:
     display_name: str | None = None
     timezone: str | None = None
     cost_basis: SubscriptionCostBasis = "source"
+    fixed_cost_usd: float | None = None
+    fixed_cost_period: SubscriptionFixedCostPeriod = "monthly"
+    fixed_cost_reset_at: str | None = None
+    fixed_cost_basis: SubscriptionCostBasis | None = None
     windows: tuple[SubscriptionWindowConfig, ...] = ()
     enabled: bool = True
 
@@ -895,11 +913,59 @@ def _parse_subscriptions(value: object) -> tuple[SubscriptionConfig, ...]:
                 context=f"subscriptions[{index}].cost_basis",
             ),
         )
+        fixed_cost_usd = _parse_non_negative_float(
+            raw_subscription.get("fixed_cost_usd"),
+            context=f"subscriptions[{index}].fixed_cost_usd",
+            required=False,
+        )
+        fixed_cost_period = cast(
+            SubscriptionFixedCostPeriod,
+            _parse_choice(
+                raw_subscription.get("fixed_cost_period", "monthly"),
+                valid=_VALID_SUBSCRIPTION_FIXED_COST_PERIODS,
+                context=f"subscriptions[{index}].fixed_cost_period",
+            ),
+        )
+        fixed_cost_reset_at = _parse_optional_string(
+            raw_subscription.get("fixed_cost_reset_at"),
+            context=f"subscriptions[{index}].fixed_cost_reset_at",
+        )
+        fixed_cost_basis = cast(
+            SubscriptionCostBasis | None,
+            (
+                _parse_choice(
+                    raw_subscription.get("fixed_cost_basis"),
+                    valid=_VALID_SUBSCRIPTION_COST_BASES,
+                    context=f"subscriptions[{index}].fixed_cost_basis",
+                )
+                if raw_subscription.get("fixed_cost_basis") is not None
+                else None
+            ),
+        )
         windows = _parse_subscription_windows(
             raw_subscription.get("windows"),
             context=f"subscriptions[{index}].windows",
             timezone_name=timezone_name,
         )
+        if fixed_cost_reset_at is None:
+            fixed_cost_reset_at = _subscription_window_reset_at(
+                windows,
+                period=fixed_cost_period,
+            )
+        if fixed_cost_reset_at is not None:
+            _validate_subscription_reset_at(
+                reset_at=fixed_cost_reset_at,
+                timezone_name=timezone_name,
+                context=f"subscriptions[{index}].fixed_cost_reset_at",
+            )
+        if fixed_cost_usd is not None and fixed_cost_usd > 0:
+            if fixed_cost_reset_at is None:
+                msg = (
+                    f"subscriptions[{index}].fixed_cost_reset_at is required when "
+                    "fixed_cost_usd is set and no matching "
+                    "fixed_cost_period window exists."
+                )
+                raise ValueError(msg)
         enabled = _parse_bool(
             raw_subscription.get("enabled", True),
             context=f"subscriptions[{index}].enabled",
@@ -920,6 +986,10 @@ def _parse_subscriptions(value: object) -> tuple[SubscriptionConfig, ...]:
                 display_name=display_name,
                 timezone=timezone_name,
                 cost_basis=cost_basis,
+                fixed_cost_usd=fixed_cost_usd,
+                fixed_cost_period=fixed_cost_period,
+                fixed_cost_reset_at=fixed_cost_reset_at,
+                fixed_cost_basis=fixed_cost_basis or cost_basis,
                 windows=windows,
                 enabled=enabled,
             )
@@ -1384,6 +1454,17 @@ def _parse_subscription_windows(
         )
 
     return tuple(windows)
+
+
+def _subscription_window_reset_at(
+    windows: tuple[SubscriptionWindowConfig, ...],
+    *,
+    period: SubscriptionFixedCostPeriod,
+) -> str | None:
+    for window in windows:
+        if window.enabled and window.period == period:
+            return window.reset_at
+    return None
 
 
 def _validate_subscription_reset_at(

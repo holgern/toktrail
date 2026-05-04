@@ -34,6 +34,10 @@ from toktrail.api.models import (
     SourceSessionDiff,
     SourceSessionSnapshot,
     SourceSessionSummary,
+    StateExportResult,
+    StateImportConflict,
+    StateImportResult,
+    SubscriptionBillingPeriod,
     SubscriptionUsagePeriod,
     SubscriptionUsageReport,
     SubscriptionUsageRow,
@@ -73,6 +77,11 @@ from toktrail.api.sources import (
     list_source_sessions,
     scan_usage,
 )
+from toktrail.api.sync import (
+    default_archive_name,
+    export_state_archive,
+    import_state_archive,
+)
 from toktrail.api.workflow import finalize_manual_run, prepare_manual_run
 
 __all__ = [
@@ -91,6 +100,10 @@ __all__ = [
     "SourceSessionDiff",
     "SourceSessionSnapshot",
     "SourceSessionSummary",
+    "StateExportResult",
+    "StateImportConflict",
+    "StateImportResult",
+    "SubscriptionBillingPeriod",
     "SubscriptionUsagePeriod",
     "SubscriptionUsageReport",
     "SubscriptionUsageRow",
@@ -129,6 +142,9 @@ __all__ = [
     "resolve_toktrail_config_path",
     "resolve_toktrail_db_path",
     "scan_usage",
+    "default_archive_name",
+    "export_state_archive",
+    "import_state_archive",
     "session_report",
     "subscription_usage_report",
     "start_run",
