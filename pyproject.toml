@@ -28,6 +28,7 @@ dependencies = [
     "typer",
     "PyYAML",
     'tomli; python_version < "3.11"',
+    'tzdata'
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
