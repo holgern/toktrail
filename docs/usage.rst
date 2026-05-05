@@ -104,9 +104,14 @@ windows. The command reports configured windows (for example ``5h``, ``weekly``,
 ``monthly``, and ``yearly``) per subscription, including ``fixed`` and
 ``first_use`` reset status, used, remaining, and over-limit values.
 
+Window calculations use each subscription plan timezone from config. Human output
+renders timestamps in local timezone by default. Use ``--timezone`` or ``--utc``
+to control the display timezone.
+
 .. code-block:: bash
 
    toktrail subscriptions status
+   toktrail subscriptions status --timezone Europe/Berlin
    toktrail subscriptions status --provider opencode-go
    toktrail subscriptions status --period 5h --json
    toktrail subscriptions status --period monthly --json

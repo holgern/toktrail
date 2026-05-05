@@ -4169,6 +4169,8 @@ def test_cli_subscriptions_provider_filter_json_shape(tmp_path) -> None:
             "subscriptions",
             "--provider",
             "opencode-go",
+            "--timezone",
+            "Europe/Berlin",
             "--json",
             "--now-ms",
             "1700000000000",
@@ -4295,8 +4297,8 @@ reset_at = "2023-11-01T00:00:00+00:00"
     )
 
     assert result.exit_code == 0, result.output
-    assert "Zai Coding Plan (zai-coding-plan)" in result.output
-    assert "providers=zai" in result.output
+    assert "Plan: Zai Coding Plan (zai-coding-plan)" in result.output
+    assert "providers: zai" in result.output
     assert "active" in result.output
 
 
@@ -4411,6 +4413,7 @@ reset_at = "2026-05-01T00:00:00+00:00"
             "--config",
             str(config_path),
             "subscriptions",
+            "--utc",
             "--now-ms",
             "1777802400000",
         ],
@@ -4512,6 +4515,162 @@ reset_at = "2026-05-03T00:00:00+00:00"
 
     assert result.exit_code == 0, result.output
     assert "starts on first use" in result.output
+
+
+def _ms(value: str) -> int:
+    return int(datetime.fromisoformat(value).timestamp() * 1000)
+
+
+def test_cli_subscriptions_first_use_human_output_hides_reset_anchor(tmp_path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    config_path = tmp_path / "toktrail.toml"
+    config_path.write_text(
+        """
+config_version = 1
+
+[[subscriptions]]
+id = "zai-coding-plan"
+usage_providers = ["zai"]
+display_name = "Zai Coding Plan"
+timezone = "Asia/Singapore"
+quota_cost_basis = "virtual"
+
+[[subscriptions.windows]]
+period = "5h"
+limit_usd = 10
+reset_mode = "first_use"
+reset_at = "2026-05-01T00:00:00+08:00"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "--config",
+            str(config_path),
+            "subscriptions",
+            "--timezone",
+            "Europe/Berlin",
+            "--now-ms",
+            "1778000000000",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "first_use @" not in result.output
+    assert "reset_at" not in result.output
+    assert "resets (Europe/Berlin)" in result.output
+
+
+def test_cli_subscriptions_display_timezone_converts_first_use_window(tmp_path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    config_path = tmp_path / "toktrail.toml"
+    config_path.write_text(
+        """
+config_version = 1
+
+[pricing]
+[[pricing.virtual]]
+provider = "zai"
+model = "glm-4.5"
+input_usd_per_1m = 4.0
+output_usd_per_1m = 8.0
+
+[[subscriptions]]
+id = "zai-coding-plan"
+usage_providers = ["zai"]
+display_name = "Zai Coding Plan"
+timezone = "Asia/Singapore"
+quota_cost_basis = "virtual"
+
+[[subscriptions.windows]]
+period = "5h"
+limit_usd = 10
+reset_mode = "first_use"
+reset_at = "2026-05-01T00:00:00+08:00"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    conn = connect(state_db)
+    try:
+        insert_usage_events(
+            conn,
+            None,
+            [
+                UsageEvent(
+                    harness="opencode",
+                    source_session_id="ses-zai",
+                    source_row_id="row-zai",
+                    source_message_id="msg-zai",
+                    source_dedup_key="dedup-zai",
+                    global_dedup_key="global-zai",
+                    fingerprint_hash="fp-zai",
+                    provider_id="zai",
+                    model_id="glm-4.5",
+                    thinking_level=None,
+                    agent="build",
+                    created_ms=_ms("2026-05-05T23:37:00+08:00"),
+                    completed_ms=_ms("2026-05-05T23:37:01+08:00"),
+                    tokens=TokenBreakdown(input=1_000_000, output=100_000),
+                    source_cost_usd=Decimal("0"),
+                    raw_json=None,
+                )
+            ],
+        )
+    finally:
+        conn.close()
+
+    result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "--config",
+            str(config_path),
+            "subscriptions",
+            "--timezone",
+            "Europe/Berlin",
+            "--now-ms",
+            str(_ms("2026-05-06T00:00:00+08:00")),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Display timezone: Europe/Berlin" in result.output
+    assert "plan timezone: Asia/Singapore" in result.output
+    assert "2026-05-05 17:37" in result.output
+    assert "2026-05-05 22:37" in result.output
+    assert "2026-05-05 23:37" not in result.output
+
+
+def test_cli_subscriptions_rejects_timezone_and_utc(tmp_path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "subscriptions",
+            "--timezone",
+            "Europe/Berlin",
+            "--utc",
+            "--no-refresh",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "Use either --timezone or --utc" in result.output
 
 
 def test_cli_subscriptions_no_configured_subscriptions_is_clear(tmp_path) -> None:

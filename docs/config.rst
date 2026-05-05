@@ -114,6 +114,11 @@ Example
 ``toktrail subscriptions`` to inspect current windows, used cost, and remaining
 quota per configured subscription.
 
+``subscriptions.timezone`` defines the quota/billing reset schedule timezone.
+CLI output renders windows in local timezone by default; use
+``toktrail subscriptions --timezone <IANA>`` or ``--utc`` to override display
+timezone.
+
 When ``fixed_cost_usd`` is set, ``toktrail subscriptions`` also reports billing
 value, net savings, and break-even progress for the fixed billing period
 (``daily``, ``weekly``, ``monthly``, or ``yearly``).

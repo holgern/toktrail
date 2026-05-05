@@ -158,6 +158,8 @@ toktrail usage sessions --last
 toktrail usage sessions --order asc --limit 10
 toktrail usage runs --last --limit 5
 toktrail subscriptions status
+toktrail subscriptions status --timezone Europe/Berlin
+toktrail subscriptions status --utc
 toktrail subscriptions status --provider opencode-go --json
 toktrail sync export --out toktrail-state.tar.gz --no-refresh
 toktrail sync import toktrail-state.tar.gz
@@ -193,6 +195,10 @@ Report commands (`toktrail usage`, `toktrail run status`, and
 `toktrail subscriptions status`) refresh configured sources first by default. Use
 `--no-refresh` for stale local-state reads, and `--refresh-details` to print a
 compact refresh summary.
+
+For subscriptions, `subscriptions.timezone` controls quota/billing window
+calculation. Human output timestamps are rendered in local timezone by default;
+use `--timezone <IANA>` or `--utc` to override display timezone.
 
 Session terminology:
 
