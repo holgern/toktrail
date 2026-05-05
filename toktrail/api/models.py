@@ -43,6 +43,19 @@ class TokenBreakdown:
 
     @property
     def total(self) -> int:
+        # User-facing total, aligned with harness output.
+        return self.input + self.output
+
+    @property
+    def prompt_total(self) -> int:
+        return self.input + self.cache_read + self.cache_write
+
+    @property
+    def output_total(self) -> int:
+        return self.output + self.cache_output
+
+    @property
+    def accounting_total(self) -> int:
         return (
             self.input
             + self.output
@@ -61,6 +74,9 @@ class TokenBreakdown:
             "cache_write": self.cache_write,
             "cache_output": self.cache_output,
             "total": self.total,
+            "prompt_total": self.prompt_total,
+            "output_total": self.output_total,
+            "accounting_total": self.accounting_total,
         }
 
 
@@ -522,14 +538,19 @@ class UnconfiguredModelRow:
 class ActivitySummaryRow:
     agent: str | None
     message_count: int
-    total_tokens: int
+    tokens: TokenBreakdown
     costs: CostTotals
+
+    @property
+    def total_tokens(self) -> int:
+        return self.tokens.total
 
     def as_dict(self) -> dict[str, object]:
         return {
             "agent": self.agent,
             "message_count": self.message_count,
             "total_tokens": self.total_tokens,
+            **self.tokens.as_dict(),
             **self.costs.as_dict(),
         }
 

@@ -154,7 +154,7 @@ def summarize_events_by_activity(
             ActivitySummaryRow(
                 agent=agent,
                 message_count=bucket.message_count,
-                total_tokens=bucket.tokens.total,
+                tokens=bucket.tokens,
                 costs=bucket.costs,
             )
             for agent, bucket in grouped.items()

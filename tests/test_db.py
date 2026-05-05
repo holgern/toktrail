@@ -248,13 +248,13 @@ def test_insert_usage_events_is_idempotent_and_aggregates_correctly(
     assert report.totals.tokens.reasoning == 3
     assert report.totals.tokens.cache_read == 6
     assert report.totals.tokens.cache_write == 9
-    assert report.totals.tokens.total == 63
+    assert report.totals.tokens.total == 45
     assert report.totals.source_cost_usd == Decimal("0.75")
     assert report.totals.actual_cost_usd == 0.75
     assert report.totals.virtual_cost_usd == 0.0
     assert report.totals.savings_usd == -0.75
     assert report.totals.unpriced_count == 2
-    assert report.by_harness[0].total_tokens == 63
+    assert report.by_harness[0].total_tokens == 45
     assert report.by_harness[0].source_cost_usd == Decimal("0.75")
     assert report.by_harness[0].actual_cost_usd == 0.75
     assert report.by_model[0].model_id == "claude-sonnet-4"
@@ -702,7 +702,10 @@ def test_summarize_usage_exposes_unconfigured_models(tmp_path: Path) -> None:
             "cache_read": 50,
             "cache_write": 0,
             "cache_output": 0,
-            "total": 170,
+            "total": 120,
+            "prompt_total": 150,
+            "output_total": 20,
+            "accounting_total": 170,
         }
     ]
 

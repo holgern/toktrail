@@ -209,8 +209,7 @@ def parse_zai_pricing(
                 output_price = parse_price_value(raw_row[header["output"]])
                 if input_price is None or output_price is None:
                     warnings.append(
-                        "Skipped Z.AI row without required prices: "
-                        f"{model_text}"
+                        f"Skipped Z.AI row without required prices: {model_text}"
                     )
                     continue
                 cached_input = parse_price_value(
@@ -269,9 +268,7 @@ def parse_opencode_go_pricing(
     raw_header = lines[header_idx]
     if "|" in raw_header:
         table_rows = [
-            line
-            for line in lines[header_idx:]
-            if line.strip().startswith("|")
+            line for line in lines[header_idx:] if line.strip().startswith("|")
         ]
         parsed_rows = _parse_markdown_table(table_rows)
         if not parsed_rows:
@@ -286,8 +283,7 @@ def parse_opencode_go_pricing(
         split_rows = [header, *data_rows]
     else:
         split_rows = [
-            re.split(r"\t+|\s{2,}", line.strip())
-            for line in lines[header_idx:]
+            re.split(r"\t+|\s{2,}", line.strip()) for line in lines[header_idx:]
         ]
 
     header = [col.strip().lower() for col in split_rows[0]]
@@ -407,8 +403,7 @@ def parse_github_copilot_pricing(
         output_price = parse_price_value(cells[output_idx])
         if input_price is None or output_price is None:
             warnings.append(
-                "Skipped github-copilot row without required prices: "
-                f"{model_text}"
+                f"Skipped github-copilot row without required prices: {model_text}"
             )
             continue
 
@@ -547,8 +542,7 @@ def render_prices_toml(
             lines.append(f"output_usd_per_1m = {_toml_float(price.output_usd_per_1m)}")
             if price.reasoning_usd_per_1m is not None:
                 lines.append(
-                    "reasoning_usd_per_1m = "
-                    f"{_toml_float(price.reasoning_usd_per_1m)}"
+                    f"reasoning_usd_per_1m = {_toml_float(price.reasoning_usd_per_1m)}"
                 )
             if price.category is not None:
                 lines.append(f"category = {_toml_quote(price.category)}")
@@ -705,8 +699,7 @@ def _parse_openai_markdown_prices(
             output_price = parse_price_value(raw_row[output_idx])
             if input_price is None or output_price is None:
                 warnings.append(
-                    "Skipped OpenAI markdown row without required prices: "
-                    f"{model_text}"
+                    f"Skipped OpenAI markdown row without required prices: {model_text}"
                 )
                 continue
             cached_input = (

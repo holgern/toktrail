@@ -171,24 +171,33 @@ def test_resolve_price_selects_context_tier_from_prompt_like_context() -> None:
         context_label="> 272K",
     )
 
-    assert resolve_price(
-        "openai",
-        "gpt-5.4",
-        [short, long],
-        context_tokens=100_000,
-    ) == short
-    assert resolve_price(
-        "openai",
-        "gpt-5.4",
-        [short, long],
-        context_tokens=272_000,
-    ) == short
-    assert resolve_price(
-        "openai",
-        "gpt-5.4",
-        [short, long],
-        context_tokens=272_001,
-    ) == long
+    assert (
+        resolve_price(
+            "openai",
+            "gpt-5.4",
+            [short, long],
+            context_tokens=100_000,
+        )
+        == short
+    )
+    assert (
+        resolve_price(
+            "openai",
+            "gpt-5.4",
+            [short, long],
+            context_tokens=272_000,
+        )
+        == short
+    )
+    assert (
+        resolve_price(
+            "openai",
+            "gpt-5.4",
+            [short, long],
+            context_tokens=272_001,
+        )
+        == long
+    )
 
 
 def test_compute_costs_selects_context_tier_from_prompt_like_tokens() -> None:

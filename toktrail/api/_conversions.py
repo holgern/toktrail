@@ -210,7 +210,7 @@ def _to_public_activity_row(value: InternalActivitySummaryRow) -> ActivitySummar
     return ActivitySummaryRow(
         agent=value.agent,
         message_count=value.message_count,
-        total_tokens=value.total_tokens,
+        tokens=_to_public_token_breakdown(value.tokens),
         costs=_to_public_cost_totals(value.costs),
     )
 

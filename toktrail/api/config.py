@@ -24,15 +24,9 @@ def config_summary(config_path: Path | None = None) -> dict[str, object]:
     resolved = resolve_toktrail_config_path(config_path)
     try:
         prices_path = (
-            resolved.with_name("prices.toml")
-            if config_path is not None
-            else None
+            resolved.with_name("prices.toml") if config_path is not None else None
         )
-        prices_dir = (
-            resolved.with_name("prices")
-            if config_path is not None
-            else None
-        )
+        prices_dir = resolved.with_name("prices") if config_path is not None else None
         subscriptions_path = (
             resolved.with_name("subscriptions.toml")
             if config_path is not None

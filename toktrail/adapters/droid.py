@@ -159,7 +159,7 @@ def _parse_droid_settings(
         cache_write=_as_non_negative_int(usage.get("cacheCreationTokens")),
         cache_output=_as_non_negative_int(usage.get("cacheOutputTokens")),
     )
-    if tokens.total == 0:
+    if tokens.accounting_total == 0:
         return None
 
     session_id = _session_id_from_settings_path(path)

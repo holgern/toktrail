@@ -75,7 +75,7 @@ def test_summary_helpers_aggregate_events_consistently() -> None:
     by_model = summarize_events_by_model(events)
     by_agent = summarize_events_by_activity(events)
 
-    assert totals.tokens.total == 37
+    assert totals.tokens.total == 19
     assert float(totals.source_cost_usd) == pytest.approx(0.6)
     assert totals.actual_cost_usd == 0.0
     assert totals.virtual_cost_usd == 0.0
@@ -86,7 +86,7 @@ def test_summary_helpers_aggregate_events_consistently() -> None:
         "ses-2",
     ]
     assert by_source_session[0].assistant_message_count == 2
-    assert by_source_session[0].tokens.total == 27
+    assert by_source_session[0].tokens.total == 15
     assert float(by_source_session[0].source_cost_usd) == pytest.approx(0.3)
     assert by_source_session[0].actual_cost_usd == 0.0
     assert by_source_session[0].models == ("claude-sonnet-4",)
@@ -94,14 +94,14 @@ def test_summary_helpers_aggregate_events_consistently() -> None:
     assert by_source_session[0].source_paths == ("/tmp/a.jsonl", "/tmp/b.jsonl")
 
     assert [(row.provider_id, row.model_id, row.total_tokens) for row in by_model] == [
-        ("anthropic", "claude-sonnet-4", 27),
-        ("openai", "gpt-5", 10),
+        ("anthropic", "claude-sonnet-4", 15),
+        ("openai", "gpt-5", 4),
     ]
     assert float(by_model[0].source_cost_usd) == pytest.approx(0.3)
     assert by_model[0].actual_cost_usd == 0.0
     assert [(row.agent, row.total_tokens) for row in by_agent] == [
-        ("plan", 27),
-        ("unknown", 10),
+        ("plan", 16),
+        ("unknown", 3),
     ]
     assert float(by_agent[0].source_cost_usd) == pytest.approx(0.4)
     assert by_agent[0].actual_cost_usd == 0.0
@@ -136,10 +136,10 @@ def test_summarize_events_by_model_can_collapse_thinking_levels() -> None:
 
     assert [(row.thinking_level, row.total_tokens) for row in split_rows] == [
         ("high", 12),
-        ("low", 10),
+        ("low", 4),
     ]
     assert [(row.thinking_level, row.total_tokens) for row in collapsed_rows] == [
-        (None, 22)
+        (None, 16)
     ]
 
 

@@ -32,6 +32,19 @@ class TokenBreakdown:
 
     @property
     def total(self) -> int:
+        # User-facing total, aligned with harness output.
+        return self.input + self.output
+
+    @property
+    def prompt_total(self) -> int:
+        return self.input + self.cache_read + self.cache_write
+
+    @property
+    def output_total(self) -> int:
+        return self.output + self.cache_output
+
+    @property
+    def accounting_total(self) -> int:
         return (
             self.input
             + self.output
@@ -50,6 +63,9 @@ class TokenBreakdown:
             "cache_write": self.cache_write,
             "cache_output": self.cache_output,
             "total": self.total,
+            "prompt_total": self.prompt_total,
+            "output_total": self.output_total,
+            "accounting_total": self.accounting_total,
         }
 
 

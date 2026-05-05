@@ -45,7 +45,7 @@ def test_import_usage_defaults_to_active_session_and_is_idempotent(tmp_path) -> 
     assert first.rows_imported == 2
     assert first.events_imported == 2
     assert second.rows_imported == 0
-    assert report.totals.tokens.total == 3900
+    assert report.totals.tokens.total == 3400
 
 
 def test_import_usage_without_active_session_imports_unscoped_events(tmp_path) -> None:
@@ -282,7 +282,7 @@ def test_import_usage_supports_codex_source(tmp_path) -> None:
     assert report.totals.tokens.cache_read == 20
     assert report.totals.tokens.output == 30
     assert report.totals.tokens.reasoning == 5
-    assert report.totals.tokens.total == 155
+    assert report.totals.tokens.total == 130
 
 
 def test_import_usage_supports_droid_source(tmp_path) -> None:
@@ -314,7 +314,7 @@ def test_import_usage_supports_droid_source(tmp_path) -> None:
     assert report.totals.tokens.reasoning == 34
     assert report.totals.tokens.cache_read == 12
     assert report.totals.tokens.cache_write == 89
-    assert report.totals.tokens.total == 1936
+    assert report.totals.tokens.total == 1801
 
 
 def test_import_usage_supports_amp_source(tmp_path) -> None:
@@ -345,7 +345,7 @@ def test_import_usage_supports_amp_source(tmp_path) -> None:
     assert report.totals.tokens.output == 20
     assert report.totals.tokens.cache_read == 30
     assert report.totals.tokens.cache_write == 40
-    assert report.totals.tokens.total == 190
+    assert report.totals.tokens.total == 120
     assert report.totals.costs.source_cost_usd == 0.75
 
 
@@ -420,7 +420,7 @@ def test_later_session_import_links_existing_unscoped_events_without_duplicates(
     assert first.rows_imported == 2
     assert second.rows_imported == 0
     assert second.rows_linked == 2
-    assert report.totals.tokens.total == 3900
+    assert report.totals.tokens.total == 3400
 
 
 def _create_opencode_messages(path) -> None:

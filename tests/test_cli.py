@@ -468,7 +468,7 @@ def test_cli_init_start_refresh_status_stop(tmp_path) -> None:
     assert status_result.exit_code == 0, status_result.output
     payload = json.loads(status_result.output)
     assert payload["session"]["name"] == "test-session"
-    assert payload["totals"]["total"] == 1850
+    assert payload["totals"]["total"] == 1500
     assert payload["totals"]["source_cost_usd"] == "0.05"
     assert payload["totals"]["actual_cost_usd"] == "0.05"
     assert payload["totals"]["virtual_cost_usd"] in ("0", "0.0")
@@ -532,7 +532,7 @@ def test_cli_opencode_sessions_lists_source_sessions(tmp_path) -> None:
     assert result.exit_code == 0, result.output
     assert "source_session_id" in result.output
     assert "ses-1" in result.output
-    assert "1,850" in result.output
+    assert "1,500" in result.output
     assert "202" in result.output
 
 
@@ -562,7 +562,7 @@ def test_cli_sources_lists_filtered_source(tmp_path) -> None:
             "exists": True,
             "sessions": 1,
             "messages": 1,
-            "tokens": 1850,
+            "tokens": 1500,
             "warning": "",
         }
     ]
@@ -701,7 +701,7 @@ def test_cli_refresh_goose_status(tmp_path) -> None:
     assert payload["totals"]["input"] == 90
     assert payload["totals"]["output"] == 40
     assert payload["totals"]["reasoning"] == 20
-    assert payload["totals"]["total"] == 150
+    assert payload["totals"]["total"] == 130
     assert payload["totals"]["source_cost_usd"] in ("0", "0.0")
 
 
@@ -738,7 +738,7 @@ def test_cli_refresh_droid_status(tmp_path) -> None:
     assert payload["totals"]["reasoning"] == 34
     assert payload["totals"]["cache_read"] == 12
     assert payload["totals"]["cache_write"] == 89
-    assert payload["totals"]["total"] == 1936
+    assert payload["totals"]["total"] == 1801
 
 
 def test_cli_refresh_amp_status(tmp_path) -> None:
@@ -773,7 +773,7 @@ def test_cli_refresh_amp_status(tmp_path) -> None:
     assert payload["totals"]["output"] == 20
     assert payload["totals"]["cache_read"] == 30
     assert payload["totals"]["cache_write"] == 40
-    assert payload["totals"]["total"] == 190
+    assert payload["totals"]["total"] == 120
     assert payload["totals"]["source_cost_usd"] == "0.75"
 
 
@@ -797,12 +797,7 @@ def test_cli_sessions_droid_breakdown_shows_token_columns(tmp_path) -> None:
 
     assert result.exit_code == 0, result.output
     assert "Droid source session droid-1" in result.output
-    assert "input:" in result.output
-    assert "output:" in result.output
-    assert "reasoning:" in result.output
-    assert "cache read:" in result.output
-    assert "cache write:" in result.output
-    assert "cache out:" in result.output
+    assert "token usage:" in result.output
 
 
 def test_cli_status_supports_thinking_filter_and_collapse(tmp_path) -> None:
@@ -1035,7 +1030,7 @@ opencode = "{source_db}"
     assert payload["session"] is None
     assert payload["filters"]["period"] == "today"
     assert payload["filters"]["timezone"] == "UTC"
-    assert payload["totals"]["total"] == 1850
+    assert payload["totals"]["total"] == 1500
     assert "refresh" not in payload
 
 
@@ -1166,7 +1161,7 @@ opencode = "{source_db}"
     payload = json.loads(result.output)
     assert "refresh" in payload
     assert "report" in payload
-    assert payload["report"]["totals"]["total"] == 1850
+    assert payload["report"]["totals"]["total"] == 1500
 
 
 def test_cli_usage_supports_explicit_since_until_boundaries(tmp_path) -> None:
@@ -1213,7 +1208,7 @@ opencode = "{source_db}"
     assert payload["filters"]["since_ms"] == 946684800000
     assert payload["filters"]["until_ms"] == 4102444800000
     assert payload["filters"]["timezone"] == "UTC"
-    assert payload["totals"]["total"] == 1850
+    assert payload["totals"]["total"] == 1500
 
 
 def test_cli_plain_refresh_supports_harness_override_and_source(tmp_path) -> None:
@@ -1565,7 +1560,7 @@ def test_cli_refresh_pi_status(tmp_path) -> None:
     status = runner.invoke(app, ["--db", str(state_db), "run", "status", "1", "--json"])
     payload = json.loads(status.output)
     assert payload["by_harness"][0]["harness"] == "pi"
-    assert payload["totals"]["total"] == 165
+    assert payload["totals"]["total"] == 150
     assert payload["totals"]["input"] == 100
     assert payload["totals"]["output"] == 50
     assert payload["totals"]["cache_read"] == 10
@@ -1648,7 +1643,10 @@ def test_cli_status_filters_by_harness_and_source_session(tmp_path) -> None:
             "cache_read": 10,
             "cache_write": 5,
             "cache_output": 0,
-            "total": 165,
+            "total": 150,
+            "prompt_total": 115,
+            "output_total": 50,
+            "accounting_total": 165,
             "source_cost_usd": "0",
             "actual_cost_usd": "0",
             "virtual_cost_usd": "0",
@@ -2623,7 +2621,10 @@ def test_cli_status_json_contains_unconfigured_models(tmp_path) -> None:
             "cache_read": 0,
             "cache_write": 0,
             "cache_output": 0,
-            "total": 450,
+            "total": 440,
+            "prompt_total": 400,
+            "output_total": 40,
+            "accounting_total": 450,
         }
     ]
 
@@ -2685,7 +2686,7 @@ def test_cli_status_sort_and_limit_apply_to_model_rows_only(tmp_path) -> None:
         "limit": 1,
     }
     assert [row["provider_id"] for row in payload["by_model"]] == ["anthropic"]
-    assert payload["totals"]["total"] == 2300
+    assert payload["totals"]["total"] == 1940
     assert payload["unconfigured_models"][0]["provider_id"] == "openai-codex"
 
 
@@ -2716,7 +2717,7 @@ def test_cli_usage_supports_price_state_sort_limit(tmp_path) -> None:
     assert payload["display_filters"]["sort"] == "tokens"
     assert payload["display_filters"]["limit"] == 1
     assert [row["model_id"] for row in payload["by_model"]] == ["gpt-5.2-codex"]
-    assert payload["totals"]["total"] == 2300
+    assert payload["totals"]["total"] == 1940
 
 
 def test_cli_pricing_list_used_only_reports_used_models(tmp_path) -> None:
@@ -2780,7 +2781,10 @@ def test_cli_pricing_list_missing_only_reports_unconfigured_used_models(
             "cache_read": 0,
             "cache_write": 0,
             "cache_output": 0,
-            "total": 450,
+            "total": 440,
+            "prompt_total": 400,
+            "output_total": 40,
+            "accounting_total": 450,
         }
     ]
 
@@ -2893,7 +2897,7 @@ def test_cli_pi_sessions_lists_source_sessions(tmp_path) -> None:
     assert result.exit_code == 0, result.output
     assert "source_session_id" in result.output
     assert "pi_ses_001" in result.output
-    assert "165" in result.output
+    assert "150" in result.output
     assert "2026-" in result.output
 
 
@@ -2910,7 +2914,7 @@ def test_cli_sessions_codex_lists_source_sessions(tmp_path) -> None:
     assert result.exit_code == 0, result.output
     assert "source_session_id" in result.output
     assert "session-001" in result.output
-    assert "155" in result.output
+    assert "130" in result.output
     assert "2026-" in result.output
 
 
@@ -2927,7 +2931,7 @@ def test_cli_sessions_amp_lists_source_sessions(tmp_path) -> None:
     assert result.exit_code == 0, result.output
     assert "source_session_id" in result.output
     assert "thread-1" in result.output
-    assert "190" in result.output
+    assert "120" in result.output
     assert "2026-" in result.output
 
 

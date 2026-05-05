@@ -90,9 +90,7 @@ def _extract_command_path(command_line: str) -> list[str]:
 
 def _known_root_commands(runner: CliRunner) -> set[str]:
     help_text = runner.invoke(app, ["--help"]).output
-    return set(
-        re.findall(r"(?m)^\s*│\s*([a-z][a-z0-9-]*)\b", help_text)
-    )
+    return set(re.findall(r"(?m)^\s*│\s*([a-z][a-z0-9-]*)\b", help_text))
 
 
 def test_docs_command_roots_exist() -> None:

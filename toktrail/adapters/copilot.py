@@ -183,7 +183,7 @@ def _parse_copilot_line(
         cache_write=cache_write,
         reasoning=reasoning,
     )
-    if tokens.total == 0:
+    if tokens.accounting_total == 0:
         return None
 
     model = (

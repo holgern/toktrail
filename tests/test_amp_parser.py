@@ -343,7 +343,7 @@ def test_parse_amp_keeps_cache_only_message(tmp_path: Path) -> None:
 
     event = parse_amp_file(path)[0]
 
-    assert event.tokens.total == 50
+    assert event.tokens.total == 0
     assert event.tokens.cache_read == 50
 
 
@@ -379,4 +379,4 @@ def test_list_amp_sessions_aggregates_messages(tmp_path: Path) -> None:
     assert len(sessions) == 1
     assert sessions[0].harness == "amp"
     assert sessions[0].source_session_id == "thread-1"
-    assert sessions[0].tokens.total == 190
+    assert sessions[0].tokens.total == 120

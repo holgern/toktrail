@@ -164,7 +164,7 @@ def _parse_vibe_meta(
         cache_write=0,
         cache_output=0,
     )
-    if tokens.total == 0:
+    if tokens.accounting_total == 0:
         return None
 
     session_id = _as_str(meta.get("session_id")) or path.parent.name or path.stem

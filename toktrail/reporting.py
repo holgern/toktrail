@@ -119,7 +119,11 @@ class SessionTotals:
             "reasoning": self.tokens.reasoning,
             "cache_read": self.tokens.cache_read,
             "cache_write": self.tokens.cache_write,
+            "cache_output": self.tokens.cache_output,
             "total": self.tokens.total,
+            "prompt_total": self.tokens.prompt_total,
+            "output_total": self.tokens.output_total,
+            "accounting_total": self.tokens.accounting_total,
             **self.costs.as_dict(),
         }
 
@@ -279,8 +283,12 @@ class ActivitySummaryRow:
     agent: str | None
 
     message_count: int
-    total_tokens: int
+    tokens: TokenBreakdown
     costs: CostTotals
+
+    @property
+    def total_tokens(self) -> int:
+        return self.tokens.total
 
     @property
     def source_cost_usd(self) -> Decimal:
@@ -307,6 +315,7 @@ class ActivitySummaryRow:
             "agent": self.agent,
             "message_count": self.message_count,
             "total_tokens": self.total_tokens,
+            **self.tokens.as_dict(),
             **self.costs.as_dict(),
         }
 

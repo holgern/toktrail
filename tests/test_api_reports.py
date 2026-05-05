@@ -111,7 +111,10 @@ def test_session_report_uses_active_session_by_default(tmp_path: Path) -> None:
             "cache_read": 200,
             "cache_write": 50,
             "cache_output": 0,
-            "total": 1850,
+            "total": 1500,
+            "prompt_total": 1250,
+            "output_total": 500,
+            "accounting_total": 1850,
         }
     ]
 
@@ -167,7 +170,7 @@ def test_usage_report_supports_periods_without_tracking_session(
     assert report.session is None
     assert report.filters["period"] == "today"
     assert report.filters["timezone"] == "UTC"
-    assert report.totals.tokens.total == 1850
+    assert report.totals.tokens.total == 1500
 
 
 def test_usage_report_preserves_cache_output_in_public_tokens(tmp_path: Path) -> None:

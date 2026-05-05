@@ -191,8 +191,9 @@ def analyze_usage_events(
             else None
         )
         source_per_1m_total = (
-            (event.source_cost_usd * Decimal(1_000_000)) / Decimal(event.tokens.total)
-            if event.tokens.total > 0
+            (event.source_cost_usd * Decimal(1_000_000))
+            / Decimal(event.tokens.accounting_total)
+            if event.tokens.accounting_total > 0
             else None
         )
         virtual_per_1m_prompt = (

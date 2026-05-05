@@ -971,9 +971,7 @@ def render_prices_template(template: str = DEFAULT_TEMPLATE_NAME) -> str:
         marker = "# OpenAI"
         marker_index = COPILOT_TEMPLATE_TEXT.find(marker)
         pricing_body = (
-            COPILOT_TEMPLATE_TEXT[marker_index:].strip()
-            if marker_index >= 0
-            else ""
+            COPILOT_TEMPLATE_TEXT[marker_index:].strip() if marker_index >= 0 else ""
         )
         if pricing_body:
             return f"config_version = 1\n\n{pricing_body}\n"
@@ -1328,9 +1326,7 @@ def _validate_price_context_ranges(prices: tuple[Price, ...], *, context: str) -
                 continue
             prev_min = previous.context_min_tokens if previous.context_min_tokens else 0
             prev_max = (
-                previous.context_max_tokens
-                if previous.context_max_tokens
-                else "∞"
+                previous.context_max_tokens if previous.context_max_tokens else "∞"
             )
             msg = (
                 f"{context} context range overlaps prior "
@@ -1949,8 +1945,7 @@ def _parse_prices(value: object, *, context: str) -> tuple[Price, ...]:
             and context_min_tokens > context_max_tokens
         ):
             msg = (
-                f"{context}[{index}] requires context_min_tokens <= "
-                "context_max_tokens."
+                f"{context}[{index}] requires context_min_tokens <= context_max_tokens."
             )
             raise ValueError(msg)
         price = Price(

@@ -210,9 +210,7 @@ def test_sync_run_id_collision_inserts_distinct_run(tmp_path: Path) -> None:
     conn = connect(db_b)
     try:
         migrate(conn)
-        rows = conn.execute(
-            "SELECT id, sync_id, name FROM runs ORDER BY id"
-        ).fetchall()
+        rows = conn.execute("SELECT id, sync_id, name FROM runs ORDER BY id").fetchall()
     finally:
         conn.close()
     assert len(rows) >= 2

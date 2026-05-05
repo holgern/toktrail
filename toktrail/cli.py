@@ -1532,6 +1532,34 @@ def _usage_aggregate(
     return None
 
 
+def _format_token_usage_line(tokens: TokenBreakdown) -> str:
+    input_suffixes: list[str] = []
+    if tokens.cache_read:
+        input_suffixes.append(f"+{_format_int(tokens.cache_read)} cached")
+    if tokens.cache_write:
+        input_suffixes.append(f"+{_format_int(tokens.cache_write)} cache write")
+
+    output_suffixes: list[str] = []
+    if tokens.cache_output:
+        output_suffixes.append(f"+{_format_int(tokens.cache_output)} cached output")
+
+    input_part = f"input={_format_int(tokens.input)}"
+    if input_suffixes:
+        input_part += f" ({', '.join(input_suffixes)})"
+
+    output_part = f"output={_format_int(tokens.output)}"
+    if output_suffixes:
+        output_part += f" ({', '.join(output_suffixes)})"
+
+    reasoning_part = (
+        f" (reasoning {_format_int(tokens.reasoning)})" if tokens.reasoning else ""
+    )
+    return (
+        f"token usage: total={_format_int(tokens.total)}"
+        f" {input_part} {output_part}{reasoning_part}"
+    )
+
+
 def _print_usage_summary(
     report: InternalRunReport,
     *,
@@ -1543,14 +1571,7 @@ def _print_usage_summary(
     typer.echo("")
     typer.echo("Totals")
     totals = report.totals
-    typer.echo(f"  input:       {_format_int(totals.tokens.input)}")
-    typer.echo(f"  output:      {_format_int(totals.tokens.output)}")
-    typer.echo(f"  reasoning:   {_format_int(totals.tokens.reasoning)}")
-    typer.echo(f"  cache read:  {_format_int(totals.tokens.cache_read)}")
-    typer.echo(f"  cache write: {_format_int(totals.tokens.cache_write)}")
-    typer.echo(f"  cache output:{_format_int(totals.tokens.cache_output)}")
-    typer.echo(f"  total:       {_format_int(totals.tokens.total)}")
-
+    typer.echo(f"  {_format_token_usage_line(totals.tokens)}")
     typer.echo("")
     typer.echo("Costs")
     typer.echo(f"  source:   {_format_cost(totals.source_cost_usd)}")
@@ -1578,15 +1599,20 @@ def _print_usage_summary(
     by_provider: list[ProviderSummaryRow] = report.by_provider
     if by_provider:
         for provider_row in by_provider:
+            cache_info = ""
+            if provider_row.tokens.cache_read:
+                cache_info = (
+                    f"   cached input {_format_int(provider_row.tokens.cache_read)}"
+                )
             typer.echo(
                 f"  {provider_row.provider_id:<12}"
-                f"{_format_int(provider_row.total_tokens):>12} tokens   "
+                f"{_format_int(provider_row.total_tokens):>12} tokens"
+                f"{cache_info}   "
                 f"source {_format_cost(provider_row.source_cost_usd)}   "
                 f"actual {_format_cost(provider_row.actual_cost_usd)}   "
                 f"virtual {_format_cost(provider_row.virtual_cost_usd)}   "
                 f"savings {_format_cost(provider_row.savings_usd)}"
             )
-    else:
         typer.echo("  (none)")
 
     typer.echo("")
@@ -1594,14 +1620,19 @@ def _print_usage_summary(
     by_harness = report.by_harness
     if by_harness:
         for harness_row in by_harness:
+            cache_info = ""
+            if harness_row.tokens.cache_read:
+                cache_info = (
+                    f"   cached input {_format_int(harness_row.tokens.cache_read)}"
+                )
             typer.echo(
                 f"  {harness_row.harness:<12}"
-                f"{_format_int(harness_row.total_tokens):>12} tokens   "
+                f"{_format_int(harness_row.total_tokens):>12} tokens"
+                f"{cache_info}   "
                 f"actual {_format_cost(harness_row.actual_cost_usd)}   "
                 f"virtual {_format_cost(harness_row.virtual_cost_usd)}   "
                 f"savings {_format_cost(harness_row.savings_usd)}"
             )
-    else:
         typer.echo("  (none)")
 
     typer.echo("")
@@ -1617,9 +1648,15 @@ def _print_usage_summary(
     by_activity = report.by_activity
     if by_activity:
         for agent_row in by_activity:
+            cache_info = ""
+            if agent_row.tokens.cache_read:
+                cache_info = (
+                    f"   cached input {_format_int(agent_row.tokens.cache_read)}"
+                )
             typer.echo(
                 f"  {agent_row.agent:<12}"
-                f"{_format_int(agent_row.total_tokens):>12} tokens   "
+                f"{_format_int(agent_row.total_tokens):>12} tokens"
+                f"{cache_info}   "
                 f"actual {_format_cost(agent_row.actual_cost_usd)}   "
                 f"virtual {_format_cost(agent_row.virtual_cost_usd)}   "
                 f"savings {_format_cost(agent_row.savings_usd)}"
@@ -2250,8 +2287,7 @@ def pricing_parse(
             "--output",
             "--out",
             help=(
-                "Output TOML path, '-' for stdout. "
-                "Defaults to prices/<provider>.toml."
+                "Output TOML path, '-' for stdout. Defaults to prices/<provider>.toml."
             ),
         ),
     ] = None,
@@ -2315,8 +2351,8 @@ def pricing_parse(
         elif replace_provider:
             write_mode = "replace-provider"
 
-    include_metadata = (
-        target is not None and _is_provider_price_file(ctx, target, provider)
+    include_metadata = target is not None and _is_provider_price_file(
+        ctx, target, provider
     )
     source_label = str(input_path) if input_path is not None else "stdin"
     metadata = (
@@ -3379,14 +3415,7 @@ def _print_source_session_detail(
         typer.echo(f"source:   {', '.join(summary.source_paths)}")
     typer.echo("")
     typer.echo("Totals")
-    typer.echo(f"  input:       {_format_int(totals.tokens.input)}")
-    typer.echo(f"  output:      {_format_int(totals.tokens.output)}")
-    typer.echo(f"  reasoning:   {_format_int(totals.tokens.reasoning)}")
-    typer.echo(f"  cache read:  {_format_int(totals.tokens.cache_read)}")
-    typer.echo(f"  cache write: {_format_int(totals.tokens.cache_write)}")
-    typer.echo(f"  cache out:   {_format_int(totals.tokens.cache_output)}")
-    typer.echo(f"  total:       {_format_int(totals.tokens.total)}")
-    typer.echo("")
+    typer.echo(f"  {_format_token_usage_line(totals.tokens)}")
     typer.echo("Costs")
     typer.echo(f"  source:   {_format_cost(totals.source_cost_usd)}")
     typer.echo(f"  actual:   {_format_cost(totals.actual_cost_usd)}")
@@ -3404,9 +3433,13 @@ def _print_source_session_detail(
         typer.echo("")
         typer.echo("By activity")
         for row in by_activity:
+            cache_info = ""
+            if row.tokens.cache_read:
+                cache_info = f"   cached input {_format_int(row.tokens.cache_read)}"
             typer.echo(
                 f"  {row.agent:<12}"
-                f"{_format_int(row.total_tokens):>12} tokens   "
+                f"{_format_int(row.total_tokens):>12} tokens"
+                f"{cache_info}   "
                 f"actual {_format_cost(row.actual_cost_usd)}   "
                 f"virtual {_format_cost(row.virtual_cost_usd)}   "
                 f"savings {_format_cost(row.savings_usd)}"

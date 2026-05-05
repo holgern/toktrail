@@ -164,9 +164,7 @@ def test_default_toktrail_subscriptions_path_uses_xdg_config_home(
     )
 
 
-def test_resolve_toktrail_subscriptions_path_prefers_cli(
-    monkeypatch, tmp_path
-) -> None:
+def test_resolve_toktrail_subscriptions_path_prefers_cli(monkeypatch, tmp_path) -> None:
     env_path = tmp_path / "env-subscriptions.toml"
     cli_path = tmp_path / "cli-subscriptions.toml"
     monkeypatch.setenv("TOKTRAIL_SUBSCRIPTIONS", str(env_path))
@@ -174,9 +172,7 @@ def test_resolve_toktrail_subscriptions_path_prefers_cli(
     assert resolve_toktrail_subscriptions_path(cli_path) == cli_path
 
 
-def test_resolve_toktrail_subscriptions_path_prefers_env(
-    monkeypatch, tmp_path
-) -> None:
+def test_resolve_toktrail_subscriptions_path_prefers_env(monkeypatch, tmp_path) -> None:
     env_path = tmp_path / "env-subscriptions.toml"
     monkeypatch.setenv("TOKTRAIL_SUBSCRIPTIONS", str(env_path))
 

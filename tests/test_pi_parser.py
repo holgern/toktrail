@@ -34,7 +34,7 @@ def test_parse_pi_jsonl_valid_assistant_message(tmp_path) -> None:
     assert event.tokens.cache_read == 10
     assert event.tokens.cache_write == 5
     assert event.tokens.reasoning == 0
-    assert event.tokens.total == 165
+    assert event.tokens.total == 150
     assert event.source_cost_usd == Decimal("0.0")
     assert event.created_ms == 1_767_225_601_000
 
@@ -196,4 +196,4 @@ def test_list_pi_sessions_aggregates_messages(tmp_path) -> None:
     summary = summaries[0]
     assert summary.source_session_id == "pi_ses_007"
     assert summary.assistant_message_count == 2
-    assert summary.tokens.total == 36
+    assert summary.tokens.total == 14

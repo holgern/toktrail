@@ -213,7 +213,7 @@ def _parse_amp_thread(
     events = [
         _record_to_event(record, thread_id=thread_id, source_path=path)
         for record in sorted(records, key=lambda record: record.created_ms)
-        if record.created_ms > 0 and record.tokens.total > 0
+        if record.created_ms > 0 and record.tokens.accounting_total > 0
     ]
     rows_seen = ledger_seen + message_seen
     rows_skipped = ledger_skipped + message_skipped + len(records) - len(events)

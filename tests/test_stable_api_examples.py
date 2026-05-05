@@ -206,7 +206,9 @@ def test_print_report_formats_public_dataclasses(capsys) -> None:
             ActivitySummaryRow(
                 agent="build",
                 message_count=2,
-                total_tokens=42,
+                tokens=TokenBreakdown(
+                    input=10, output=20, reasoning=3, cache_read=4, cache_write=5
+                ),
                 costs=CostTotals(
                     actual_cost_usd=Decimal("0.02"), virtual_cost_usd=Decimal("0.05")
                 ),
@@ -233,7 +235,7 @@ def test_print_report_formats_public_dataclasses(capsys) -> None:
     assert "reasoning:    3" in output
     assert "cache_read:   4" in output
     assert "cache_write:  5" in output
-    assert "total:        42" in output
+    assert "total:        30" in output
     assert "source_cost:  $0.010000" in output
     assert "actual_cost:  $0.020000" in output
     assert "virtual_cost: $0.050000" in output

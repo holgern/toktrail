@@ -16,7 +16,7 @@ from toktrail.price_parser import (
 
 
 def test_parse_openai_pricing_filters_tier_and_preserves_context_variants() -> None:
-    text = '''
+    text = """
 TextTokenPricingTables tier="standard" rows={[
   ["gpt-5.5 (<272K context length)", 5, 0.5, 30],
   ["GPT 5.5 (> 272K tokens)", 6, 0.6, 36],
@@ -25,7 +25,7 @@ TextTokenPricingTables tier="standard" rows={[
 TextTokenPricingTables tier="batch" rows={[
   ["gpt-5.5 (<272K context length)", 2.5, 0.25, 15],
 ]}
-'''
+"""
     parsed = parse_openai_pricing(text, tier="standard")
 
     assert parsed.provider == "openai"
@@ -75,13 +75,12 @@ def test_parse_openai_pricing_warns_when_no_rows_parsed() -> None:
 
     assert parsed.prices == ()
     assert any(
-        "No OpenAI pricing rows were parsed" in warning
-        for warning in parsed.warnings
+        "No OpenAI pricing rows were parsed" in warning for warning in parsed.warnings
     )
 
 
 def test_parse_zai_pricing_reads_markdown_tables() -> None:
-    text = '''
+    text = """
 ### Text Models
 
 | Model | Input | Cached Input | Cached Input Storage | Output |
@@ -93,7 +92,7 @@ def test_parse_zai_pricing_reads_markdown_tables() -> None:
 | Model | Input | Output |
 | --- | --- | --- |
 | GLM-5V | Free | $0.2 |
-'''
+"""
     parsed = parse_zai_pricing(text)
 
     assert len(parsed.prices) == 2
@@ -103,13 +102,13 @@ def test_parse_zai_pricing_reads_markdown_tables() -> None:
 
 
 def test_parse_zai_pricing_accepts_backslash_none_markers() -> None:
-    text = '''
+    text = """
 ### Vision Models
 
 | Model | Input | Cached Input | Cached Input Storage | Output |
 | --- | --- | --- | --- | --- |
 | GLM-OCR | $0.03 | \\\\ | \\\\ | $0.03 |
-'''
+"""
     parsed = parse_zai_pricing(text)
 
     assert len(parsed.prices) == 1
@@ -165,11 +164,11 @@ Claude Sonnet 4.5 (≤ 200K tokens)	$3.00	$15.00	$0.30	$3.75
 
 
 def test_parse_opencode_go_pricing_maps_cached_columns() -> None:
-    text = '''
+    text = """
 Model        Input    Output    Cached Read    Cached Write
 GLM 5.1      $1.40    $4.40     $0.26          -
 Big Pickle   Free     Free      Free           -
-'''
+"""
     parsed = parse_opencode_go_pricing(text, table="actual")
 
     assert parsed.table == "actual"
@@ -182,14 +181,14 @@ Big Pickle   Free     Free      Free           -
 
 
 def test_parse_openai_pricing_parses_multiple_context_operators() -> None:
-    text = '''
+    text = """
 TextTokenPricingTables tier="standard" rows={[
   ["GPT 5.5 (≤ 272K tokens)", 5, 0.5, 30],
   ["GPT 5.5 (<272K context length)", 4.9, 0.49, 29.5],
   ["GPT 5.5 (> 272,000 tokens)", 6, 0.6, 36],
   ["GPT 5.5 (>= 1M tokens)", 8, 0.8, 48],
 ]}
-'''.strip()
+""".strip()
     parsed = parse_openai_pricing(text, tier="standard")
 
     assert len(parsed.prices) == 4

@@ -196,7 +196,16 @@ output
 reasoning
 cache_read
 cache_write
-total = input + output + reasoning + cache_read + cache_write
+cache_output
+```
+
+Headline totals:
+
+```text
+total = input + output
+prompt_total = input + cache_read + cache_write
+output_total = output + cache_output
+accounting_total = input + output + reasoning + cache_read + cache_write + cache_output
 ```
 
 Preserve this shape in dataclasses, SQLite rows, JSON output, and human reports.
@@ -208,7 +217,10 @@ Preserve this shape in dataclasses, SQLite rows, JSON output, and human reports.
 - `reasoning` is reasoning/output reasoning tokens when the source exposes them.
 - `cache_read` is cached input reused by the provider/model.
 - `cache_write` is input written into cache.
-- `total` includes cache tokens because it is a usage total, not just billable fresh tokens.
+- `cache_output` is cached output tokens when exposed by the source.
+- `total` is the user-facing visible total: `input + output`.
+- `prompt_total` is prompt/context tokens: `input + cache_read + cache_write`.
+- `accounting_total` is the full sum of all token categories for internal use.
 - Do not collapse cache tokens into input just to simplify reporting.
 - Do not drop cache-only events.
 - Do not infer missing output or reasoning tokens from total unless the source contract explicitly supports that.

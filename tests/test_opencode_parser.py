@@ -35,7 +35,7 @@ def test_parse_valid_assistant_message(tmp_path) -> None:
     assert event.provider_id == "anthropic"
     assert event.model_id == "claude-sonnet-4"
     assert event.agent == "build"
-    assert event.tokens.total == 1850
+    assert event.tokens.total == 1500
     assert event.source_cost_usd == Decimal("0.05")
 
 
@@ -213,7 +213,7 @@ def test_list_opencode_sessions_aggregates_messages(tmp_path) -> None:
     assert len(summaries) == 1
     assert summaries[0].source_session_id == "ses-1"
     assert summaries[0].assistant_message_count == 2
-    assert summaries[0].tokens.total == 1865
+    assert summaries[0].tokens.total == 1503
 
 
 def test_parse_opencode_go_preserves_source_cost_and_cache_read(tmp_path) -> None:
