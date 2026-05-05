@@ -53,6 +53,25 @@ Example
    input_usd_per_1m = 0.25
    output_usd_per_1m = 2.0
 
+   [[pricing.virtual]]
+   provider = "openai"
+   model = "gpt-5.4"
+   context_min_tokens = 0
+   context_max_tokens = 272000
+   context_label = "<= 272K"
+   input_usd_per_1m = 2.5
+   cached_input_usd_per_1m = 0.25
+   output_usd_per_1m = 15.0
+
+   [[pricing.virtual]]
+   provider = "openai"
+   model = "gpt-5.4"
+   context_min_tokens = 272001
+   context_label = "> 272K"
+   input_usd_per_1m = 5.0
+   cached_input_usd_per_1m = 0.5
+   output_usd_per_1m = 22.5
+
 ``subscriptions.toml``:
 
 .. code-block:: toml
@@ -99,7 +118,11 @@ value, net savings, and break-even progress for the fixed billing period
 
 Effective pricing is loaded from ``prices/*.toml`` first and then ``prices.toml``
 last. This lets manual rows override generated provider rows when they share the
-same provider/model key.
+same provider/model/context-variant key.
+
+Context-tier matching uses ``context_min_tokens``/``context_max_tokens`` as
+inclusive bounds and evaluates tiers with prompt-like tokens:
+``input + cache_read + cache_write``.
 
 See ``README.md`` for the canonical CLI workflow and ``API.md`` for the public
 Python integration surface.

@@ -4,6 +4,8 @@ from decimal import Decimal
 from pathlib import Path
 from time import time
 
+import pytest
+
 from toktrail.config import (
     ActualCostRule,
     CostingConfig,
@@ -35,16 +37,24 @@ def make_price(
     model: str = "gpt-5-mini",
     input_usd_per_1m: float = 1.0,
     output_usd_per_1m: float = 2.0,
+    cached_input_usd_per_1m: float | None = None,
+    cache_write_usd_per_1m: float | None = None,
+    context_min_tokens: int | None = None,
+    context_max_tokens: int | None = None,
+    context_label: str | None = None,
 ) -> Price:
     return Price(
         provider=provider,
         model=model,
         aliases=(),
         input_usd_per_1m=input_usd_per_1m,
-        cached_input_usd_per_1m=None,
-        cache_write_usd_per_1m=None,
+        cached_input_usd_per_1m=cached_input_usd_per_1m,
+        cache_write_usd_per_1m=cache_write_usd_per_1m,
         output_usd_per_1m=output_usd_per_1m,
         reasoning_usd_per_1m=None,
+        context_min_tokens=context_min_tokens,
+        context_max_tokens=context_max_tokens,
+        context_label=context_label,
     )
 
 
@@ -242,7 +252,7 @@ def test_insert_usage_events_is_idempotent_and_aggregates_correctly(
     assert report.totals.actual_cost_usd == 0.75
     assert report.totals.virtual_cost_usd == 0.0
     assert report.totals.savings_usd == -0.75
-    assert report.totals.unpriced_count == 1
+    assert report.totals.unpriced_count == 2
     assert report.by_harness[0].total_tokens == 63
     assert report.by_harness[0].source_cost_usd == Decimal("0.75")
     assert report.by_harness[0].actual_cost_usd == 0.75
@@ -361,6 +371,67 @@ def test_summarize_usage_supports_unscoped_period_ranges(tmp_path: Path) -> None
     assert report.totals.source_cost_usd == first.source_cost_usd
 
 
+def test_summarize_usage_prices_context_tiers_per_event_not_aggregate(
+    tmp_path: Path,
+) -> None:
+    conn = connect(tmp_path / "toktrail.db")
+    migrate(conn)
+    try:
+        insert_usage_events(
+            conn,
+            None,
+            [
+                make_usage_event(
+                    dedup_suffix="ctx1",
+                    provider_id="openai",
+                    model_id="gpt-5.4",
+                    source_cost_usd=0.0,
+                    created_ms=1_000,
+                    tokens=TokenBreakdown(input=100_000),
+                ),
+                make_usage_event(
+                    dedup_suffix="ctx2",
+                    provider_id="openai",
+                    model_id="gpt-5.4",
+                    source_cost_usd=0.0,
+                    created_ms=2_000,
+                    tokens=TokenBreakdown(input=1_000, cache_read=272_000),
+                ),
+            ],
+        )
+        report = summarize_usage(
+            conn,
+            UsageReportFilter(),
+            costing_config=CostingConfig(
+                default_actual_mode="zero",
+                default_virtual_mode="pricing",
+                virtual_prices=(
+                    make_price(
+                        provider="openai",
+                        model="gpt-5.4",
+                        input_usd_per_1m=2.5,
+                        cached_input_usd_per_1m=0.25,
+                        output_usd_per_1m=15.0,
+                        context_min_tokens=0,
+                        context_max_tokens=272_000,
+                    ),
+                    make_price(
+                        provider="openai",
+                        model="gpt-5.4",
+                        input_usd_per_1m=5.0,
+                        cached_input_usd_per_1m=0.5,
+                        output_usd_per_1m=22.5,
+                        context_min_tokens=272_001,
+                    ),
+                ),
+            ),
+        )
+    finally:
+        conn.close()
+
+    assert float(report.totals.virtual_cost_usd) == pytest.approx(0.391)
+
+
 def test_summarize_usage_series_daily_buckets_and_breakdown(tmp_path: Path) -> None:
     conn = connect(tmp_path / "toktrail.db")
     migrate(conn)
@@ -402,6 +473,67 @@ def test_summarize_usage_series_daily_buckets_and_breakdown(tmp_path: Path) -> N
     assert report.totals.tokens.total == 35
     assert report.buckets[0].by_model[0].model_id == "gpt-5.1"
     assert report.buckets[1].by_model[0].model_id == "claude-sonnet-4"
+
+
+def test_summarize_usage_series_prices_context_tiers_per_event(tmp_path: Path) -> None:
+    conn = connect(tmp_path / "toktrail.db")
+    migrate(conn)
+    try:
+        insert_usage_events(
+            conn,
+            None,
+            [
+                make_usage_event(
+                    dedup_suffix="ser1",
+                    provider_id="openai",
+                    model_id="gpt-5.4",
+                    source_session_id="ses-ctx",
+                    source_cost_usd=0.0,
+                    created_ms=1_000,
+                    tokens=TokenBreakdown(input=100_000),
+                ),
+                make_usage_event(
+                    dedup_suffix="ser2",
+                    provider_id="openai",
+                    model_id="gpt-5.4",
+                    source_session_id="ses-ctx",
+                    source_cost_usd=0.0,
+                    created_ms=2_000,
+                    tokens=TokenBreakdown(input=1_000, cache_read=272_000),
+                ),
+            ],
+        )
+        report = summarize_usage_series(
+            conn,
+            UsageSeriesFilter(granularity="daily", since_ms=0, until_ms=10_000),
+            costing_config=CostingConfig(
+                default_actual_mode="zero",
+                default_virtual_mode="pricing",
+                virtual_prices=(
+                    make_price(
+                        provider="openai",
+                        model="gpt-5.4",
+                        input_usd_per_1m=2.5,
+                        cached_input_usd_per_1m=0.25,
+                        output_usd_per_1m=15.0,
+                        context_min_tokens=0,
+                        context_max_tokens=272_000,
+                    ),
+                    make_price(
+                        provider="openai",
+                        model="gpt-5.4",
+                        input_usd_per_1m=5.0,
+                        cached_input_usd_per_1m=0.5,
+                        output_usd_per_1m=22.5,
+                        context_min_tokens=272_001,
+                    ),
+                ),
+            ),
+        )
+    finally:
+        conn.close()
+
+    assert float(report.totals.costs.virtual_cost_usd) == pytest.approx(0.391)
 
 
 def test_summarize_usage_series_weekly_monthly_instances_project(
@@ -1661,6 +1793,69 @@ def test_summarize_usage_sessions_last_n_source_sessions(tmp_path: Path) -> None
         conn.close()
 
 
+def test_summarize_usage_sessions_prices_context_tiers_per_event(
+    tmp_path: Path,
+) -> None:
+    conn = connect(tmp_path / "toktrail.db")
+    migrate(conn)
+    try:
+        insert_usage_events(
+            conn,
+            None,
+            [
+                make_usage_event(
+                    dedup_suffix="sess1",
+                    provider_id="openai",
+                    model_id="gpt-5.4",
+                    source_session_id="ses-ctx",
+                    source_cost_usd=0.0,
+                    created_ms=1_000,
+                    tokens=TokenBreakdown(input=100_000),
+                ),
+                make_usage_event(
+                    dedup_suffix="sess2",
+                    provider_id="openai",
+                    model_id="gpt-5.4",
+                    source_session_id="ses-ctx",
+                    source_cost_usd=0.0,
+                    created_ms=2_000,
+                    tokens=TokenBreakdown(input=1_000, cache_read=272_000),
+                ),
+            ],
+        )
+        report = summarize_usage_sessions(
+            conn,
+            UsageSessionsFilter(limit=None),
+            costing_config=CostingConfig(
+                default_actual_mode="zero",
+                default_virtual_mode="pricing",
+                virtual_prices=(
+                    make_price(
+                        provider="openai",
+                        model="gpt-5.4",
+                        input_usd_per_1m=2.5,
+                        cached_input_usd_per_1m=0.25,
+                        output_usd_per_1m=15.0,
+                        context_min_tokens=0,
+                        context_max_tokens=272_000,
+                    ),
+                    make_price(
+                        provider="openai",
+                        model="gpt-5.4",
+                        input_usd_per_1m=5.0,
+                        cached_input_usd_per_1m=0.5,
+                        output_usd_per_1m=22.5,
+                        context_min_tokens=272_001,
+                    ),
+                ),
+            ),
+        )
+    finally:
+        conn.close()
+
+    assert float(report.totals.costs.virtual_cost_usd) == pytest.approx(0.391)
+
+
 def test_summarize_usage_sessions_filters(tmp_path: Path) -> None:
     conn = connect(tmp_path / "toktrail.db")
     migrate(conn)
@@ -1894,6 +2089,71 @@ def test_summarize_usage_runs_groups_by_run(tmp_path: Path) -> None:
     assert report.runs[1].message_count == 2
     assert report.runs[1].tokens.input == 15
     assert report.totals.tokens.input == 35
+
+
+def test_summarize_usage_runs_prices_context_tiers_per_event(tmp_path: Path) -> None:
+    from toktrail.db import summarize_usage_runs
+    from toktrail.reporting import UsageRunsFilter
+
+    conn = connect(tmp_path / "toktrail.db")
+    migrate(conn)
+    try:
+        run_id = create_tracking_session(conn, "run-context", started_at_ms=1_000)
+        insert_usage_events(
+            conn,
+            run_id,
+            [
+                make_usage_event(
+                    dedup_suffix="runctx1",
+                    provider_id="openai",
+                    model_id="gpt-5.4",
+                    source_cost_usd=0.0,
+                    created_ms=1_000,
+                    tokens=TokenBreakdown(input=100_000),
+                ),
+                make_usage_event(
+                    dedup_suffix="runctx2",
+                    provider_id="openai",
+                    model_id="gpt-5.4",
+                    source_cost_usd=0.0,
+                    created_ms=1_100,
+                    tokens=TokenBreakdown(input=1_000, cache_read=272_000),
+                ),
+            ],
+        )
+        end_tracking_session(conn, run_id, ended_at_ms=1_200)
+        report = summarize_usage_runs(
+            conn,
+            UsageRunsFilter(limit=None),
+            costing_config=CostingConfig(
+                default_actual_mode="zero",
+                default_virtual_mode="pricing",
+                virtual_prices=(
+                    make_price(
+                        provider="openai",
+                        model="gpt-5.4",
+                        input_usd_per_1m=2.5,
+                        cached_input_usd_per_1m=0.25,
+                        output_usd_per_1m=15.0,
+                        context_min_tokens=0,
+                        context_max_tokens=272_000,
+                    ),
+                    make_price(
+                        provider="openai",
+                        model="gpt-5.4",
+                        input_usd_per_1m=5.0,
+                        cached_input_usd_per_1m=0.5,
+                        output_usd_per_1m=22.5,
+                        context_min_tokens=272_001,
+                    ),
+                ),
+            ),
+        )
+    finally:
+        conn.close()
+
+    assert len(report.runs) == 1
+    assert float(report.runs[0].costs.virtual_cost_usd) == pytest.approx(0.391)
 
 
 def test_summarize_usage_runs_last_flag(tmp_path: Path) -> None:

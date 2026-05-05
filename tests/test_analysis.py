@@ -112,6 +112,7 @@ def test_session_cache_analysis_reports_per_call_rows(tmp_path: Path) -> None:
 
     report = session_cache_analysis(
         db_path=db_path,
+        config_path=tmp_path / "config.toml",
         harness="opencode",
         source_session_id="ses-cache",
         refresh=False,
@@ -122,6 +123,9 @@ def test_session_cache_analysis_reports_per_call_rows(tmp_path: Path) -> None:
     assert len(report.calls) == 2
     assert report.calls[0].cache_status == "hit"
     assert report.calls[1].cache_status == "miss"
+    assert report.calls[0].context_tokens == 150_000
+    assert report.calls[0].missing_price_kinds == ("virtual",)
+    assert report.totals.costs.unpriced_count == 2
     assert report.prompt_like_tokens == 300_000
 
 
@@ -203,6 +207,7 @@ def test_session_cache_analysis_estimates_source_loss_from_cluster_hit_median(
 
     assert report.estimated_source_cache_loss_usd == Decimal("0.17")
     assert report.clusters[0].estimated_source_loss_usd == Decimal("0.17")
+    assert report.clusters[0].call_ordinals == (1, 2)
 
 
 def test_session_cache_analysis_handles_cache_only_event(tmp_path: Path) -> None:
@@ -253,6 +258,37 @@ def test_session_cache_analysis_does_not_require_tracking_run(tmp_path: Path) ->
     )
 
     assert report.call_count == 1
+
+
+def test_session_cache_analysis_classifies_cache_write_only_as_warming(
+    tmp_path: Path,
+) -> None:
+    db_path = _new_state_db(tmp_path)
+    conn = connect(db_path)
+    try:
+        migrate(conn)
+        insert_usage_events(
+            conn,
+            None,
+            [
+                _event(
+                    "write",
+                    tokens=TokenBreakdown(input=1_000, cache_write=100),
+                )
+            ],
+        )
+    finally:
+        conn.close()
+
+    report = session_cache_analysis(
+        db_path=db_path,
+        harness="opencode",
+        source_session_id="ses-cache",
+        refresh=False,
+        use_active_run=False,
+    )
+
+    assert report.calls[0].cache_status == "warming"
 
 
 def test_session_cache_analysis_bounds_to_tracking_run_when_requested(

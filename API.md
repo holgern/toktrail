@@ -189,6 +189,14 @@ Report and source-summary APIs accept `config_path`. The runtime loader merges
 Provider identity is strict: when a usage event already has an explicit provider,
 toktrail does not fall back to inferred provider aliases from the model name.
 
+Pricing rows can include context-tier metadata
+(`context_min_tokens`, `context_max_tokens`, `context_label`,
+`context_basis="prompt_like"`). Tier resolution is per usage event using
+prompt-like tokens (`input + cache_read + cache_write`).
+
+`session_cache_analysis()` call rows expose context/tier selection metadata and
+missing price kinds through `CacheCallRow`.
+
 ## Session and import APIs
 
 ```python

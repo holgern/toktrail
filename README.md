@@ -230,6 +230,33 @@ toktrail pricing parse --provider openai --input openai-pricing.jsx --output -
 toktrail pricing parse --provider openai --input openai-pricing.jsx --output ~/.config/toktrail/prices/openai.toml
 ```
 
+Context-tier pricing is supported with multiple rows for the same
+`provider/model` using inclusive context ranges:
+
+```toml
+[[pricing.virtual]]
+provider = "openai"
+model = "gpt-5.4"
+context_min_tokens = 0
+context_max_tokens = 272000
+context_label = "<= 272K"
+input_usd_per_1m = 2.5
+cached_input_usd_per_1m = 0.25
+output_usd_per_1m = 15.0
+
+[[pricing.virtual]]
+provider = "openai"
+model = "gpt-5.4"
+context_min_tokens = 272001
+context_label = "> 272K"
+input_usd_per_1m = 5.0
+cached_input_usd_per_1m = 0.5
+output_usd_per_1m = 22.5
+```
+
+Tier selection uses prompt-like context tokens:
+`input + cache_read + cache_write`.
+
 `imports.sources.<harness>` accepts either a single path string or a list of
 paths. Use `toktrail refresh --harness <name> --source <path>` for one-off
 refreshes. The pre-release contract does not preserve harness-specific

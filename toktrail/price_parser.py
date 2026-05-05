@@ -102,7 +102,7 @@ def parse_openai_pricing(
 ) -> ParsedPriceDocument:
     warnings: list[str] = []
     prices: list[Price] = []
-    seen_keys: dict[tuple[str, str], tuple[int, str]] = {}
+    seen_keys: dict[tuple[str, str, int | None, int | None, str], int] = {}
 
     for panel_tier, rows in _extract_openai_tier_rows(text):
         if panel_tier.lower() != tier.lower():
@@ -111,7 +111,10 @@ def parse_openai_pricing(
             if not isinstance(raw_row, (list, tuple)) or len(raw_row) < 4:
                 continue
             raw_model = str(raw_row[0]).strip()
-            canonical = normalize_identity(_strip_parenthetical(raw_model) or raw_model)
+            canonical_model, context_min, context_max, context_label = (
+                _extract_context_from_model_label(raw_model)
+            )
+            canonical = normalize_identity(canonical_model)
             aliases = _build_aliases(raw_model)
             input_price = parse_price_value(raw_row[1])
             cached_input_price = parse_price_value(raw_row[2])
@@ -126,8 +129,11 @@ def parse_openai_pricing(
                 cached_input_usd_per_1m=cached_input_price,
                 output_usd_per_1m=output_price,
                 release_status=tier,
+                context_min_tokens=context_min,
+                context_max_tokens=context_max,
+                context_label=context_label,
             )
-            _upsert_context_variant_price(
+            _upsert_price_variant(
                 prices=prices,
                 seen_keys=seen_keys,
                 parsed=parsed,
@@ -137,7 +143,7 @@ def parse_openai_pricing(
                 warning_suffix=(
                     "normalizes to "
                     f"{parsed.provider}/{parsed.model} with different prices; "
-                    "skipped duplicate context-tier row."
+                    "skipped duplicate variant row."
                 ),
             )
 
@@ -267,16 +273,16 @@ def parse_opencode_go_pricing(
             for line in lines[header_idx:]
             if line.strip().startswith("|")
         ]
-        parsed = _parse_markdown_table(table_rows)
-        if not parsed:
+        parsed_rows = _parse_markdown_table(table_rows)
+        if not parsed_rows:
             return ParsedPriceDocument(
                 provider="opencode-go",
                 table=table,
                 prices=(),
                 warnings=("No parseable rows in opencode-go markdown table.",),
             )
-        header = [cell.strip().lower() for cell in parsed[0]]
-        data_rows = parsed[1:]
+        header = [cell.strip().lower() for cell in parsed_rows[0]]
+        data_rows = parsed_rows[1:]
         split_rows = [header, *data_rows]
     else:
         split_rows = [
@@ -301,7 +307,7 @@ def parse_opencode_go_pricing(
 
     prices: list[Price] = []
     warnings: list[str] = []
-    seen_keys: dict[tuple[str, str], tuple[int, str]] = {}
+    seen_keys: dict[tuple[str, str, int | None, int | None, str], int] = {}
     for row in split_rows[1:]:
         if max(model_idx, input_idx, output_idx) >= len(row):
             continue
@@ -322,8 +328,11 @@ def parse_opencode_go_pricing(
             if cached_write_idx is not None and cached_write_idx < len(row)
             else None
         )
-        canonical = normalize_identity(_strip_parenthetical(model_text) or model_text)
-        parsed = Price(
+        canonical_model, context_min, context_max, context_label = (
+            _extract_context_from_model_label(model_text)
+        )
+        canonical = normalize_identity(canonical_model)
+        parsed_price = Price(
             provider="opencode-go",
             model=canonical,
             aliases=_build_aliases(model_text),
@@ -331,16 +340,19 @@ def parse_opencode_go_pricing(
             cached_input_usd_per_1m=cached_read,
             cache_write_usd_per_1m=cached_write,
             output_usd_per_1m=output_price,
+            context_min_tokens=context_min,
+            context_max_tokens=context_max,
+            context_label=context_label,
         )
-        _upsert_context_variant_price(
+        _upsert_price_variant(
             prices=prices,
             seen_keys=seen_keys,
-            parsed=parsed,
+            parsed=parsed_price,
             raw_model=model_text,
             warnings=warnings,
             warning_prefix="opencode-go row",
             warning_suffix=(
-                f"normalizes to {parsed.provider}/{parsed.model} with different "
+                f"normalizes to {parsed_price.provider}/{parsed_price.model} with different "
                 "prices; skipped duplicate row."
             ),
         )
@@ -360,7 +372,7 @@ def parse_github_copilot_pricing(
 ) -> ParsedPriceDocument:
     prices: list[Price] = []
     warnings: list[str] = []
-    seen_keys: dict[tuple[str, str], tuple[int, str]] = {}
+    seen_keys: dict[tuple[str, str, int | None, int | None, str], int] = {}
     current_lookup: dict[str, int] | None = None
 
     for line in text.splitlines():
@@ -406,7 +418,10 @@ def parse_github_copilot_pricing(
         category_idx = current_lookup.get("category")
 
         model_label = _strip_trailing_footnote(model_text)
-        canonical = normalize_identity(_strip_parenthetical(model_label) or model_label)
+        canonical_model, context_min, context_max, context_label = (
+            _extract_context_from_model_label(model_label)
+        )
+        canonical = normalize_identity(canonical_model)
         aliases = _merge_aliases(
             _build_aliases(model_text),
             _build_aliases(model_label),
@@ -441,8 +456,11 @@ def parse_github_copilot_pricing(
             output_usd_per_1m=output_price,
             release_status=release_status,
             category=category,
+            context_min_tokens=context_min,
+            context_max_tokens=context_max,
+            context_label=context_label,
         )
-        _upsert_context_variant_price(
+        _upsert_price_variant(
             prices=prices,
             seen_keys=seen_keys,
             parsed=parsed,
@@ -485,12 +503,31 @@ def render_prices_toml(
         ("virtual", virtual_prices),
         ("actual", actual_prices),
     ):
-        for price in sorted(prices, key=lambda item: (item.provider, item.model)):
+        for price in sorted(
+            prices,
+            key=lambda item: (
+                item.provider,
+                item.model,
+                item.context_min_tokens if item.context_min_tokens is not None else 0,
+                item.context_max_tokens
+                if item.context_max_tokens is not None
+                else 2**63 - 1,
+                item.context_basis,
+            ),
+        ):
             lines.append(f"[[pricing.{table_name}]]")
             lines.append(f"provider = {_toml_quote(price.provider)}")
             lines.append(f"model = {_toml_quote(price.model)}")
             if price.aliases:
                 lines.append(f"aliases = {_render_string_array(price.aliases)}")
+            if price.context_min_tokens is not None:
+                lines.append(f"context_min_tokens = {price.context_min_tokens}")
+            if price.context_max_tokens is not None:
+                lines.append(f"context_max_tokens = {price.context_max_tokens}")
+            if price.context_label is not None:
+                lines.append(f"context_label = {_toml_quote(price.context_label)}")
+            if not _is_default_context_basis(price.context_basis):
+                lines.append(f"context_basis = {_toml_quote(price.context_basis)}")
             lines.append(f"input_usd_per_1m = {_toml_float(price.input_usd_per_1m)}")
             if price.cached_input_usd_per_1m is not None:
                 lines.append(
@@ -520,6 +557,10 @@ def render_prices_toml(
             lines.append("")
 
     return "\n".join(lines).rstrip() + "\n"
+
+
+def _is_default_context_basis(value: str) -> bool:
+    return value == "prompt_like"
 
 
 def merge_prices_document(
@@ -559,12 +600,24 @@ def merge_prices_document(
         ]
 
     replacements = {
-        (normalize_identity(price.provider), normalize_identity(price.model)): price
+        (
+            normalize_identity(price.provider),
+            normalize_identity(price.model),
+            price.context_min_tokens,
+            price.context_max_tokens,
+            price.context_basis,
+        ): price
         for price in parsed.prices
     }
     kept: list[Price] = []
     for price in target:
-        key = (normalize_identity(price.provider), normalize_identity(price.model))
+        key = (
+            normalize_identity(price.provider),
+            normalize_identity(price.model),
+            price.context_min_tokens,
+            price.context_max_tokens,
+            price.context_basis,
+        )
         replacement = replacements.pop(key, None)
         kept.append(replacement if replacement is not None else price)
     kept.extend(replacements.values())
@@ -621,7 +674,7 @@ def _parse_openai_markdown_prices(
 ) -> tuple[list[Price], list[str]]:
     warnings: list[str] = []
     prices: list[Price] = []
-    seen_keys: dict[tuple[str, str], tuple[int, str]] = {}
+    seen_keys: dict[tuple[str, str, int | None, int | None, str], int] = {}
     cached_header_seen = False
     model_headers_seen = False
     input_headers_seen = False
@@ -666,9 +719,10 @@ def _parse_openai_markdown_prices(
                 if reasoning_idx is not None and reasoning_idx < len(raw_row)
                 else None
             )
-            canonical = normalize_identity(
-                _strip_parenthetical(model_text) or model_text
+            canonical_model, context_min, context_max, context_label = (
+                _extract_context_from_model_label(model_text)
             )
+            canonical = normalize_identity(canonical_model)
             parsed = Price(
                 provider="openai",
                 model=canonical,
@@ -678,8 +732,11 @@ def _parse_openai_markdown_prices(
                 output_usd_per_1m=output_price,
                 reasoning_usd_per_1m=reasoning,
                 release_status=tier,
+                context_min_tokens=context_min,
+                context_max_tokens=context_max,
+                context_label=context_label,
             )
-            _upsert_context_variant_price(
+            _upsert_price_variant(
                 prices=prices,
                 seen_keys=seen_keys,
                 parsed=parsed,
@@ -864,41 +921,42 @@ def _build_aliases(raw_model: str) -> tuple[str, ...]:
     return tuple(aliases)
 
 
-def _upsert_context_variant_price(
+def _upsert_price_variant(
     *,
     prices: list[Price],
-    seen_keys: dict[tuple[str, str], tuple[int, str]],
+    seen_keys: dict[tuple[str, str, int | None, int | None, str], int],
     parsed: Price,
     raw_model: str,
     warnings: list[str],
     warning_prefix: str,
     warning_suffix: str,
 ) -> None:
-    key = (parsed.provider, parsed.model)
-    seen = seen_keys.get(key)
-    if seen is None:
-        seen_keys[key] = (len(prices), raw_model)
+    key = _price_variant_key(parsed)
+    existing_index = seen_keys.get(key)
+    if existing_index is None:
+        seen_keys[key] = len(prices)
         prices.append(parsed)
         return
 
-    index, existing_raw_model = seen
-    existing = prices[index]
+    existing = prices[existing_index]
     merged_aliases = _merge_aliases(existing.aliases, parsed.aliases)
-
     if existing == parsed:
-        prices[index] = replace(existing, aliases=merged_aliases)
+        prices[existing_index] = replace(existing, aliases=merged_aliases)
         return
-
-    decision = _context_variant_decision(existing_raw_model, raw_model)
-    if decision == "replace":
-        prices[index] = replace(parsed, aliases=merged_aliases)
-        seen_keys[key] = (index, raw_model)
-        return
-    if decision == "keep":
-        prices[index] = replace(existing, aliases=merged_aliases)
-        return
-
     warnings.append(f"{warning_prefix} {raw_model!r} {warning_suffix}")
+    prices[existing_index] = replace(existing, aliases=merged_aliases)
+
+
+def _price_variant_key(
+    price: Price,
+) -> tuple[str, str, int | None, int | None, str]:
+    return (
+        normalize_identity(price.provider),
+        normalize_identity(price.model),
+        price.context_min_tokens,
+        price.context_max_tokens,
+        price.context_basis,
+    )
 
 
 def _merge_aliases(*alias_groups: Sequence[str]) -> tuple[str, ...]:
@@ -910,30 +968,82 @@ def _merge_aliases(*alias_groups: Sequence[str]) -> tuple[str, ...]:
     return tuple(merged)
 
 
-def _context_variant_decision(
-    existing_label: str,
-    candidate_label: str,
-) -> Literal["keep", "replace", "conflict"]:
-    existing_rank = _context_variant_rank(existing_label)
-    candidate_rank = _context_variant_rank(candidate_label)
-    if candidate_rank < existing_rank:
-        return "replace"
-    if candidate_rank > existing_rank:
-        return "keep"
-    return "conflict"
+_CONTEXT_RE = re.compile(
+    r"""
+    (?P<op><=|≤|<|>=|≥|>)
+    \s*
+    (?P<num>\d+(?:[.,]\d+)?)
+    \s*
+    (?P<unit>k|m|tokens?|context\s+length)?
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
 
 
-def _context_variant_rank(value: str) -> int:
-    text = value.lower()
-    if re.search(r"(?:\(|\b)(?:<=|<|≤)\s*\d", text):
-        return 0
-    if "short context" in text:
-        return 0
-    if re.search(r"(?:\(|\b)(?:>=|>|≥)\s*\d", text):
-        return 2
-    if "long context" in text:
-        return 2
-    return 1
+def _extract_context_from_model_label(
+    value: str,
+) -> tuple[str, int | None, int | None, str | None]:
+    model_text = value.strip()
+    context_min: int | None = None
+    context_max: int | None = None
+    context_label: str | None = None
+
+    parenthetical_parts = re.findall(r"\(([^)]*)\)", model_text)
+    for fragment in parenthetical_parts:
+        parsed = _parse_context_fragment(fragment)
+        if parsed is None:
+            continue
+        context_min, context_max, context_label = parsed
+        break
+
+    if context_label is None:
+        parsed = _parse_context_fragment(model_text)
+        if parsed is not None:
+            context_min, context_max, context_label = parsed
+
+    canonical = _strip_parenthetical(model_text) or model_text
+    return canonical, context_min, context_max, context_label
+
+
+def _parse_context_fragment(
+    value: str,
+) -> tuple[int | None, int | None, str | None] | None:
+    text = value.strip()
+    if not text:
+        return None
+
+    lowered = text.lower()
+    match = _CONTEXT_RE.search(text)
+    if match is None:
+        if "short context" in lowered:
+            return None, None, "short context"
+        if "long context" in lowered:
+            return None, None, "long context"
+        return None
+
+    op = match.group("op")
+    numeric = _parse_scaled_token_value(match.group("num"), match.group("unit"))
+    context_label = text
+    if op in {"<=", "≤"}:
+        return 0, numeric, context_label
+    if op == "<":
+        return 0, max(0, numeric - 1), context_label
+    if op == ">":
+        return numeric + 1, None, context_label
+    if op in {">=", "≥"}:
+        return numeric, None, context_label
+    return None
+
+
+def _parse_scaled_token_value(num_text: str, unit_text: str | None) -> int:
+    normalized = num_text.replace(",", "").strip()
+    value = Decimal(normalized)
+    unit = (unit_text or "").strip().lower()
+    if unit == "k":
+        value *= Decimal(1_000)
+    elif unit == "m":
+        value *= Decimal(1_000_000)
+    return int(value)
 
 
 def _strip_trailing_footnote(value: str) -> str:

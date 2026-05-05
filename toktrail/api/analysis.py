@@ -44,7 +44,7 @@ def session_cache_analysis(
     last: bool = False,
     source_path: Path | None = None,
     refresh: bool = True,
-    use_active_run: bool = True,
+    use_active_run: bool = False,
     cluster_tolerance: float = 0.05,
     include_calls: bool = True,
 ) -> SessionCacheAnalysisReport:
@@ -95,7 +95,7 @@ def session_cache_analysis(
                 source_cost_usd=analysis.source_cost_usd,
                 actual_cost_usd=analysis.actual_cost_usd,
                 virtual_cost_usd=analysis.virtual_cost_usd,
-                unpriced_count=0,
+                unpriced_count=analysis.unpriced_count,
             ),
             message_count=analysis.call_count,
         ),
@@ -299,10 +299,16 @@ def _to_public_call(value: CacheCallAnalysis) -> CacheCallRow:
         virtual_cost_usd=value.virtual_cost_usd,
         virtual_uncached_cost_usd=value.virtual_uncached_cost_usd,
         virtual_cache_savings_usd=value.virtual_cache_savings_usd,
+        missing_price_kinds=value.missing_price_kinds,
+        context_tokens=value.context_tokens,
+        actual_price_context_label=value.actual_price_context_label,
+        virtual_price_context_label=value.virtual_price_context_label,
         prompt_like_tokens=value.prompt_like_tokens,
         cache_reuse_ratio=value.cache_reuse_ratio,
         cache_presence_ratio=value.cache_presence_ratio,
         source_cost_per_1m_prompt_like=value.source_cost_per_1m_prompt_like,
+        source_cost_per_1m_total_tokens=value.source_cost_per_1m_total_tokens,
+        virtual_cost_per_1m_prompt_like=value.virtual_cost_per_1m_prompt_like,
         cache_status=value.cache_status,
         flags=value.flags,
     )
@@ -321,6 +327,7 @@ def _to_public_cluster(value: CacheClusterAnalysis) -> CacheClusterRow:
         median_hit_source_cost_usd=value.median_hit_source_cost_usd,
         median_miss_source_cost_usd=value.median_miss_source_cost_usd,
         estimated_source_loss_usd=value.estimated_source_loss_usd,
+        call_ordinals=value.call_ordinals,
     )
 
 

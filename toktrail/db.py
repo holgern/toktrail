@@ -828,43 +828,7 @@ def summarize_usage(
     simulation_targets: tuple[SimulationTarget, ...] = (),
 ) -> RunReport:
     filters, session = _apply_tracking_session_time_window(conn, filters)
-    source_clause, where_clause, params = _usage_report_query_parts(filters)
-    group_by_columns = ["ue.harness", "ue.provider_id", "ue.model_id"]
-    if filters.split_thinking:
-        group_by_columns.append("ue.thinking_level")
-    group_by_columns.append("ue.agent")
-    thinking_select = (
-        "ue.thinking_level AS thinking_level"
-        if filters.split_thinking
-        else "NULL AS thinking_level"
-    )
-    atom_rows = conn.execute(
-        """
-        SELECT
-            ue.harness,
-            ue.provider_id,
-            ue.model_id,
-            """
-        + thinking_select
-        + """
-            ,
-            ue.agent AS agent,
-            COUNT(*) AS message_count,
-            COALESCE(SUM(ue.input_tokens), 0) AS input_tokens,
-            COALESCE(SUM(ue.output_tokens), 0) AS output_tokens,
-            COALESCE(SUM(ue.reasoning_tokens), 0) AS reasoning_tokens,
-            COALESCE(SUM(ue.cache_read_tokens), 0) AS cache_read_tokens,
-            COALESCE(SUM(ue.cache_write_tokens), 0) AS cache_write_tokens,
-            COALESCE(SUM(ue.cache_output_tokens), 0) AS cache_output_tokens,
-            COALESCE(DECIMAL_SUM(ue.source_cost_usd), '0') AS source_cost_usd
-        """
-        + source_clause
-        + where_clause
-        + """
-        GROUP BY """
-        + ", ".join(group_by_columns),
-        params,
-    ).fetchall()
+    events = list_usage_events(conn, filters, order="created")
 
     config = costing_config or default_costing_config()
     totals_tokens = TokenBreakdown()
@@ -877,38 +841,37 @@ def summarize_usage(
         tuple[str, str, str, str | None, tuple[str, ...]], _UnconfiguredBucket
     ] = {}
 
-    for row in atom_rows:
+    for event in events:
         atom = UsageCostAtom(
-            harness=str(row["harness"]),
-            provider_id=str(row["provider_id"]),
-            model_id=str(row["model_id"]),
-            thinking_level=(
-                str(row["thinking_level"])
-                if row["thinking_level"] is not None
-                else None
-            ),
-            agent=row["agent"],
-            message_count=_required_int(row["message_count"]),
-            tokens=_row_tokens(row),
-            source_cost_usd=_required_decimal(row["source_cost_usd"]),
+            harness=event.harness,
+            provider_id=event.provider_id,
+            model_id=event.model_id,
+            thinking_level=event.thinking_level if filters.split_thinking else None,
+            agent=event.agent,
+            message_count=1,
+            tokens=event.tokens,
+            source_cost_usd=event.source_cost_usd,
         )
         resolution = resolve_price_resolution(
             harness=atom.harness,
             provider_id=atom.provider_id,
             model_id=atom.model_id,
             config=config,
+            tokens=atom.tokens,
         )
         breakdown = atom.compute_costs(config)
         totals_tokens = _add_tokens(totals_tokens, atom.tokens)
         totals_costs = _add_cost_breakdown(totals_costs, breakdown)
 
-        by_provider.setdefault(atom.provider_id, _ReportBucket()).add(atom, config)
-        by_harness.setdefault(atom.harness, _ReportBucket()).add(atom, config)
+        by_provider.setdefault(atom.provider_id, _ReportBucket()).add(atom, breakdown)
+        by_harness.setdefault(atom.harness, _ReportBucket()).add(atom, breakdown)
         by_model.setdefault(
             (atom.provider_id, atom.model_id, atom.thinking_level),
             _ReportBucket(),
-        ).add(atom, config)
-        by_agent.setdefault(atom.agent or "unknown", _ReportBucket()).add(atom, config)
+        ).add(atom, breakdown)
+        by_agent.setdefault(atom.agent or "unknown", _ReportBucket()).add(
+            atom, breakdown
+        )
         if resolution.missing_kinds:
             unconfigured.setdefault(
                 (
@@ -1358,50 +1321,7 @@ def summarize_usage_series(
         conn,
         filters.to_usage_report_filter(),
     )
-    source_clause, where_clause, params = _usage_report_query_parts(usage_filters)
-    thinking_select = (
-        "ue.thinking_level AS thinking_level"
-        if filters.split_thinking
-        else "NULL AS thinking_level"
-    )
-    atom_rows = conn.execute(
-        """
-        SELECT
-            ue.created_ms,
-            ue.harness,
-            ue.source_session_id,
-            ue.provider_id,
-            ue.model_id,
-        """
-        + thinking_select
-        + """
-            ,
-            ue.agent AS agent,
-            COUNT(*) AS message_count,
-            COALESCE(SUM(ue.input_tokens), 0) AS input_tokens,
-            COALESCE(SUM(ue.output_tokens), 0) AS output_tokens,
-            COALESCE(SUM(ue.reasoning_tokens), 0) AS reasoning_tokens,
-            COALESCE(SUM(ue.cache_read_tokens), 0) AS cache_read_tokens,
-            COALESCE(SUM(ue.cache_write_tokens), 0) AS cache_write_tokens,
-            COALESCE(SUM(ue.cache_output_tokens), 0) AS cache_output_tokens,
-            COALESCE(DECIMAL_SUM(ue.source_cost_usd), '0') AS source_cost_usd
-        """
-        + source_clause
-        + where_clause
-        + """
-        GROUP BY
-            ue.created_ms,
-            ue.harness,
-            ue.source_session_id,
-            ue.provider_id,
-            ue.model_id,
-        """
-        + ("ue.thinking_level," if filters.split_thinking else "")
-        + """
-            ue.agent
-        """,
-        params,
-    ).fetchall()
+    events = list_usage_events(conn, usage_filters, order="created")
 
     config = costing_config or default_costing_config()
 
@@ -1409,10 +1329,10 @@ def summarize_usage_series(
     model_bucket_data: dict[tuple[str, str, str, str | None], _SeriesModelAccum] = {}
     instance_data: dict[str, _SeriesInstanceAccum] = {}
 
-    for row in atom_rows:
-        created_ms = _required_int(row["created_ms"])
-        harness = str(row["harness"])
-        source_session_id = str(row["source_session_id"])
+    for event in events:
+        created_ms = event.created_ms
+        harness = event.harness
+        source_session_id = event.source_session_id
 
         bucket = bucket_for_timestamp(
             created_ms,
@@ -1423,17 +1343,13 @@ def summarize_usage_series(
 
         atom = UsageCostAtom(
             harness=harness,
-            provider_id=str(row["provider_id"]),
-            model_id=str(row["model_id"]),
-            thinking_level=(
-                str(row["thinking_level"])
-                if row["thinking_level"] is not None
-                else None
-            ),
-            agent=row["agent"],
-            message_count=_required_int(row["message_count"]),
-            tokens=_row_tokens(row),
-            source_cost_usd=_required_decimal(row["source_cost_usd"]),
+            provider_id=event.provider_id,
+            model_id=event.model_id,
+            thinking_level=event.thinking_level if filters.split_thinking else None,
+            agent=event.agent,
+            message_count=1,
+            tokens=event.tokens,
+            source_cost_usd=event.source_cost_usd,
         )
         breakdown = atom.compute_costs(config)
         model_key_str = f"{atom.provider_id}/{atom.model_id}"
@@ -1577,80 +1493,35 @@ def summarize_usage_sessions(
         conn,
         filters.to_usage_report_filter(),
     )
-    source_clause, where_clause, params = _usage_report_query_parts(usage_filters)
-    thinking_select = (
-        "ue.thinking_level AS thinking_level"
-        if filters.split_thinking
-        else "NULL AS thinking_level"
-    )
-    atom_rows = conn.execute(
-        """
-        SELECT
-            ue.harness,
-            ue.source_session_id,
-            ue.provider_id,
-            ue.model_id,
-        """
-        + thinking_select
-        + """
-            ,
-            ue.agent AS agent,
-            MIN(ue.created_ms) AS first_ms,
-            MAX(COALESCE(ue.completed_ms, ue.created_ms)) AS last_ms,
-            COUNT(*) AS message_count,
-            COALESCE(SUM(ue.input_tokens), 0) AS input_tokens,
-            COALESCE(SUM(ue.output_tokens), 0) AS output_tokens,
-            COALESCE(SUM(ue.reasoning_tokens), 0) AS reasoning_tokens,
-            COALESCE(SUM(ue.cache_read_tokens), 0) AS cache_read_tokens,
-            COALESCE(SUM(ue.cache_write_tokens), 0) AS cache_write_tokens,
-            COALESCE(SUM(ue.cache_output_tokens), 0) AS cache_output_tokens,
-            COALESCE(DECIMAL_SUM(ue.source_cost_usd), '0') AS source_cost_usd
-        """
-        + source_clause
-        + where_clause
-        + """
-        GROUP BY
-            ue.harness,
-            ue.source_session_id,
-            ue.provider_id,
-            ue.model_id,
-        """
-        + ("ue.thinking_level," if filters.split_thinking else "")
-        + """
-            ue.agent
-        """,
-        params,
-    ).fetchall()
+    events = list_usage_events(conn, usage_filters, order="created")
 
     config = costing_config or default_costing_config()
 
     # Per-session aggregation keyed by (harness, source_session_id)
     session_atoms: dict[tuple[str, str], list[_SessionAtom]] = {}
 
-    for row in atom_rows:
-        harness = str(row["harness"])
-        source_session_id = str(row["source_session_id"])
+    for event in events:
+        harness = event.harness
+        source_session_id = event.source_session_id
         key = (harness, source_session_id)
 
         atom = UsageCostAtom(
             harness=harness,
-            provider_id=str(row["provider_id"]),
-            model_id=str(row["model_id"]),
-            thinking_level=(
-                str(row["thinking_level"])
-                if row["thinking_level"] is not None
-                else None
-            ),
-            agent=row["agent"],
-            message_count=_required_int(row["message_count"]),
-            tokens=_row_tokens(row),
-            source_cost_usd=_required_decimal(row["source_cost_usd"]),
+            provider_id=event.provider_id,
+            model_id=event.model_id,
+            thinking_level=event.thinking_level if filters.split_thinking else None,
+            agent=event.agent,
+            message_count=1,
+            tokens=event.tokens,
+            source_cost_usd=event.source_cost_usd,
         )
         cost_breakdown = atom.compute_costs(config)
         session_atoms.setdefault(key, []).append(
             _SessionAtom(
-                first_ms=_required_int(row["first_ms"]),
-                last_ms=_required_int(row["last_ms"]),
+                first_ms=event.created_ms,
+                last_ms=event.completed_ms
+                if event.completed_ms is not None
+                else event.created_ms,
                 atom=atom,
                 breakdown=cost_breakdown,
             )
@@ -1979,10 +1850,10 @@ class _ReportBucket:
     tokens: TokenBreakdown = field(default_factory=TokenBreakdown)
     costs: CostTotals = field(default_factory=CostTotals)
 
-    def add(self, atom: UsageCostAtom, config: CostingConfig) -> None:
+    def add(self, atom: UsageCostAtom, breakdown: CostBreakdown) -> None:
         self.message_count += atom.message_count
         self.tokens = _add_tokens(self.tokens, atom.tokens)
-        self.costs = _add_cost_breakdown(self.costs, atom.compute_costs(config))
+        self.costs = _add_cost_breakdown(self.costs, breakdown)
 
 
 @dataclass
@@ -2262,32 +2133,22 @@ def summarize_usage_runs(
         + """
             ,
             ue.agent AS agent,
-            COUNT(*) AS message_count,
-            COALESCE(SUM(ue.input_tokens), 0) AS input_tokens,
-            COALESCE(SUM(ue.output_tokens), 0) AS output_tokens,
-            COALESCE(SUM(ue.reasoning_tokens), 0) AS reasoning_tokens,
-            COALESCE(SUM(ue.cache_read_tokens), 0) AS cache_read_tokens,
-            COALESCE(SUM(ue.cache_write_tokens), 0) AS cache_write_tokens,
-            COALESCE(SUM(ue.cache_output_tokens), 0) AS cache_output_tokens,
-            COALESCE(DECIMAL_SUM(ue.source_cost_usd), '0') AS source_cost_usd
+            ue.created_ms,
+            ue.completed_ms,
+            ue.input_tokens,
+            ue.output_tokens,
+            ue.reasoning_tokens,
+            ue.cache_read_tokens,
+            ue.cache_write_tokens,
+            ue.cache_output_tokens,
+            ue.source_cost_usd
         FROM usage_events AS ue
         JOIN run_events AS re ON re.usage_event_id = ue.id
         JOIN runs AS r ON r.id = re.tracking_session_id
         """
         + where_clause
         + """
-        GROUP BY
-            r.id,
-            r.name,
-            r.started_at_ms,
-            r.ended_at_ms,
-            ue.harness,
-            ue.provider_id,
-            ue.model_id,
-        """
-        + ("ue.thinking_level," if filters.split_thinking else "")
-        + """
-            ue.agent
+        ORDER BY r.started_at_ms DESC, r.id DESC, ue.created_ms ASC, ue.id ASC
         """,
         params,
     ).fetchall()
@@ -2308,7 +2169,7 @@ def summarize_usage_runs(
                 else None
             ),
             agent=row["agent"],
-            message_count=_required_int(row["message_count"]),
+            message_count=1,
             tokens=_row_tokens(row),
             source_cost_usd=_required_decimal(row["source_cost_usd"]),
         )

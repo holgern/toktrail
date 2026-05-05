@@ -2750,7 +2750,7 @@ def analyze_session(
             "--active-run/--all-runs",
             help="When enabled, constrain state analysis to the active run if present.",
         ),
-    ] = True,
+    ] = False,
     cluster_tolerance: Annotated[
         float,
         typer.Option(
@@ -4222,6 +4222,10 @@ def _price_rows(config: CostingConfig, table: str) -> list[dict[str, object]]:
                         if price.reasoning_usd_per_1m is not None
                         else price.output_usd_per_1m
                     ),
+                    "context_min_tokens": price.context_min_tokens,
+                    "context_max_tokens": price.context_max_tokens,
+                    "context_label": price.context_label,
+                    "context_basis": price.context_basis,
                     "category": price.category,
                     "release_status": price.release_status,
                 }
@@ -4404,6 +4408,7 @@ def _print_price_table(
         "table": "table",
         "provider": "provider",
         "model": "model",
+        "context": "context",
         "aliases": "aliases",
         "input": "input",
         "cached_input": "cached_input",
@@ -4418,6 +4423,7 @@ def _print_price_table(
             "table": str(row["table"]),
             "provider": str(row["provider"]),
             "model": str(row["model"]),
+            "context": _format_price_context(row),
             "aliases": ", ".join(_aliases_from_row(row)),
             "input": _format_price(_as_float_or_none(row["input_usd_per_1m"])),
             "cached_input": _format_price(
@@ -4437,7 +4443,7 @@ def _print_price_table(
         }
         for row in rows
     ]
-    columns = ["table", "provider", "model"]
+    columns = ["table", "provider", "model", "context"]
     if aliases:
         columns.append("aliases")
     columns.extend(
@@ -4452,6 +4458,33 @@ def _print_price_table(
         ]
     )
     _print_table(payload_rows, columns, headers, rich_output=rich_output)
+
+
+def _format_price_context(row: dict[str, object]) -> str:
+    label = row.get("context_label")
+    if isinstance(label, str) and label.strip():
+        return label.strip()
+    min_tokens = row.get("context_min_tokens")
+    max_tokens = row.get("context_max_tokens")
+    minimum = (
+        min_tokens
+        if isinstance(min_tokens, int) and not isinstance(min_tokens, bool)
+        else None
+    )
+    maximum = (
+        max_tokens
+        if isinstance(max_tokens, int) and not isinstance(max_tokens, bool)
+        else None
+    )
+    if minimum is None and maximum is None:
+        return "-"
+    if minimum is None:
+        return f"<= {_format_int(maximum)}" if maximum is not None else "-"
+    if maximum is None:
+        if minimum > 0:
+            return f"> {_format_int(minimum - 1)}"
+        return f">= {_format_int(minimum)}"
+    return f"{_format_int(minimum)}..{_format_int(maximum)}"
 
 
 def _as_float_or_none(value: object) -> float | None:
@@ -4501,6 +4534,10 @@ def _print_session_cache_analysis_report(
         "estimated source cache loss: "
         f"{_format_cost_precise(report.estimated_source_cache_loss_usd)}"
     )
+    if report.totals.costs.unpriced_count > 0:
+        typer.echo(
+            f"pricing: {report.totals.costs.unpriced_count} unpriced calls (virtual)"
+        )
     if report.warnings:
         typer.echo(f"warnings: {', '.join(report.warnings)}")
 
@@ -4512,12 +4549,19 @@ def _print_session_cache_analysis_report(
                 "n": str(row.ordinal),
                 "time": format_epoch_ms_compact(row.created_ms, utc=utc),
                 "model": row.model_id,
+                "context": _format_int(row.context_tokens),
+                "tier": row.virtual_price_context_label or "-",
                 "prompt": _format_int(row.prompt_like_tokens),
                 "cache_r": _format_int(row.tokens.cache_read),
                 "cache%": _format_ratio_percent(row.cache_reuse_ratio),
                 "out": _format_int(row.tokens.output),
                 "source": _format_cost_precise(row.source_cost_usd),
-                "eff_1m": _format_cost_or_dash(row.source_cost_per_1m_prompt_like),
+                "virtual": _format_cost_precise(row.virtual_cost_usd),
+                "uncached": _format_cost_precise(row.virtual_uncached_cost_usd),
+                "save": _format_cost_precise(row.virtual_cache_savings_usd),
+                "src_1m_prompt": _format_cost_or_dash(
+                    row.source_cost_per_1m_prompt_like
+                ),
                 "status": row.cache_status,
                 "flags": ",".join(row.flags),
             }
@@ -4529,12 +4573,17 @@ def _print_session_cache_analysis_report(
                 "n",
                 "time",
                 "model",
+                "context",
+                "tier",
                 "prompt",
                 "cache_r",
                 "cache%",
                 "out",
                 "source",
-                "eff_1m",
+                "virtual",
+                "uncached",
+                "save",
+                "src_1m_prompt",
                 "status",
                 "flags",
             ],
@@ -4542,12 +4591,17 @@ def _print_session_cache_analysis_report(
                 "n": "#",
                 "time": "time",
                 "model": "model",
+                "context": "context",
+                "tier": "tier",
                 "prompt": "prompt",
                 "cache_r": "cache_r",
                 "cache%": "cache%",
                 "out": "out",
                 "source": "source",
-                "eff_1m": "eff$/1M",
+                "virtual": "virtual",
+                "uncached": "uncached",
+                "save": "save",
+                "src_1m_prompt": "src$/1M prompt",
                 "status": "status",
                 "flags": "flags",
             },
@@ -4571,6 +4625,7 @@ def _print_session_cache_analysis_report(
                 "hit_median": _format_cost_or_dash(row.median_hit_source_cost_usd),
                 "miss_median": _format_cost_or_dash(row.median_miss_source_cost_usd),
                 "loss": _format_cost_precise(row.estimated_source_loss_usd),
+                "ordinals": ",".join(str(value) for value in row.call_ordinals),
             }
             for row in report.clusters
         ]
@@ -4586,6 +4641,7 @@ def _print_session_cache_analysis_report(
                 "hit_median",
                 "miss_median",
                 "loss",
+                "ordinals",
             ],
             {
                 "model": "model",
@@ -4597,6 +4653,7 @@ def _print_session_cache_analysis_report(
                 "hit_median": "hit median",
                 "miss_median": "miss median",
                 "loss": "est. loss",
+                "ordinals": "call #",
             },
             rich_output=rich_output,
         )

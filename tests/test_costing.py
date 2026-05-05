@@ -27,6 +27,9 @@ def make_price(
     cached_output_usd_per_1m: float | None = None,
     output_usd_per_1m: float = 2.0,
     reasoning_usd_per_1m: float | None = None,
+    context_min_tokens: int | None = None,
+    context_max_tokens: int | None = None,
+    context_label: str | None = None,
 ) -> Price:
     return Price(
         provider=provider,
@@ -38,6 +41,9 @@ def make_price(
         cached_output_usd_per_1m=cached_output_usd_per_1m,
         output_usd_per_1m=output_usd_per_1m,
         reasoning_usd_per_1m=reasoning_usd_per_1m,
+        context_min_tokens=context_min_tokens,
+        context_max_tokens=context_max_tokens,
+        context_label=context_label,
     )
 
 
@@ -146,6 +152,120 @@ def test_resolve_price_keeps_explicit_provider_identity_distinct() -> None:
     price = make_price(provider="openai", model="gpt-5.4")
 
     assert resolve_price("openai-codex", "gpt-5.4", [price]) is None
+
+
+def test_resolve_price_selects_context_tier_from_prompt_like_context() -> None:
+    short = make_price(
+        model="gpt-5.4",
+        input_usd_per_1m=2.5,
+        output_usd_per_1m=15.0,
+        context_min_tokens=0,
+        context_max_tokens=272_000,
+        context_label="<= 272K",
+    )
+    long = make_price(
+        model="gpt-5.4",
+        input_usd_per_1m=5.0,
+        output_usd_per_1m=22.5,
+        context_min_tokens=272_001,
+        context_label="> 272K",
+    )
+
+    assert resolve_price(
+        "openai",
+        "gpt-5.4",
+        [short, long],
+        context_tokens=100_000,
+    ) == short
+    assert resolve_price(
+        "openai",
+        "gpt-5.4",
+        [short, long],
+        context_tokens=272_000,
+    ) == short
+    assert resolve_price(
+        "openai",
+        "gpt-5.4",
+        [short, long],
+        context_tokens=272_001,
+    ) == long
+
+
+def test_compute_costs_selects_context_tier_from_prompt_like_tokens() -> None:
+    short = make_price(
+        model="gpt-5.4",
+        input_usd_per_1m=2.5,
+        cached_input_usd_per_1m=0.25,
+        output_usd_per_1m=15.0,
+        context_min_tokens=0,
+        context_max_tokens=272_000,
+        context_label="<= 272K",
+    )
+    long = make_price(
+        model="gpt-5.4",
+        input_usd_per_1m=5.0,
+        cached_input_usd_per_1m=0.5,
+        output_usd_per_1m=22.5,
+        context_min_tokens=272_001,
+        context_label="> 272K",
+    )
+    config = CostingConfig(virtual_prices=(short, long))
+
+    below = compute_costs(
+        harness="codex",
+        provider_id="openai",
+        model_id="gpt-5.4",
+        tokens=TokenBreakdown(input=100_000, output=1_000),
+        source_cost_usd=0.0,
+        message_count=1,
+        config=config,
+    )
+    above = compute_costs(
+        harness="codex",
+        provider_id="openai",
+        model_id="gpt-5.4",
+        tokens=TokenBreakdown(input=1_000, cache_read=272_000, output=1_000),
+        source_cost_usd=0.0,
+        message_count=1,
+        config=config,
+    )
+
+    assert float(below.virtual_cost_usd) == pytest.approx(0.265)
+    assert float(above.virtual_cost_usd) == pytest.approx(0.1635)
+
+
+def test_resolve_price_uses_untiered_fallback_when_context_missing_match() -> None:
+    untiered = make_price(model="gpt-5.4", input_usd_per_1m=3.0, output_usd_per_1m=18.0)
+    long = make_price(
+        model="gpt-5.4",
+        input_usd_per_1m=5.0,
+        output_usd_per_1m=22.5,
+        context_min_tokens=272_001,
+    )
+
+    selected = resolve_price(
+        "openai",
+        "gpt-5.4",
+        [long, untiered],
+        context_tokens=1_000,
+    )
+    assert selected == untiered
+
+
+def test_resolve_price_without_context_uses_lowest_tier_when_only_tiered() -> None:
+    short = make_price(
+        model="gpt-5.4",
+        context_min_tokens=0,
+        context_max_tokens=272_000,
+    )
+    long = make_price(
+        model="gpt-5.4",
+        input_usd_per_1m=6.0,
+        output_usd_per_1m=30.0,
+        context_min_tokens=272_001,
+    )
+
+    assert resolve_price("openai", "gpt-5.4", [long, short]) == short
 
 
 @pytest.mark.parametrize("missing_price_mode", ["warn", "zero"])

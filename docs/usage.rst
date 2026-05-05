@@ -130,3 +130,8 @@ price files under ``prices/<provider>.toml`` by default:
 
 Manual overrides still belong in ``prices.toml``. toktrail loads provider files
 first and ``prices.toml`` last, so manual rows override generated rows.
+
+When provider pricing exposes context-length tiers (for example short vs long
+context), toktrail keeps multiple rows for the same canonical model and resolves
+tiers per usage event using prompt-like tokens
+(``input + cache_read + cache_write``).

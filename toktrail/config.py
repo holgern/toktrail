@@ -26,6 +26,7 @@ SubscriptionCostBasis = Literal["source", "actual", "virtual"]
 SubscriptionWindowPeriod = Literal["5h", "daily", "weekly", "monthly", "yearly"]
 SubscriptionWindowResetMode = Literal["fixed", "first_use"]
 SubscriptionFixedCostPeriod = Literal["daily", "weekly", "monthly", "yearly"]
+PriceContextBasis = Literal["prompt_like"]
 
 CONFIG_VERSION = 1
 DEFAULT_TEMPLATE_NAME = "default"
@@ -38,6 +39,7 @@ _VALID_SUBSCRIPTION_COST_BASES = {"source", "actual", "virtual"}
 _VALID_SUBSCRIPTION_WINDOW_PERIODS = {"5h", "daily", "weekly", "monthly", "yearly"}
 _VALID_SUBSCRIPTION_WINDOW_RESET_MODES = {"fixed", "first_use"}
 _VALID_SUBSCRIPTION_FIXED_COST_PERIODS = {"daily", "weekly", "monthly", "yearly"}
+_VALID_PRICE_CONTEXT_BASES = {"prompt_like"}
 _PRICE_FIELDS = {
     "provider",
     "model",
@@ -50,6 +52,10 @@ _PRICE_FIELDS = {
     "reasoning_usd_per_1m",
     "category",
     "release_status",
+    "context_min_tokens",
+    "context_max_tokens",
+    "context_label",
+    "context_basis",
 }
 _ACTUAL_COST_RULE_FIELDS = {"harness", "provider", "model", "mode"}
 _IMPORT_FIELDS = {"harnesses", "sources", "missing_source", "include_raw_json"}
@@ -633,6 +639,10 @@ class Price:
     reasoning_usd_per_1m: float | None = None
     category: str | None = None
     release_status: str | None = None
+    context_min_tokens: int | None = None
+    context_max_tokens: int | None = None
+    context_label: str | None = None
+    context_basis: PriceContextBasis = "prompt_like"
 
 
 @dataclass(frozen=True)
@@ -1186,10 +1196,22 @@ def merge_pricing_configs(
     actual_prices = _merge_price_table(sources, table="actual")
     _validate_aliases_across_prices(virtual_prices, context="pricing.virtual")
     _validate_aliases_across_prices(actual_prices, context="pricing.actual")
+    _validate_price_context_ranges(virtual_prices, context="pricing.virtual")
+    _validate_price_context_ranges(actual_prices, context="pricing.actual")
     return PricingConfig(
         config_version=CONFIG_VERSION,
         virtual_prices=virtual_prices,
         actual_prices=actual_prices,
+    )
+
+
+def _price_variant_key(price: Price) -> tuple[str, str, int | None, int | None, str]:
+    return (
+        normalize_identity(price.provider),
+        normalize_identity(price.model),
+        price.context_min_tokens,
+        price.context_max_tokens,
+        price.context_basis,
     )
 
 
@@ -1199,7 +1221,7 @@ def _merge_price_table(
     table: Literal["virtual", "actual"],
 ) -> tuple[Price, ...]:
     merged: dict[
-        tuple[str, str],
+        tuple[str, str, int | None, int | None, str],
         tuple[Price, Path, Literal["provider", "manual"]],
     ] = {}
     for path, config, kind in sources:
@@ -1207,10 +1229,7 @@ def _merge_price_table(
             config.virtual_prices if table == "virtual" else config.actual_prices
         )
         for price in table_prices:
-            key = (
-                normalize_identity(price.provider),
-                normalize_identity(price.model),
-            )
+            key = _price_variant_key(price)
             existing = merged.get(key)
             if existing is None:
                 merged[key] = (price, path, kind)
@@ -1234,6 +1253,11 @@ def _merge_price_table(
         key=lambda price: (
             normalize_identity(price.provider),
             normalize_identity(price.model),
+            price.context_min_tokens if price.context_min_tokens is not None else 0,
+            price.context_max_tokens
+            if price.context_max_tokens is not None
+            else 2**63 - 1,
+            price.context_basis,
         )
     )
     return tuple(merged_prices)
@@ -1263,6 +1287,68 @@ def _validate_aliases_across_prices(
                 )
                 raise ValueError(msg)
             lookup_keys[lookup_key] = canonical_key
+
+
+def _validate_price_context_ranges(prices: tuple[Price, ...], *, context: str) -> None:
+    grouped: dict[tuple[str, str, str], list[Price]] = {}
+    for price in prices:
+        grouped.setdefault(
+            (
+                normalize_identity(price.provider),
+                normalize_identity(price.model),
+                price.context_basis,
+            ),
+            [],
+        ).append(price)
+
+    for provider, model, basis in sorted(grouped):
+        rows = grouped[(provider, model, basis)]
+        tiered_rows = [
+            row
+            for row in rows
+            if row.context_min_tokens is not None or row.context_max_tokens is not None
+        ]
+        tiered_rows.sort(
+            key=lambda row: (
+                row.context_min_tokens if row.context_min_tokens is not None else 0,
+                row.context_max_tokens
+                if row.context_max_tokens is not None
+                else 2**63 - 1,
+            )
+        )
+        previous: Price | None = None
+        for row in tiered_rows:
+            if previous is None:
+                previous = row
+                continue
+            if not _context_ranges_overlap(previous, row):
+                previous = row
+                continue
+            if previous == row:
+                continue
+            prev_min = previous.context_min_tokens if previous.context_min_tokens else 0
+            prev_max = (
+                previous.context_max_tokens
+                if previous.context_max_tokens
+                else "∞"
+            )
+            msg = (
+                f"{context} context range overlaps prior "
+                f"{provider}/{model}/{basis} range {prev_min}..{prev_max}."
+            )
+            raise ValueError(msg)
+
+
+def _context_ranges_overlap(left: Price, right: Price) -> bool:
+    left_min = left.context_min_tokens if left.context_min_tokens is not None else 0
+    left_max = (
+        left.context_max_tokens if left.context_max_tokens is not None else 2**63 - 1
+    )
+    right_min = right.context_min_tokens if right.context_min_tokens is not None else 0
+    right_max = (
+        right.context_max_tokens if right.context_max_tokens is not None else 2**63 - 1
+    )
+    return left_min <= right_max and right_min <= left_max
 
 
 def parse_runtime_config(data: object) -> RuntimeConfig:
@@ -1828,7 +1914,7 @@ def _parse_prices(value: object, *, context: str) -> tuple[Price, ...]:
         raise ValueError(msg)
 
     prices: list[Price] = []
-    exact_keys: dict[tuple[str, str], Price] = {}
+    exact_keys: dict[tuple[str, str, int | None, int | None, str], Price] = {}
     lookup_keys: dict[tuple[str, str], tuple[str, str]] = {}
     for index, raw_price in enumerate(value, start=1):
         if not isinstance(raw_price, dict):
@@ -1847,6 +1933,26 @@ def _parse_prices(value: object, *, context: str) -> tuple[Price, ...]:
             raw_price.get("output_usd_per_1m"),
             context=f"{context}[{index}].output_usd_per_1m",
         )
+        context_min_tokens = _parse_non_negative_int(
+            raw_price.get("context_min_tokens"),
+            context=f"{context}[{index}].context_min_tokens",
+            required=False,
+        )
+        context_max_tokens = _parse_non_negative_int(
+            raw_price.get("context_max_tokens"),
+            context=f"{context}[{index}].context_max_tokens",
+            required=False,
+        )
+        if (
+            context_min_tokens is not None
+            and context_max_tokens is not None
+            and context_min_tokens > context_max_tokens
+        ):
+            msg = (
+                f"{context}[{index}] requires context_min_tokens <= "
+                "context_max_tokens."
+            )
+            raise ValueError(msg)
         price = Price(
             provider=_parse_required_identity(
                 raw_price.get("provider"),
@@ -1890,21 +1996,35 @@ def _parse_prices(value: object, *, context: str) -> tuple[Price, ...]:
                 raw_price.get("release_status"),
                 context=f"{context}[{index}].release_status",
             ),
+            context_min_tokens=context_min_tokens,
+            context_max_tokens=context_max_tokens,
+            context_label=_parse_optional_string(
+                raw_price.get("context_label"),
+                context=f"{context}[{index}].context_label",
+            ),
+            context_basis=cast(
+                PriceContextBasis,
+                _parse_choice(
+                    raw_price.get("context_basis", "prompt_like"),
+                    valid=_VALID_PRICE_CONTEXT_BASES,
+                    context=f"{context}[{index}].context_basis",
+                ),
+            ),
         )
-        exact_key = (
-            normalize_identity(price.provider),
-            normalize_identity(price.model),
-        )
+        exact_key = _price_variant_key(price)
         existing = exact_keys.get(exact_key)
         if existing is not None and existing != price:
             msg = (
-                f"{context}[{index}] duplicates provider/model "
+                f"{context}[{index}] duplicates provider/model/context variant "
                 f"{price.provider}/{price.model} with different values."
             )
             raise ValueError(msg)
         exact_keys[exact_key] = price
 
-        canonical_key = exact_key
+        canonical_key = (
+            normalize_identity(price.provider),
+            normalize_identity(price.model),
+        )
         for lookup in (price.model, *price.aliases):
             lookup_key = (
                 normalize_identity(price.provider),
@@ -1920,6 +2040,7 @@ def _parse_prices(value: object, *, context: str) -> tuple[Price, ...]:
             lookup_keys[lookup_key] = canonical_key
 
         prices.append(price)
+    _validate_price_context_ranges(tuple(prices), context=context)
     return tuple(prices)
 
 
@@ -1966,6 +2087,26 @@ def _parse_non_negative_float(
         msg = f"{context} must be non-negative."
         raise ValueError(msg)
     return numeric_value
+
+
+def _parse_non_negative_int(
+    value: object,
+    *,
+    context: str,
+    required: bool,
+) -> int | None:
+    if value is None:
+        if required:
+            msg = f"{context} is required."
+            raise ValueError(msg)
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        msg = f"{context} must be an integer."
+        raise ValueError(msg)
+    if value < 0:
+        msg = f"{context} must be non-negative."
+        raise ValueError(msg)
+    return value
 
 
 def _parse_positive_float(value: object, *, context: str) -> float | None:

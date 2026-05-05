@@ -128,6 +128,106 @@ output_usd_per_1m = 4.5
         load_costing_config(config_path)
 
 
+def test_load_costing_config_parses_context_tier_prices(tmp_path) -> None:
+    config_path = tmp_path / "toktrail.toml"
+    config_path.write_text(
+        """
+config_version = 1
+
+[[pricing.virtual]]
+provider = "openai"
+model = "gpt-5.4"
+aliases = ["GPT 5.4"]
+context_min_tokens = 0
+context_max_tokens = 272000
+context_label = "<= 272K"
+input_usd_per_1m = 2.5
+cached_input_usd_per_1m = 0.25
+output_usd_per_1m = 15.0
+
+[[pricing.virtual]]
+provider = "openai"
+model = "gpt-5.4"
+aliases = ["GPT 5.4"]
+context_min_tokens = 272001
+context_label = "> 272K"
+input_usd_per_1m = 5.0
+cached_input_usd_per_1m = 0.5
+output_usd_per_1m = 22.5
+""".strip(),
+        encoding="utf-8",
+    )
+
+    config = load_costing_config(config_path)
+    assert len(config.virtual_prices) == 2
+    short = next(p for p in config.virtual_prices if p.context_max_tokens == 272000)
+    long = next(p for p in config.virtual_prices if p.context_min_tokens == 272001)
+    assert short.context_basis == "prompt_like"
+    assert short.context_label == "<= 272K"
+    assert long.context_label == "> 272K"
+
+
+def test_load_costing_config_rejects_overlapping_context_ranges(tmp_path) -> None:
+    config_path = tmp_path / "toktrail.toml"
+    config_path.write_text(
+        """
+config_version = 1
+
+[[pricing.virtual]]
+provider = "openai"
+model = "gpt-5.4"
+context_min_tokens = 0
+context_max_tokens = 272000
+input_usd_per_1m = 2.5
+output_usd_per_1m = 15.0
+
+[[pricing.virtual]]
+provider = "openai"
+model = "gpt-5.4"
+context_min_tokens = 200000
+context_max_tokens = 300000
+input_usd_per_1m = 5.0
+output_usd_per_1m = 22.5
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="context range overlaps prior"):
+        load_costing_config(config_path)
+
+
+def test_load_costing_config_allows_same_alias_across_context_variants(
+    tmp_path,
+) -> None:
+    config_path = tmp_path / "toktrail.toml"
+    config_path.write_text(
+        """
+config_version = 1
+
+[[pricing.virtual]]
+provider = "openai"
+model = "gpt-5.4"
+aliases = ["shared"]
+context_min_tokens = 0
+context_max_tokens = 272000
+input_usd_per_1m = 2.5
+output_usd_per_1m = 15.0
+
+[[pricing.virtual]]
+provider = "openai"
+model = "gpt-5.4"
+aliases = ["shared"]
+context_min_tokens = 272001
+input_usd_per_1m = 5.0
+output_usd_per_1m = 22.5
+""".strip(),
+        encoding="utf-8",
+    )
+
+    config = load_costing_config(config_path)
+    assert len(config.virtual_prices) == 2
+
+
 def test_load_costing_config_rejects_negative_prices(tmp_path) -> None:
     config_path = tmp_path / "toktrail.toml"
     config_path.write_text(

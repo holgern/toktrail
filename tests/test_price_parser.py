@@ -15,7 +15,7 @@ from toktrail.price_parser import (
 )
 
 
-def test_parse_openai_pricing_filters_tier_and_deduplicates_context_variants() -> None:
+def test_parse_openai_pricing_filters_tier_and_preserves_context_variants() -> None:
     text = '''
 TextTokenPricingTables tier="standard" rows={[
   ["gpt-5.5 (<272K context length)", 5, 0.5, 30],
@@ -29,8 +29,10 @@ TextTokenPricingTables tier="batch" rows={[
     parsed = parse_openai_pricing(text, tier="standard")
 
     assert parsed.provider == "openai"
-    assert len(parsed.prices) == 2
-    assert any(price.model == "gpt-5.5" for price in parsed.prices)
+    assert len(parsed.prices) == 3
+    gpt_rows = [price for price in parsed.prices if price.model == "gpt-5.5"]
+    assert len(gpt_rows) == 2
+    assert {row.context_max_tokens for row in gpt_rows} == {271999, None}
     assert any(price.model == "gpt-5.5-pro" for price in parsed.prices)
     assert parsed.warnings == ()
 
@@ -49,7 +51,7 @@ def test_parse_openai_pricing_reads_markdown_table() -> None:
     assert parsed.prices[0].cached_input_usd_per_1m == 0.5
 
 
-def test_parse_openai_pricing_markdown_prefers_short_context_variant() -> None:
+def test_parse_openai_pricing_markdown_preserves_disjoint_context_variants() -> None:
     text = """
 | Model | Input | Cached Input | Output |
 | --- | --- | --- | --- |
@@ -59,11 +61,13 @@ def test_parse_openai_pricing_markdown_prefers_short_context_variant() -> None:
 
     parsed = parse_openai_pricing(text, tier="standard")
 
-    assert len(parsed.prices) == 1
-    assert parsed.prices[0].model == "gpt-5.5"
-    assert parsed.prices[0].input_usd_per_1m == 5.0
-    assert parsed.prices[0].cached_input_usd_per_1m == 0.5
-    assert parsed.prices[0].output_usd_per_1m == 30.0
+    assert len(parsed.prices) == 2
+    short = next(price for price in parsed.prices if price.context_max_tokens == 272000)
+    long = next(price for price in parsed.prices if price.context_min_tokens == 272001)
+    assert short.model == "gpt-5.5"
+    assert long.model == "gpt-5.5"
+    assert short.input_usd_per_1m == 5.0
+    assert long.input_usd_per_1m == 10.0
 
 
 def test_parse_openai_pricing_warns_when_no_rows_parsed() -> None:
@@ -140,7 +144,7 @@ Claude Sonnet 4.5\tGA\tVersatile\t$3.00\t$0.30\t$3.75\t$15.00
     assert sonnet.cache_write_usd_per_1m == 3.75
 
 
-def test_parse_opencode_go_pricing_deduplicates_context_variants() -> None:
+def test_parse_opencode_go_pricing_preserves_context_variants() -> None:
     text = """
 Model	Input	Output	Cached Read	Cached Write
 Claude Sonnet 4.5 (> 200K tokens)	$6.00	$22.50	$0.60	$7.50
@@ -149,13 +153,15 @@ Claude Sonnet 4.5 (≤ 200K tokens)	$3.00	$15.00	$0.30	$3.75
 
     parsed = parse_opencode_go_pricing(text, table="actual")
 
-    assert len(parsed.prices) == 1
-    sonnet = parsed.prices[0]
-    assert sonnet.model == "claude-sonnet-4.5"
-    assert sonnet.input_usd_per_1m == 3.0
-    assert sonnet.output_usd_per_1m == 15.0
-    assert sonnet.cached_input_usd_per_1m == 0.3
-    assert sonnet.cache_write_usd_per_1m == 3.75
+    assert len(parsed.prices) == 2
+    short = next(price for price in parsed.prices if price.context_max_tokens == 200000)
+    long = next(price for price in parsed.prices if price.context_min_tokens == 200001)
+    assert short.model == "claude-sonnet-4.5"
+    assert long.model == "claude-sonnet-4.5"
+    assert short.input_usd_per_1m == 3.0
+    assert long.input_usd_per_1m == 6.0
+    assert short.cached_input_usd_per_1m == 0.3
+    assert short.cache_write_usd_per_1m == 3.75
 
 
 def test_parse_opencode_go_pricing_maps_cached_columns() -> None:
@@ -173,6 +179,24 @@ Big Pickle   Free     Free      Free           -
     free = next(price for price in parsed.prices if price.model == "big-pickle")
     assert free.input_usd_per_1m == 0.0
     assert free.output_usd_per_1m == 0.0
+
+
+def test_parse_openai_pricing_parses_multiple_context_operators() -> None:
+    text = '''
+TextTokenPricingTables tier="standard" rows={[
+  ["GPT 5.5 (≤ 272K tokens)", 5, 0.5, 30],
+  ["GPT 5.5 (<272K context length)", 4.9, 0.49, 29.5],
+  ["GPT 5.5 (> 272,000 tokens)", 6, 0.6, 36],
+  ["GPT 5.5 (>= 1M tokens)", 8, 0.8, 48],
+]}
+'''.strip()
+    parsed = parse_openai_pricing(text, tier="standard")
+
+    assert len(parsed.prices) == 4
+    assert any(price.context_max_tokens == 272000 for price in parsed.prices)
+    assert any(price.context_max_tokens == 271999 for price in parsed.prices)
+    assert any(price.context_min_tokens == 272001 for price in parsed.prices)
+    assert any(price.context_min_tokens == 1_000_000 for price in parsed.prices)
 
 
 def test_parse_price_document_dispatches_provider() -> None:

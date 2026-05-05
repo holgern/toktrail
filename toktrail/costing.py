@@ -28,6 +28,9 @@ class PriceResolution:
     virtual_price: Price | None
     missing_actual_price: bool
     missing_virtual_price: bool
+    selected_context_tokens: int | None = None
+    actual_context_label: str | None = None
+    virtual_context_label: str | None = None
 
     @property
     def missing_kinds(self) -> tuple[str, ...]:
@@ -109,27 +112,58 @@ def uncached_tokens(tokens: TokenBreakdown) -> TokenBreakdown:
     )
 
 
+def context_tokens_for_price(tokens: TokenBreakdown) -> int:
+    return tokens.input + tokens.cache_read + tokens.cache_write
+
+
+def price_matches_context(price: Price, context_tokens: int | None) -> bool:
+    if price.context_min_tokens is None and price.context_max_tokens is None:
+        return True
+    if context_tokens is None:
+        return False
+    minimum = price.context_min_tokens if price.context_min_tokens is not None else 0
+    maximum = price.context_max_tokens
+    if context_tokens < minimum:
+        return False
+    if maximum is not None and context_tokens > maximum:
+        return False
+    return True
+
+
 def resolve_price(
     provider_id: str,
     model_id: str,
     prices: Sequence[Price],
+    *,
+    context_tokens: int | None = None,
 ) -> Price | None:
     normalized_model = normalize_price_key(model_id)
     provider_candidates = _provider_candidates(provider_id, model_id)
 
     for normalized_provider in provider_candidates:
+        exact_matches: list[Price] = []
+        alias_matches: list[Price] = []
         for price in prices:
             if normalize_price_key(price.provider) != normalized_provider:
                 continue
             if normalize_price_key(price.model) == normalized_model:
-                return price
+                exact_matches.append(price)
         for price in prices:
             if normalize_price_key(price.provider) != normalized_provider:
                 continue
             if normalized_model in {
                 normalize_price_key(alias) for alias in price.aliases
             }:
-                return price
+                alias_matches.append(price)
+        for candidate_group in (exact_matches, alias_matches):
+            if not candidate_group:
+                continue
+            selected = _select_price_for_context(
+                candidate_group,
+                context_tokens=context_tokens,
+            )
+            if selected is not None:
+                return selected
     return None
 
 
@@ -152,18 +186,37 @@ def resolve_price_resolution(
     provider_id: str,
     model_id: str,
     config: CostingConfig,
+    tokens: TokenBreakdown | None = None,
+    context_tokens: int | None = None,
 ) -> PriceResolution:
+    effective_context_tokens = (
+        context_tokens
+        if context_tokens is not None
+        else context_tokens_for_price(tokens)
+        if tokens is not None
+        else None
+    )
     actual_mode = resolve_actual_mode(harness, provider_id, model_id, config)
     actual_price = None
     missing_actual_price = False
     if actual_mode == "pricing":
-        actual_price = resolve_price(provider_id, model_id, config.actual_prices)
+        actual_price = resolve_price(
+            provider_id,
+            model_id,
+            config.actual_prices,
+            context_tokens=effective_context_tokens,
+        )
         missing_actual_price = actual_price is None
 
     virtual_price = None
     missing_virtual_price = False
     if config.default_virtual_mode == "pricing":
-        virtual_price = resolve_price(provider_id, model_id, config.virtual_prices)
+        virtual_price = resolve_price(
+            provider_id,
+            model_id,
+            config.virtual_prices,
+            context_tokens=effective_context_tokens,
+        )
         missing_virtual_price = virtual_price is None
 
     return PriceResolution(
@@ -172,6 +225,13 @@ def resolve_price_resolution(
         virtual_price=virtual_price,
         missing_actual_price=missing_actual_price,
         missing_virtual_price=missing_virtual_price,
+        selected_context_tokens=effective_context_tokens,
+        actual_context_label=(
+            actual_price.context_label if actual_price is not None else None
+        ),
+        virtual_context_label=(
+            virtual_price.context_label if virtual_price is not None else None
+        ),
     )
 
 
@@ -190,6 +250,7 @@ def compute_costs(
         provider_id=provider_id,
         model_id=model_id,
         config=config,
+        tokens=tokens,
     )
     actual_cost_usd = source_cost_usd
     virtual_cost_usd = Decimal(0)
@@ -254,10 +315,20 @@ def simulate_cost(
     baseline_actual_usd: Decimal,
     baseline_virtual_usd: Decimal,
 ) -> SimulationResult:
-    price = resolve_price(target.provider, target.model, config.virtual_prices)
+    price = resolve_price(
+        target.provider,
+        target.model,
+        config.virtual_prices,
+        context_tokens=context_tokens_for_price(tokens),
+    )
     missing_kinds: list[str] = []
     if price is None:
-        price = resolve_price(target.provider, target.model, config.actual_prices)
+        price = resolve_price(
+            target.provider,
+            target.model,
+            config.actual_prices,
+            context_tokens=context_tokens_for_price(tokens),
+        )
     if price is None:
         missing_kinds.append("target")
         cost = Decimal(0)
@@ -274,3 +345,56 @@ def simulate_cost(
         delta_vs_virtual_usd=cost - baseline_virtual_usd,
         missing_price_kinds=tuple(missing_kinds),
     )
+
+
+def _select_price_for_context(
+    candidates: Sequence[Price],
+    *,
+    context_tokens: int | None,
+) -> Price | None:
+    tiered = [
+        price
+        for price in candidates
+        if price.context_min_tokens is not None or price.context_max_tokens is not None
+    ]
+    untiered = [
+        price
+        for price in candidates
+        if price.context_min_tokens is None and price.context_max_tokens is None
+    ]
+    tiered = sorted(
+        tiered,
+        key=lambda price: (
+            price.context_min_tokens if price.context_min_tokens is not None else 0,
+            price.context_max_tokens
+            if price.context_max_tokens is not None
+            else 2**63 - 1,
+        ),
+    )
+    if context_tokens is not None:
+        matching = [
+            price
+            for price in tiered
+            if price_matches_context(price, context_tokens)
+        ]
+        if matching:
+            return min(matching, key=_context_range_width)
+        if untiered:
+            return untiered[0]
+        return None
+
+    if untiered:
+        return untiered[0]
+    if tiered:
+        return tiered[0]
+    return None
+
+
+def _context_range_width(price: Price) -> int:
+    minimum = price.context_min_tokens if price.context_min_tokens is not None else 0
+    maximum = (
+        price.context_max_tokens
+        if price.context_max_tokens is not None
+        else 2**63 - 1
+    )
+    return maximum - minimum

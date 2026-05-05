@@ -15,7 +15,7 @@ from toktrail.costing import (
 from toktrail.models import TokenBreakdown, UsageEvent
 
 _HIT_STATUSES: Final[set[str]] = {"hit", "partial"}
-_MISS_STATUSES: Final[set[str]] = {"miss", "cold"}
+_MISS_STATUSES: Final[set[str]] = {"miss", "cold", "warming", "write"}
 
 
 @dataclass(frozen=True)
@@ -37,10 +37,16 @@ class CacheCallAnalysis:
     virtual_cost_usd: Decimal
     virtual_uncached_cost_usd: Decimal
     virtual_cache_savings_usd: Decimal
+    missing_price_kinds: tuple[str, ...]
+    context_tokens: int
+    actual_price_context_label: str | None
+    virtual_price_context_label: str | None
     prompt_like_tokens: int
     cache_reuse_ratio: float
     cache_presence_ratio: float
     source_cost_per_1m_prompt_like: Decimal | None
+    source_cost_per_1m_total_tokens: Decimal | None
+    virtual_cost_per_1m_prompt_like: Decimal | None
     cache_status: str
     flags: tuple[str, ...] = ()
 
@@ -80,6 +86,7 @@ class SessionCacheAnalysis:
     virtual_uncached_cost_usd: Decimal
     virtual_cache_savings_usd: Decimal
     estimated_source_cache_loss_usd: Decimal
+    unpriced_count: int
     calls: tuple[CacheCallAnalysis, ...]
     clusters: tuple[CacheClusterAnalysis, ...]
     warnings: tuple[str, ...] = ()
@@ -101,6 +108,8 @@ def classify_cache_status(tokens: TokenBreakdown, *, ordinal: int) -> str:
     prompt_tokens = prompt_like_tokens(tokens)
     if prompt_tokens <= 0:
         return "unknown"
+    if tokens.cache_read == 0 and tokens.cache_write > 0:
+        return "warming" if ordinal == 1 else "write"
     ratio = cache_reuse_ratio(tokens)
     if ordinal == 1 and tokens.cache_read == 0:
         return "cold"
@@ -146,6 +155,7 @@ def analyze_usage_events(
     total_virtual = Decimal(0)
     total_virtual_uncached = Decimal(0)
     total_virtual_savings = Decimal(0)
+    total_unpriced = 0
     prompt_like_total = 0
 
     for ordinal, event in enumerate(ordered_events, start=1):
@@ -165,6 +175,7 @@ def analyze_usage_events(
             provider_id=event.provider_id,
             model_id=event.model_id,
             config=config,
+            tokens=event.tokens,
         )
         uncached = uncached_tokens(event.tokens)
         virtual_uncached = (
@@ -176,6 +187,16 @@ def analyze_usage_events(
         prompt_like = prompt_like_tokens(event.tokens)
         source_per_1m = (
             (event.source_cost_usd * Decimal(1_000_000)) / Decimal(prompt_like)
+            if prompt_like > 0
+            else None
+        )
+        source_per_1m_total = (
+            (event.source_cost_usd * Decimal(1_000_000)) / Decimal(event.tokens.total)
+            if event.tokens.total > 0
+            else None
+        )
+        virtual_per_1m_prompt = (
+            (costs.virtual_cost_usd * Decimal(1_000_000)) / Decimal(prompt_like)
             if prompt_like > 0
             else None
         )
@@ -210,10 +231,20 @@ def analyze_usage_events(
                 virtual_cost_usd=costs.virtual_cost_usd,
                 virtual_uncached_cost_usd=virtual_uncached,
                 virtual_cache_savings_usd=virtual_savings,
+                missing_price_kinds=resolution.missing_kinds,
+                context_tokens=(
+                    resolution.selected_context_tokens
+                    if resolution.selected_context_tokens is not None
+                    else prompt_like
+                ),
+                actual_price_context_label=resolution.actual_context_label,
+                virtual_price_context_label=resolution.virtual_context_label,
                 prompt_like_tokens=prompt_like,
                 cache_reuse_ratio=cache_reuse_ratio(event.tokens),
                 cache_presence_ratio=cache_presence_ratio(event.tokens),
                 source_cost_per_1m_prompt_like=source_per_1m,
+                source_cost_per_1m_total_tokens=source_per_1m_total,
+                virtual_cost_per_1m_prompt_like=virtual_per_1m_prompt,
                 cache_status=status,
                 flags=tuple(call_flags),
             )
@@ -232,6 +263,7 @@ def analyze_usage_events(
         total_virtual += costs.virtual_cost_usd
         total_virtual_uncached += virtual_uncached
         total_virtual_savings += virtual_savings
+        total_unpriced += costs.unpriced_count
         prompt_like_total += prompt_like
 
     flags_by_index: list[set[str]] = [set(call.flags) for call in calls]
@@ -273,6 +305,7 @@ def analyze_usage_events(
         virtual_uncached_cost_usd=total_virtual_uncached,
         virtual_cache_savings_usd=total_virtual_savings,
         estimated_source_cache_loss_usd=estimated_source_cache_loss,
+        unpriced_count=total_unpriced,
         calls=tuple(calls),
         clusters=tuple(clusters),
         warnings=tuple(warnings),

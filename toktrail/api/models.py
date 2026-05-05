@@ -862,10 +862,16 @@ class CacheCallRow:
     virtual_cost_usd: Decimal
     virtual_uncached_cost_usd: Decimal
     virtual_cache_savings_usd: Decimal
+    missing_price_kinds: tuple[str, ...]
+    context_tokens: int
+    actual_price_context_label: str | None
+    virtual_price_context_label: str | None
     prompt_like_tokens: int
     cache_reuse_ratio: float
     cache_presence_ratio: float
     source_cost_per_1m_prompt_like: Decimal | None
+    source_cost_per_1m_total_tokens: Decimal | None
+    virtual_cost_per_1m_prompt_like: Decimal | None
     cache_status: str
     flags: tuple[str, ...] = ()
 
@@ -888,12 +894,26 @@ class CacheCallRow:
             "virtual_cost_usd": str(self.virtual_cost_usd),
             "virtual_uncached_cost_usd": str(self.virtual_uncached_cost_usd),
             "virtual_cache_savings_usd": str(self.virtual_cache_savings_usd),
+            "missing_price_kinds": list(self.missing_price_kinds),
+            "context_tokens": self.context_tokens,
+            "actual_price_context_label": self.actual_price_context_label,
+            "virtual_price_context_label": self.virtual_price_context_label,
             "prompt_like_tokens": self.prompt_like_tokens,
             "cache_reuse_ratio": self.cache_reuse_ratio,
             "cache_presence_ratio": self.cache_presence_ratio,
             "source_cost_per_1m_prompt_like": (
                 str(self.source_cost_per_1m_prompt_like)
                 if self.source_cost_per_1m_prompt_like is not None
+                else None
+            ),
+            "source_cost_per_1m_total_tokens": (
+                str(self.source_cost_per_1m_total_tokens)
+                if self.source_cost_per_1m_total_tokens is not None
+                else None
+            ),
+            "virtual_cost_per_1m_prompt_like": (
+                str(self.virtual_cost_per_1m_prompt_like)
+                if self.virtual_cost_per_1m_prompt_like is not None
                 else None
             ),
             "cache_status": self.cache_status,
@@ -914,6 +934,7 @@ class CacheClusterRow:
     median_hit_source_cost_usd: Decimal | None
     median_miss_source_cost_usd: Decimal | None
     estimated_source_loss_usd: Decimal
+    call_ordinals: tuple[int, ...] = ()
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -936,6 +957,7 @@ class CacheClusterRow:
                 else None
             ),
             "estimated_source_loss_usd": str(self.estimated_source_loss_usd),
+            "call_ordinals": list(self.call_ordinals),
         }
 
 

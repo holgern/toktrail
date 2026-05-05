@@ -2375,7 +2375,9 @@ output_usd_per_1m = 15
     assert 'provider = "anthropic"' in merged
 
 
-def test_cli_pricing_parse_context_tier_deduplicates_without_warning(tmp_path) -> None:
+def test_cli_pricing_parse_context_tier_preserves_variants_without_warning(
+    tmp_path,
+) -> None:
     runner = CliRunner()
     input_path = tmp_path / "openai-pricing.jsx"
     input_path.write_text(
@@ -2404,7 +2406,7 @@ TextTokenPricingTables tier="standard" rows={[
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
     assert payload["warnings"] == []
-    assert payload["price_count"] == 1
+    assert payload["price_count"] == 2
 
 
 def test_cli_config_prices_loads_provider_directory(tmp_path) -> None:
@@ -2457,6 +2459,9 @@ output_usd_per_1m = 30
     payload = json.loads(result.output)
     assert payload
     assert payload[0]["provider"] == "openai"
+    assert "context_min_tokens" in payload[0]
+    assert "context_max_tokens" in payload[0]
+    assert payload[0]["context_basis"] == "prompt_like"
 
 
 def test_cli_config_show_lists_price_paths(tmp_path) -> None:
@@ -3795,7 +3800,12 @@ def test_cli_analyze_session_opencode_json_shape(tmp_path: Path) -> None:
     assert payload["source_session_id"] == "ses-cache"
     assert payload["call_count"] == 2
     assert payload["totals"]["cache_read"] == 120000
+    assert payload["totals"]["unpriced_count"] == 2
     assert payload["calls"][0]["ordinal"] == 1
+    assert "context_tokens" in payload["calls"][0]
+    assert "virtual_price_context_label" in payload["calls"][0]
+    assert "missing_price_kinds" in payload["calls"][0]
+    assert "call_ordinals" in payload["clusters"][0]
     assert payload["clusters"][0]["call_count"] == 2
 
 
