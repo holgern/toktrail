@@ -2296,6 +2296,37 @@ GLM 5.1      $1.40    $4.40     $0.26          -
     assert 'provider = "opencode-go"' in result.output
 
 
+def test_cli_pricing_parse_github_copilot_to_stdout(tmp_path) -> None:
+    runner = CliRunner()
+    input_path = tmp_path / "github-copilot.md"
+    input_path.write_text(
+        """
+OpenAI
+Model\tRelease status\tCategory\tInput\tCached input\tOutput
+GPT-5.2\tGA\tVersatile\t$1.75\t$0.175\t$14.00
+""".strip(),
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "pricing",
+            "parse",
+            "--provider",
+            "github-copilot",
+            "--input",
+            str(input_path),
+            "--out",
+            "-",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert 'provider = "github-copilot"' in result.output
+    assert 'model = "gpt-5.2"' in result.output
+
+
 def test_cli_pricing_parse_merge_replaces_provider_rows(tmp_path) -> None:
     runner = CliRunner()
     input_path = tmp_path / "openai-pricing.jsx"
@@ -2344,7 +2375,7 @@ output_usd_per_1m = 15
     assert 'provider = "anthropic"' in merged
 
 
-def test_cli_pricing_parse_context_tier_warning(tmp_path) -> None:
+def test_cli_pricing_parse_context_tier_deduplicates_without_warning(tmp_path) -> None:
     runner = CliRunner()
     input_path = tmp_path / "openai-pricing.jsx"
     input_path.write_text(
@@ -2372,7 +2403,8 @@ TextTokenPricingTables tier="standard" rows={[
 
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
-    assert payload["warnings"]
+    assert payload["warnings"] == []
+    assert payload["price_count"] == 1
 
 
 def test_cli_config_prices_loads_provider_directory(tmp_path) -> None:
