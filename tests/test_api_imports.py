@@ -41,7 +41,7 @@ def test_import_usage_defaults_to_active_session_and_is_idempotent(tmp_path) -> 
     second = import_usage(state_db, "opencode", source_path=source_db)
     report = session_report(state_db, session.id)
 
-    assert first.tracking_session_id == session.id
+    assert first.run_id == session.id
     assert first.rows_imported == 2
     assert first.events_imported == 2
     assert second.rows_imported == 0
@@ -56,7 +56,7 @@ def test_import_usage_without_active_session_imports_unscoped_events(tmp_path) -
 
     result = import_usage(state_db, "opencode", source_path=source_db)
 
-    assert result.tracking_session_id is None
+    assert result.run_id is None
     assert result.rows_imported == 2
     with pytest.raises(RunNotFoundError, match="Run not found"):
         import_usage(state_db, "opencode", session_id=999, source_path=source_db)
@@ -202,7 +202,7 @@ def test_import_usage_can_ignore_active_session_when_requested(tmp_path) -> None
         use_active_session=False,
     )
 
-    assert result.tracking_session_id is None
+    assert result.run_id is None
     assert result.rows_imported == 2
 
 
@@ -216,7 +216,7 @@ def test_import_usage_active_run_filters_historical_rows_by_default(tmp_path) ->
     result = import_usage(state_db, "opencode", source_path=source_db)
     report = session_report(state_db, session.id)
 
-    assert result.tracking_session_id == session.id
+    assert result.run_id == session.id
     assert result.rows_seen == 2
     assert result.rows_imported == 0
     assert result.rows_skipped == 2
@@ -416,7 +416,7 @@ def test_later_session_import_links_existing_unscoped_events_without_duplicates(
     )
     report = session_report(state_db, session.id)
 
-    assert first.tracking_session_id is None
+    assert first.run_id is None
     assert first.rows_imported == 2
     assert second.rows_imported == 0
     assert second.rows_linked == 2

@@ -16,7 +16,7 @@ Preferred public imports:
 from toktrail.errors import ToktrailError
 
 from toktrail.api import (
-    AgentSummaryRow,
+    ActivitySummaryRow,
     CostTotals,
     FinalizedManualRun,
     HarnessDefinition,

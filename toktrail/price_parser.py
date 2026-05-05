@@ -352,8 +352,8 @@ def parse_opencode_go_pricing(
             warnings=warnings,
             warning_prefix="opencode-go row",
             warning_suffix=(
-                f"normalizes to {parsed_price.provider}/{parsed_price.model} with different "
-                "prices; skipped duplicate row."
+                f"normalizes to {parsed_price.provider}/"
+                f"{parsed_price.model} with different prices; skipped duplicate row."
             ),
         )
 

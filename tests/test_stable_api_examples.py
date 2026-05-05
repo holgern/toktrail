@@ -285,7 +285,7 @@ def test_print_finalized_formats_import_and_source_session(capsys) -> None:
             unchanged_sessions=(),
         ),
         import_result=ImportUsageResult(
-            tracking_session_id=1,
+            run_id=1,
             harness="codex",
             source_path=Path("sessions"),
             source_session_id="session-1",

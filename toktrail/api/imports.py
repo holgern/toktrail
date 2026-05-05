@@ -99,7 +99,7 @@ def import_usage(
     last_event_ms = max((event.created_ms for event in filtered_events), default=None)
 
     return ImportUsageResult(
-        tracking_session_id=selected_session_id,
+        run_id=selected_session_id,
         harness=definition.name,
         source_path=resolved,
         source_session_id=source_session_id,
@@ -180,7 +180,7 @@ def import_configured_usage(
                     continue
                 results.append(
                     ImportUsageResult(
-                        tracking_session_id=session_id,
+                        run_id=session_id,
                         harness=harness_name,
                         source_path=resolved,
                         source_session_id=None,

@@ -1,14 +1,14 @@
 Configuration
 =============
 
-toktrail uses three user config files:
+toktrail uses four user config files:
 
 - ``config.toml`` for imports + costing policy
 - ``prices.toml`` for manual ``[[pricing.virtual]]`` and ``[[pricing.actual]]`` rows
 - ``prices/`` for generated provider files such as ``prices/openai.toml``
 - ``subscriptions.toml`` for ``[[subscriptions]]`` plans and windows
 
-Use ``toktrail config init`` to create all three files.
+Use ``toktrail config init`` to create all four files.
 
 Report commands use ``[imports]`` as their automatic refresh policy by default.
 Use ``toktrail refresh`` for manual refresh operations.
@@ -23,7 +23,7 @@ Example
    config_version = 1
 
    [imports]
-   harnesses = ["opencode", "pi", "copilot", "codex", "goose", "droid", "amp"]
+   harnesses = ["opencode", "pi", "copilot", "codex", "goose", "droid", "amp", "claude", "vibe"]
    missing_source = "warn"
    include_raw_json = false
 
@@ -35,6 +35,8 @@ Example
    goose = "~/.local/share/goose/sessions/sessions.db"
    droid = "~/.factory/sessions"
    amp = "~/.local/share/amp/threads"
+   claude = "~/.claude/projects"
+   vibe = "~/.vibe/logs/session"
 
    [costing]
    default_actual_mode = "source"

@@ -53,7 +53,6 @@ from toktrail.db import (
     get_active_tracking_session,
     get_tracking_session,
     insert_usage_events,
-    list_tracking_sessions,
     migrate,
     summarize_subscription_usage,
     summarize_usage,
@@ -89,28 +88,24 @@ from toktrail.reporting import (
 )
 
 app = typer.Typer(help="Track harness token usage in local SQLite sessions.")
-refresh_app = typer.Typer(help="Refresh usage from configured harness sources.")
-watch_app = typer.Typer(help="Watch external harnesses and refresh new usage.")
-run_app = typer.Typer(help="Manage toktrail tracking runs.")
-sessions_app = typer.Typer(
+sources_app = typer.Typer(
     invoke_without_command=True,
-    help="List raw harness source sessions.",
+    help="Inspect configured source paths and source sessions.",
 )
-source_sessions_app = typer.Typer(help="List and inspect harness source sessions.")
+run_app = typer.Typer(help="Manage toktrail tracking runs.")
+usage_app = typer.Typer(help="Report imported token and cost usage.")
 copilot_app = typer.Typer(help="Inspect and run GitHub Copilot CLI tracking.")
 config_app = typer.Typer(help="Inspect toktrail configuration files.")
-pricing_app = typer.Typer(help="Inspect configured and used model pricing.")
+prices_app = typer.Typer(help="Inspect configured and used model pricing.")
 subscriptions_app = typer.Typer(help="Inspect provider subscription limits.")
 analyze_app = typer.Typer(help="Analyze per-call cache and cost behavior.")
 
-app.add_typer(refresh_app, name="refresh")
-app.add_typer(watch_app, name="watch")
 app.add_typer(run_app, name="run")
-app.add_typer(source_sessions_app, name="source-sessions")
-app.add_typer(sessions_app, name="sessions")
+app.add_typer(sources_app, name="sources")
+app.add_typer(usage_app, name="usage")
 app.add_typer(copilot_app, name="copilot")
 app.add_typer(config_app, name="config")
-app.add_typer(pricing_app, name="pricing")
+app.add_typer(prices_app, name="prices")
 app.add_typer(subscriptions_app, name="subscriptions")
 app.add_typer(analyze_app, name="analyze")
 app.add_typer(sync_app, name="sync")
@@ -144,7 +139,7 @@ _VALID_PRICE_SORTS = {
 class ImportExecutionResult:
     harness: str
     source_path: Path
-    tracking_session_id: int | None
+    run_id: int | None
     rows_seen: int
     rows_imported: int
     rows_skipped: int
@@ -206,8 +201,8 @@ SubscriptionsPathOption = Annotated[
         help="Override toktrail subscriptions TOML path.",
     ),
 ]
-SessionArgument = Annotated[int | None, typer.Argument()]
-SessionOption = Annotated[int | None, typer.Option("--session")]
+RunArgument = Annotated[int | None, typer.Argument()]
+RunOption = Annotated[int | None, typer.Option("--run", "--run-id")]
 SourceSessionOption = Annotated[str | None, typer.Option("--source-session")]
 NameOption = Annotated[str | None, typer.Option("--name")]
 JsonOption = Annotated[bool, typer.Option("--json")]
@@ -309,10 +304,10 @@ VibePathOption = Annotated[
         help="Override Vibe logs/session directory or meta.json file.",
     ),
 ]
-SinceStartOption = Annotated[bool, typer.Option("--since-start")]
+SinceRunStartOption = Annotated[bool, typer.Option("--since-run-start")]
 NoRawOption = Annotated[bool, typer.Option("--no-raw")]
-NoSessionOption = Annotated[
-    bool, typer.Option("--no-session", help="Refresh without a tracking session.")
+NoRunOption = Annotated[
+    bool, typer.Option("--no-run", help="Refresh without a tracking run.")
 ]
 IntervalOption = Annotated[float, typer.Option("--interval", min=0.1)]
 CopilotRunArgs = Annotated[list[str], typer.Argument(help="Command to run after --.")]
@@ -391,29 +386,29 @@ def start(
         _exit_with_error(str(exc))
     finally:
         conn.close()
-    typer.echo(f"Started tracking session {session_id}: {name or '(unnamed)'}")
+    typer.echo(f"Started run {session_id}: {name or '(unnamed)'}")
 
 
 @run_app.command()
 def stop(
     ctx: typer.Context,
-    session_id: SessionArgument = None,
+    run_id: RunArgument = None,
     refresh: RefreshOption = True,
     refresh_details: RefreshDetailsOption = False,
     raw: RawModeOption = None,
 ) -> None:
     conn = _open_toktrail_connection(ctx)
     session = None
-    selected_session_id = session_id
+    selected_session_id = run_id
     try:
         if selected_session_id is None:
             selected_session_id = get_active_tracking_session(conn)
         if selected_session_id is None:
-            _exit_with_error("No active tracking session found.")
+            _exit_with_error("No active run found.")
 
         session = get_tracking_session(conn, selected_session_id)
         if session is None:
-            _exit_with_error(f"Tracking session not found: {selected_session_id}")
+            _exit_with_error(f"Run not found: {selected_session_id}")
     finally:
         conn.close()
     _refresh_before_report(
@@ -431,15 +426,13 @@ def stop(
         end_tracking_session(conn, selected_session_id)
     finally:
         conn.close()
-    typer.echo(
-        f"Stopped tracking session {selected_session_id}: {session.name or '(unnamed)'}"
-    )
+    typer.echo(f"Stopped run {selected_session_id}: {session.name or '(unnamed)'}")
 
 
 @run_app.command()
 def status(
     ctx: typer.Context,
-    session_id: SessionArgument = None,
+    run_id: RunArgument = None,
     json_output: JsonOption = False,
     harness: HarnessOption = None,
     source_session_id: SourceSessionOption = None,
@@ -468,15 +461,15 @@ def status(
         sort=sort,
         limit=limit,
     )
-    selected_session_id = session_id
+    selected_session_id = run_id
     conn = _open_toktrail_connection(ctx)
     try:
         if selected_session_id is None:
             selected_session_id = get_active_tracking_session(conn)
         if selected_session_id is None:
-            _exit_with_error("No active tracking session found.")
+            _exit_with_error("No active run found.")
         if get_tracking_session(conn, selected_session_id) is None:
-            _exit_with_error(f"Tracking session not found: {selected_session_id}")
+            _exit_with_error(f"Run not found: {selected_session_id}")
     finally:
         conn.close()
 
@@ -549,9 +542,9 @@ def status(
 
     session = report.session
     if session is None:
-        msg = "Tracking session report unexpectedly has no session."
+        msg = "Run report unexpectedly has no session."
         raise TypeError(msg)
-    typer.echo(f"toktrail session {session.id}: {session.name or '(unnamed)'}")
+    typer.echo(f"toktrail run {session.id}: {session.name or '(unnamed)'}")
     _print_usage_summary(
         report,
         rich_output=rich_output,
@@ -561,8 +554,8 @@ def status(
     )
 
 
-@run_app.command()
-def runs(
+@run_app.command("list")
+def list_command(
     ctx: typer.Context,
     limit: ReportLimitOption = None,
     rich_output: RichOption = False,
@@ -604,6 +597,33 @@ def runs(
 
 
 @subscriptions_app.callback(invoke_without_command=True)
+def subscriptions(
+    ctx: typer.Context,
+    provider_id: ProviderOption = None,
+    period: Annotated[str, typer.Option("--period")] = "all",
+    json_output: JsonOption = False,
+    rich_output: RichOption = False,
+    now_ms: Annotated[int | None, typer.Option("--now-ms", hidden=True)] = None,
+    refresh: RefreshOption = True,
+    refresh_details: RefreshDetailsOption = False,
+    raw: RawModeOption = None,
+) -> None:
+    if ctx.invoked_subcommand is not None:
+        return
+    _subscriptions_status_impl(
+        ctx=ctx,
+        provider_id=provider_id,
+        period=period,
+        json_output=json_output,
+        rich_output=rich_output,
+        now_ms=now_ms,
+        refresh=refresh,
+        refresh_details=refresh_details,
+        raw=raw,
+    )
+
+
+@subscriptions_app.command("status")
 def subscriptions_status(
     ctx: typer.Context,
     provider_id: ProviderOption = None,
@@ -614,6 +634,31 @@ def subscriptions_status(
     refresh: RefreshOption = True,
     refresh_details: RefreshDetailsOption = False,
     raw: RawModeOption = None,
+) -> None:
+    _subscriptions_status_impl(
+        ctx=ctx,
+        provider_id=provider_id,
+        period=period,
+        json_output=json_output,
+        rich_output=rich_output,
+        now_ms=now_ms,
+        refresh=refresh,
+        refresh_details=refresh_details,
+        raw=raw,
+    )
+
+
+def _subscriptions_status_impl(
+    *,
+    ctx: typer.Context,
+    provider_id: str | None,
+    period: str,
+    json_output: bool,
+    rich_output: bool,
+    now_ms: int | None,
+    refresh: bool,
+    refresh_details: bool,
+    raw: bool | None,
 ) -> None:
     normalized_period = period.strip().lower()
     if normalized_period not in {"all", "5h", "daily", "weekly", "monthly", "yearly"}:
@@ -667,18 +712,20 @@ def subscriptions_status(
     )
 
 
-@app.command()
+@usage_app.command("daily")
+@usage_app.command("weekly")
+@usage_app.command("monthly")
+@usage_app.command("summary")
+@usage_app.command("today")
+@usage_app.command("yesterday")
+@usage_app.command("this-week")
+@usage_app.command("last-week")
+@usage_app.command("this-month")
+@usage_app.command("last-month")
+@usage_app.command("sessions")
+@usage_app.command("runs")
 def usage(
     ctx: typer.Context,
-    view: Annotated[
-        str | None,
-        typer.Argument(
-            help=(
-                "daily, weekly, monthly, sessions, runs, summary, today, yesterday, "
-                "this-week, last-week, this-month, last-month"
-            ),
-        ),
-    ] = None,
     json_output: JsonOption = False,
     harness: HarnessOption = None,
     source_session_id: SourceSessionOption = None,
@@ -700,7 +747,6 @@ def usage(
     breakdown: BreakdownOption = False,
     compact: Annotated[bool, typer.Option("--compact")] = False,
     instances: Annotated[bool, typer.Option("--instances")] = False,
-    project: Annotated[str | None, typer.Option("--project", "-p")] = None,
     order: Annotated[str, typer.Option("--order")] = "desc",
     locale: Annotated[str | None, typer.Option("--locale")] = None,
     start_of_week: Annotated[str, typer.Option("--start-of-week")] = "monday",
@@ -713,9 +759,10 @@ def usage(
 ) -> None:
     if timezone_name is not None and utc:
         _exit_with_error("Use either --timezone or --utc, not both.")
-    if project is not None:
-        _exit_with_error("--project is not supported for any usage view.")
-    normalized_view = (view or "daily").strip().lower()
+    info_name = ctx.info_name
+    if info_name is None:
+        _exit_with_error("Missing usage subcommand.")
+    normalized_view = info_name.strip().lower()
     series_views = {"daily", "weekly", "monthly"}
     named_periods = {
         "today",
@@ -754,7 +801,7 @@ def usage(
             breakdown=breakdown,
             compact=compact,
             instances=instances,
-            project=project,
+            project=None,
             order=order,
             locale=locale,
             start_of_week=start_of_week,
@@ -1945,47 +1992,47 @@ def config_show(ctx: typer.Context) -> None:
         typer.echo("price paths:")
         for path in loaded.price_paths:
             typer.echo(f"  - {path}")
-    typer.echo("Run `toktrail config prices` to inspect configured price rows.")
+    typer.echo("Run `toktrail prices list` to inspect configured price rows.")
 
 
-@config_app.command("prices")
-def config_prices(
-    ctx: typer.Context,
-    table: PriceTableOption = "virtual",
-    provider: ProviderOption = None,
-    model: ModelOption = None,
-    query: PriceQueryOption = None,
-    category: CategoryOption = None,
-    release_status: ReleaseStatusOption = None,
-    sort: PriceSortOption = "provider",
-    limit: ReportLimitOption = None,
-    aliases: AliasesOption = False,
-    json_output: JsonOption = False,
-) -> None:
-    loaded = _load_resolved_costing_config_or_exit(ctx)
-    filters = _normalize_price_display_filter(
-        table=table,
-        provider=provider,
-        model=model,
-        query=query,
-        category=category,
-        release_status=release_status,
-        sort=sort,
-        limit=limit,
-    )
-    rows = _filter_price_rows(_price_rows(loaded.config, filters.table), filters)
-    if json_output:
-        typer.echo(json.dumps(rows, indent=2))
-        return
-    _print_price_table(rows, aliases=aliases, rich_output=False)
-
-
-@app.command("sources")
+@sources_app.callback(invoke_without_command=True)
 def sources(
     ctx: typer.Context,
     harnesses: HarnessesOption = None,
     source_path: SourcePathOption = None,
     json_output: JsonOption = False,
+) -> None:
+    if ctx.invoked_subcommand is not None:
+        return
+    _sources_list(
+        ctx,
+        harnesses=harnesses,
+        source_path=source_path,
+        json_output=json_output,
+    )
+
+
+@sources_app.command("list")
+def sources_list(
+    ctx: typer.Context,
+    harnesses: HarnessesOption = None,
+    source_path: SourcePathOption = None,
+    json_output: JsonOption = False,
+) -> None:
+    _sources_list(
+        ctx,
+        harnesses=harnesses,
+        source_path=source_path,
+        json_output=json_output,
+    )
+
+
+def _sources_list(
+    ctx: typer.Context,
+    *,
+    harnesses: list[str] | None,
+    source_path: Path | None,
+    json_output: bool,
 ) -> None:
     loaded = _load_resolved_toktrail_config_or_exit(ctx)
     selected_harnesses = tuple(harnesses or loaded.config.imports.harnesses)
@@ -2076,7 +2123,7 @@ def sources(
     )
 
 
-@pricing_app.command("list")
+@prices_app.command("list")
 def pricing_list(
     ctx: typer.Context,
     used_only: Annotated[bool, typer.Option("--used-only")] = False,
@@ -2190,7 +2237,7 @@ def _is_provider_price_file(ctx: typer.Context, target: Path, provider: str) -> 
         return target.absolute() == expected.absolute()
 
 
-@pricing_app.command("parse")
+@prices_app.command("parse")
 def pricing_parse(
     ctx: typer.Context,
     provider: Annotated[str, typer.Option("--provider")],
@@ -2274,7 +2321,7 @@ def pricing_parse(
     source_label = str(input_path) if input_path is not None else "stdin"
     metadata = (
         {
-            "generated_by": "toktrail pricing parse",
+            "generated_by": "toktrail prices parse",
             "provider": normalize_identity(provider),
             "source": source_label,
             "tier": tier,
@@ -2331,39 +2378,16 @@ def pricing_parse(
         typer.echo(f"warning: {warning}", err=True)
 
 
-@sessions_app.callback(invoke_without_command=True)
-def sessions(ctx: typer.Context) -> None:
-    if ctx.invoked_subcommand is not None:
-        return
-    conn = _open_toktrail_connection(ctx)
-    try:
-        tracking_sessions = list_tracking_sessions(conn)
-    finally:
-        conn.close()
-
-    if not tracking_sessions:
-        typer.echo("No tracking sessions found.")
-        return
-
-    for session in tracking_sessions:
-        state = "active" if session.ended_at_ms is None else "stopped"
-        typer.echo(
-            f"{session.id}\t{state}\t{session.name or '(unnamed)'}\t"
-            f"started={format_epoch_ms_compact(session.started_at_ms)}\t"
-            f"ended={format_epoch_ms_compact(session.ended_at_ms)}"
-        )
-
-
-@refresh_app.callback(invoke_without_command=True)
+@app.command("refresh")
 def refresh_usage(
     ctx: typer.Context,
     harness: RequiredHarnessOption = None,
     source: RequiredSourceOption = None,
-    session_id: SessionOption = None,
+    run_id: RunOption = None,
     source_session_id: SourceSessionOption = None,
-    since_start: SinceStartOption = False,
+    since_run_start: SinceRunStartOption = False,
     raw: RawModeOption = None,
-    no_session: NoSessionOption = False,
+    no_run: NoRunOption = False,
     dry_run: DryRunOption = False,
     json_output: JsonOption = False,
 ) -> None:
@@ -2373,9 +2397,6 @@ def refresh_usage(
     - Explicit: with --harness and --source parameters
     - Config-based: from configuration file (when neither parameter is provided)
     """
-    if ctx.invoked_subcommand is not None:
-        return
-
     # If both harness and source are provided, use explicit refresh mode
     if harness is not None and source is not None:
         explicit_include_raw = False if raw is None else raw
@@ -2384,11 +2405,11 @@ def refresh_usage(
                 ctx,
                 harness_name=harness,
                 source_path=source,
-                tracking_session_id=session_id,
+                tracking_session_id=run_id,
                 source_session_id=source_session_id,
-                since_start=since_start,
+                since_start=since_run_start,
                 include_raw_json=explicit_include_raw,
-                no_session=no_session,
+                no_session=no_run,
                 dry_run=dry_run,
             )
         except (OSError, ValueError, ToktrailError) as exc:
@@ -2419,11 +2440,11 @@ def refresh_usage(
                 _resolve_state_db(ctx),
                 harnesses=None,
                 source_path=None,
-                session_id=session_id,
-                use_active_session=not no_session,
+                session_id=run_id,
+                use_active_session=not no_run,
                 include_raw_json=raw,
                 config_path=_resolve_config_path(ctx),
-                since_start=since_start,
+                since_start=since_run_start,
             )
         except (OSError, ValueError, ToktrailError) as exc:
             _exit_with_error(str(exc))
@@ -2440,10 +2461,10 @@ def refresh_usage(
         )
 
 
-@watch_app.callback(invoke_without_command=True)
+@app.command("watch")
 def watch(
     ctx: typer.Context,
-    session_id: SessionOption = None,
+    run_id: RunOption = None,
     harnesses: HarnessesOption = None,
     interval: IntervalOption = 2.0,
     raw: RawModeOption = None,
@@ -2454,7 +2475,7 @@ def watch(
     try:
         _watch_configured(
             ctx,
-            tracking_session_id=session_id,
+            tracking_session_id=run_id,
             harnesses=harness_list,
             interval=interval,
             include_raw_json=raw,
@@ -2464,11 +2485,12 @@ def watch(
         _exit_with_error(str(exc))
 
 
-@source_sessions_app.command("opencode")
-def sessions_opencode(
+@sources_app.command("sessions")
+def sources_sessions(
     ctx: typer.Context,
+    harness: Annotated[str, typer.Argument(help="Harness name.")],
     source_session_id: SourceSessionArgument = None,
-    opencode_db: OpenCodeDbOption = None,
+    source: SourcePathOption = None,
     last: LastOption = False,
     breakdown: BreakdownOption = False,
     json_output: JsonOption = False,
@@ -2480,8 +2502,8 @@ def sessions_opencode(
 ) -> None:
     _run_source_sessions_command(
         ctx,
-        "opencode",
-        source_path=opencode_db,
+        harness,
+        source_path=source,
         source_session_id=source_session_id,
         last=last,
         breakdown=breakdown,
@@ -2494,248 +2516,35 @@ def sessions_opencode(
     )
 
 
-@source_sessions_app.command("pi")
-def sessions_pi(
+@sources_app.command("session")
+def sources_session(
     ctx: typer.Context,
-    source_session_id: SourceSessionArgument = None,
-    pi_path: PiPathOption = None,
-    last: LastOption = False,
+    harness: Annotated[str, typer.Argument(help="Harness name.")],
+    source_session_id: Annotated[str, typer.Argument(help="Source session id.")],
+    source: SourcePathOption = None,
     breakdown: BreakdownOption = False,
     json_output: JsonOption = False,
     utc: UtcOption = False,
-    limit: LimitOption = None,
-    sort: SortOption = "last",
-    columns: ColumnsOption = None,
     rich_output: RichOption = False,
 ) -> None:
     _run_source_sessions_command(
         ctx,
-        "pi",
-        source_path=pi_path,
+        harness,
+        source_path=source,
         source_session_id=source_session_id,
-        last=last,
+        last=False,
         breakdown=breakdown,
         json_output=json_output,
         utc=utc,
-        limit=limit,
-        sort=sort,
-        columns=columns,
+        limit=None,
+        sort="last",
+        columns=None,
         rich_output=rich_output,
     )
 
 
-@source_sessions_app.command("codex")
-def sessions_codex(
-    ctx: typer.Context,
-    source_session_id: SourceSessionArgument = None,
-    codex_path: CodexPathOption = None,
-    last: LastOption = False,
-    breakdown: BreakdownOption = False,
-    json_output: JsonOption = False,
-    utc: UtcOption = False,
-    limit: LimitOption = None,
-    sort: SortOption = "last",
-    columns: ColumnsOption = None,
-    rich_output: RichOption = False,
-) -> None:
-    _run_source_sessions_command(
-        ctx,
-        "codex",
-        source_path=codex_path,
-        source_session_id=source_session_id,
-        last=last,
-        breakdown=breakdown,
-        json_output=json_output,
-        utc=utc,
-        limit=limit,
-        sort=sort,
-        columns=columns,
-        rich_output=rich_output,
-    )
-
-
-@source_sessions_app.command("goose")
-def sessions_goose(
-    ctx: typer.Context,
-    source_session_id: SourceSessionArgument = None,
-    goose_path: GoosePathOption = None,
-    last: LastOption = False,
-    breakdown: BreakdownOption = False,
-    json_output: JsonOption = False,
-    utc: UtcOption = False,
-    limit: LimitOption = None,
-    sort: SortOption = "last",
-    columns: ColumnsOption = None,
-    rich_output: RichOption = False,
-) -> None:
-    _run_source_sessions_command(
-        ctx,
-        "goose",
-        source_path=goose_path,
-        source_session_id=source_session_id,
-        last=last,
-        breakdown=breakdown,
-        json_output=json_output,
-        utc=utc,
-        limit=limit,
-        sort=sort,
-        columns=columns,
-        rich_output=rich_output,
-    )
-
-
-@source_sessions_app.command("droid")
-def sessions_droid(
-    ctx: typer.Context,
-    source_session_id: SourceSessionArgument = None,
-    droid_path: DroidPathOption = None,
-    last: LastOption = False,
-    breakdown: BreakdownOption = False,
-    json_output: JsonOption = False,
-    utc: UtcOption = False,
-    limit: LimitOption = None,
-    sort: SortOption = "last",
-    columns: ColumnsOption = None,
-    rich_output: RichOption = False,
-) -> None:
-    _run_source_sessions_command(
-        ctx,
-        "droid",
-        source_path=droid_path,
-        source_session_id=source_session_id,
-        last=last,
-        breakdown=breakdown,
-        json_output=json_output,
-        utc=utc,
-        limit=limit,
-        sort=sort,
-        columns=columns,
-        rich_output=rich_output,
-    )
-
-
-@source_sessions_app.command("copilot")
-def sessions_copilot(
-    ctx: typer.Context,
-    source_session_id: SourceSessionArgument = None,
-    copilot_path: CopilotPathOption = None,
-    last: LastOption = False,
-    breakdown: BreakdownOption = False,
-    json_output: JsonOption = False,
-    utc: UtcOption = False,
-    limit: LimitOption = None,
-    sort: SortOption = "last",
-    columns: ColumnsOption = None,
-    rich_output: RichOption = False,
-) -> None:
-    _run_source_sessions_command(
-        ctx,
-        "copilot",
-        source_path=copilot_path,
-        source_session_id=source_session_id,
-        last=last,
-        breakdown=breakdown,
-        json_output=json_output,
-        utc=utc,
-        limit=limit,
-        sort=sort,
-        columns=columns,
-        rich_output=rich_output,
-    )
-
-
-@source_sessions_app.command("amp")
-def sessions_amp(
-    ctx: typer.Context,
-    source_session_id: SourceSessionArgument = None,
-    amp_path: AmpPathOption = None,
-    last: LastOption = False,
-    breakdown: BreakdownOption = False,
-    json_output: JsonOption = False,
-    utc: UtcOption = False,
-    limit: LimitOption = None,
-    sort: SortOption = "last",
-    columns: ColumnsOption = None,
-    rich_output: RichOption = False,
-) -> None:
-    _run_source_sessions_command(
-        ctx,
-        "amp",
-        source_path=amp_path,
-        source_session_id=source_session_id,
-        last=last,
-        breakdown=breakdown,
-        json_output=json_output,
-        utc=utc,
-        limit=limit,
-        sort=sort,
-        columns=columns,
-        rich_output=rich_output,
-    )
-
-
-@source_sessions_app.command("claude")
-def sessions_claude(
-    ctx: typer.Context,
-    source_session_id: SourceSessionArgument = None,
-    claude_path: ClaudePathOption = None,
-    last: LastOption = False,
-    breakdown: BreakdownOption = False,
-    json_output: JsonOption = False,
-    utc: UtcOption = False,
-    limit: LimitOption = None,
-    sort: SortOption = "last",
-    columns: ColumnsOption = None,
-    rich_output: RichOption = False,
-) -> None:
-    _run_source_sessions_command(
-        ctx,
-        "claude",
-        source_path=claude_path,
-        source_session_id=source_session_id,
-        last=last,
-        breakdown=breakdown,
-        json_output=json_output,
-        utc=utc,
-        limit=limit,
-        sort=sort,
-        columns=columns,
-        rich_output=rich_output,
-    )
-
-
-@source_sessions_app.command("vibe")
-def sessions_vibe(
-    ctx: typer.Context,
-    source_session_id: SourceSessionArgument = None,
-    vibe_path: VibePathOption = None,
-    last: LastOption = False,
-    breakdown: BreakdownOption = False,
-    json_output: JsonOption = False,
-    utc: UtcOption = False,
-    limit: LimitOption = None,
-    sort: SortOption = "last",
-    columns: ColumnsOption = None,
-    rich_output: RichOption = False,
-) -> None:
-    _run_source_sessions_command(
-        ctx,
-        "vibe",
-        source_path=vibe_path,
-        source_session_id=source_session_id,
-        last=last,
-        breakdown=breakdown,
-        json_output=json_output,
-        utc=utc,
-        limit=limit,
-        sort=sort,
-        columns=columns,
-        rich_output=rich_output,
-    )
-
-
-@analyze_app.command("session")
-def analyze_session(
+@analyze_app.command("cache")
+def analyze_cache(
     ctx: typer.Context,
     harness: Annotated[str, typer.Argument(help="Harness name to analyze.")],
     source_session_id: SourceSessionArgument = None,
@@ -2799,7 +2608,7 @@ def analyze_session(
 )
 def copilot_run(
     ctx: typer.Context,
-    session_id: SessionOption = None,
+    run_id: RunOption = None,
     no_import: Annotated[bool, typer.Option("--no-import")] = False,
     no_raw: NoRawOption = False,
     otel_file: Annotated[Path | None, typer.Option("--otel-file")] = None,
@@ -2825,7 +2634,7 @@ def copilot_run(
             ctx,
             harness_name="copilot",
             source_path=path,
-            tracking_session_id=session_id,
+            tracking_session_id=run_id,
             source_session_id=None,
             since_start=False,
             include_raw_json=not no_raw,
@@ -2930,11 +2739,11 @@ def _run_harness_import(
         if selected_session_id is None:
             selected_session_id = get_active_tracking_session(conn)
         if selected_session_id is None:
-            _exit_with_error("No active tracking session found.")
+            _exit_with_error("No active run found.")
 
         tracking_session = get_tracking_session(conn, selected_session_id)
         if tracking_session is None:
-            _exit_with_error(f"Tracking session not found: {selected_session_id}")
+            _exit_with_error(f"Run not found: {selected_session_id}")
 
         scan = harness.scan(
             resolved_source,
@@ -2963,7 +2772,7 @@ def _run_harness_import(
     return ImportExecutionResult(
         harness=harness.display_name,
         source_path=resolved_source,
-        tracking_session_id=selected_session_id,
+        run_id=selected_session_id,
         rows_seen=scan.rows_seen,
         rows_imported=insert_result.rows_inserted,
         rows_skipped=rows_skipped,
@@ -3010,7 +2819,7 @@ def _run_harness_import_with_dry_run(
         if selected_session_id is not None:
             tracking_session = get_tracking_session(conn, selected_session_id)
             if tracking_session is None:
-                _exit_with_error(f"Tracking session not found: {selected_session_id}")
+                _exit_with_error(f"Run not found: {selected_session_id}")
 
         scan = harness.scan(
             resolved_source,
@@ -3056,7 +2865,7 @@ def _run_harness_import_with_dry_run(
     return ImportExecutionResult(
         harness=harness.display_name,
         source_path=resolved_source,
-        tracking_session_id=selected_session_id,
+        run_id=selected_session_id,
         rows_seen=scan.rows_seen,
         rows_imported=insert_result.rows_inserted,
         rows_skipped=rows_skipped,
@@ -3087,14 +2896,14 @@ def _resolve_watch_session_id(
             selected = get_active_tracking_session(conn)
         if selected is None:
             _exit_with_error(
-                "No active tracking session found. "
-                "Start one with `toktrail run start --name <name>`."
+                "No active run found. Start one with "
+                "`toktrail run start --name <name>`."
             )
         session = get_tracking_session(conn, selected)
         if session is None:
-            _exit_with_error(f"Tracking session not found: {selected}")
+            _exit_with_error(f"Run not found: {selected}")
         if session.ended_at_ms is not None:
-            _exit_with_error(f"Tracking session is already stopped: {selected}")
+            _exit_with_error(f"Run is already stopped: {selected}")
         return selected
     finally:
         conn.close()
@@ -4746,7 +4555,7 @@ def _print_refresh_result(
 ) -> None:
     typer.echo(f"Refreshed {result.harness} usage:")
     typer.echo(f"  source path: {result.source_path}")
-    typer.echo(f"  tracking session: {result.tracking_session_id}")
+    typer.echo(f"  run: {result.run_id}")
     typer.echo(f"  rows seen: {result.rows_seen}")
     typer.echo(f"  rows imported: {result.rows_imported}")
     typer.echo(f"  rows skipped: {result.rows_skipped}")

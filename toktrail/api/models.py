@@ -300,7 +300,7 @@ class HarnessDefinition:
 
 @dataclass(frozen=True)
 class ImportUsageResult:
-    tracking_session_id: int | None
+    run_id: int | None
     harness: str
     source_path: Path | None
     source_session_id: str | None
@@ -320,7 +320,7 @@ class ImportUsageResult:
 
     def as_dict(self) -> dict[str, object]:
         return {
-            "tracking_session_id": self.tracking_session_id,
+            "run_id": self.run_id,
             "harness": self.harness,
             "source_path": _path_text(self.source_path),
             "source_session_id": self.source_session_id,

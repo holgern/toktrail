@@ -63,7 +63,7 @@ class UsageReportFilter:
     ) -> dict[str, object]:
         values: dict[str, object] = {}
         if include_tracking_session and self.tracking_session_id is not None:
-            values["tracking_session_id"] = self.tracking_session_id
+            values["run_id"] = self.tracking_session_id
         if self.harness is not None:
             values["harness"] = self.harness
         if self.source_session_id is not None:

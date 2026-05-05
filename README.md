@@ -31,7 +31,7 @@ source database or source JSONL files.
 
 ## Configuration files
 
-toktrail uses three TOML files:
+toktrail uses these configuration files:
 
 - `config.toml` for imports and costing policy
 - `prices.toml` for manual `[[pricing.virtual]]` and `[[pricing.actual]]` overrides
@@ -77,7 +77,7 @@ init_state(db_path)
 import_usage(db_path, "opencode", source_path=source_path)
 run = start_run(db_path, name="benchmark-run")
 import_usage(db_path, "opencode", session_id=run.id, source_path=source_path)
-session_usage = session_report(db_path, session.id)
+session_usage = session_report(db_path, run.id)
 today_usage = usage_report(db_path, period="today", timezone="UTC")
 subscription_usage = subscription_usage_report(db_path, provider_id="opencode-go")
 ```
@@ -110,7 +110,7 @@ toktrail refresh --harness codex --source ~/.codex/sessions
 toktrail refresh --harness amp --source ~/.local/share/amp/threads
 toktrail refresh --harness claude --source ~/.claude/projects
 toktrail refresh --dry-run
-toktrail refresh --no-session
+toktrail refresh --no-run
 ```
 
 For local acceptance and testing, the repository includes a sample OpenCode
@@ -130,8 +130,8 @@ toktrail run status --split-thinking
 toktrail run status --price-state unpriced --sort tokens --limit 20
 toktrail --config ~/.config/toktrail/config.toml run status --json
 toktrail run status --harness pi --source-session pi_ses_001 --json
-toktrail analyze session opencode --last
-toktrail analyze session opencode ses-1 --json
+toktrail analyze cache opencode --last
+toktrail analyze cache opencode ses-1 --json
 ```
 
 Show period-based usage across canonical ledger rows, even without an active
@@ -140,15 +140,15 @@ tracking session:
 ```bash
 toktrail usage today
 toktrail usage last-week --utc --json
-toktrail usage --since 2026-05-01 --until 2026-06-01 --timezone Europe/Berlin
-toktrail usage --price-state priced --sort provider --limit 10 --json
+toktrail usage summary --since 2026-05-01 --until 2026-06-01 --timezone Europe/Berlin
+toktrail usage summary --price-state priced --sort provider --limit 10 --json
 toktrail usage today --no-refresh
 toktrail usage today --refresh-details
 toktrail usage sessions --last
 toktrail usage sessions --order asc --limit 10
 toktrail usage runs --last --limit 5
-toktrail subscriptions
-toktrail subscriptions --provider opencode-go --json
+toktrail subscriptions status
+toktrail subscriptions status --provider opencode-go --json
 toktrail sync export --out toktrail-state.tar.gz --no-refresh
 toktrail sync import toktrail-state.tar.gz
 toktrail sync import toktrail-state.tar.gz --dry-run --json
@@ -171,23 +171,23 @@ toktrail sources
 toktrail run start --name <name>
 toktrail refresh
 toktrail run status
-toktrail analyze session opencode --last
+toktrail analyze cache opencode --last
 toktrail usage today
-toktrail sessions
-toktrail subscriptions
+toktrail run list
+toktrail subscriptions status
 toktrail sync export --out toktrail-state.tar.gz
 toktrail run stop
 ```
 
 Report commands (`toktrail usage`, `toktrail run status`, and
-`toktrail subscriptions`) refresh configured sources first by default. Use
+`toktrail subscriptions status`) refresh configured sources first by default. Use
 `--no-refresh` for stale local-state reads, and `--refresh-details` to print a
 compact refresh summary.
 
 Session terminology:
 
-- `toktrail sessions` lists tracking **runs** (start/stop windows).
-- `toktrail source-sessions --harness <h>` lists raw **source sessions** from a specific harness.
+- `toktrail run list` lists tracking **runs** (start/stop windows).
+- `toktrail sources sessions <h>` lists raw **source sessions** from a specific harness.
 - `toktrail usage sessions` summarizes imported source-session **usage** (tokens, costs, models).
 - `toktrail usage runs` summarizes usage grouped by tracking **run**.
 
@@ -223,11 +223,11 @@ live in `prices/<provider>.toml`. toktrail loads provider files first and
 You can generate provider files directly from provider docs text:
 
 ```bash
-toktrail pricing parse --provider openai --tier standard --input openai-pricing.jsx
-toktrail pricing parse --provider zai --input zai-pricing.md
-toktrail pricing parse --provider opencode-go --table actual --input opencode-go.txt
-toktrail pricing parse --provider openai --input openai-pricing.jsx --output -
-toktrail pricing parse --provider openai --input openai-pricing.jsx --output ~/.config/toktrail/prices/openai.toml
+toktrail prices parse --provider openai --tier standard --input openai-pricing.jsx
+toktrail prices parse --provider zai --input zai-pricing.md
+toktrail prices parse --provider opencode-go --table actual --input opencode-go.txt
+toktrail prices parse --provider openai --input openai-pricing.jsx --output -
+toktrail prices parse --provider openai --input openai-pricing.jsx --output ~/.config/toktrail/prices/openai.toml
 ```
 
 Context-tier pricing is supported with multiple rows for the same
@@ -276,12 +276,12 @@ Create and manage tracking sessions:
 toktrail run start --name refactor-auth-flow
 toktrail run stop
 toktrail run stop 3
-toktrail sessions
-toktrail subscriptions
+toktrail run list
+toktrail subscriptions status
 toktrail sync export --out toktrail-state.tar.gz
 toktrail sync import toktrail-state.tar.gz --dry-run --json
-toktrail source-sessions --harness pi
-toktrail source-session show --harness pi pi_ses_001
+toktrail sources sessions pi
+toktrail sources session pi pi_ses_001
 ```
 
 Discover configured source paths before refreshing:
@@ -299,15 +299,14 @@ Inspect and manage pricing config and used model pricing:
 toktrail config init
 toktrail config init --template copilot
 toktrail config show
-toktrail config prices
-toktrail config prices --provider openai --sort model
-toktrail config prices --query gpt-5 --aliases
-toktrail config prices --model gpt-5-mini --json
-toktrail pricing list
-toktrail pricing list --used-only
-toktrail pricing list --missing-only
+toktrail prices list
+toktrail prices list --provider openai --sort model
+toktrail prices list --query gpt-5 --aliases
+toktrail prices list --model gpt-5-mini --json
+toktrail prices list --used-only
+toktrail prices list --missing-only
 toktrail config validate
-toktrail subscriptions
+toktrail subscriptions status
 toktrail --config /path/to/config.toml run status --json
 ```
 
@@ -322,8 +321,8 @@ toktrail refresh --harness goose --source ~/.local/share/goose/sessions/sessions
 toktrail refresh --harness droid --source ~/.factory/sessions
 toktrail refresh --harness amp --source ~/.local/share/amp/threads
 toktrail refresh --dry-run
-toktrail refresh --session 3
-toktrail refresh --no-session
+toktrail refresh --run 3
+toktrail refresh --no-run
 toktrail refresh --no-raw
 ```
 
@@ -356,14 +355,14 @@ toktrail copilot env fish
 toktrail copilot env nu
 toktrail copilot env powershell
 
-toktrail source-sessions --harness pi
-toktrail source-sessions --harness codex
-toktrail source-sessions --harness claude
-toktrail source-session show --harness pi pi_ses_001
-toktrail source-session show --harness goose goose_session_id
+toktrail sources sessions pi
+toktrail sources sessions codex
+toktrail sources sessions claude
+toktrail sources session pi pi_ses_001
+toktrail sources session goose goose_session_id
 
-toktrail pricing list
-toktrail pricing list --missing-only
+toktrail prices list
+toktrail prices list --missing-only
 ```
 
 Copilot source discovery honors `TOKTRAIL_COPILOT_FILE`,
@@ -455,8 +454,8 @@ toktrail config init --template copilot
 toktrail copilot env bash
 toktrail refresh --harness copilot --source ~/.copilot/otel/copilot-otel-20260429-090000.jsonl
 toktrail run status --price-state unpriced --sort tokens --limit 20
-toktrail pricing list --missing-only
-toktrail source-sessions --harness copilot
+toktrail prices list --missing-only
+toktrail sources sessions copilot
 ```
 
 Virtual and pricing-based actual costs are computed at report time, not during

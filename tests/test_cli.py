@@ -456,7 +456,7 @@ def test_cli_init_start_refresh_status_stop(tmp_path) -> None:
             "--source",
             str(source_db),
         ],
-        ["--db", str(state_db), "sessions"],
+        ["--db", str(state_db), "run", "list"],
     ):
         result = runner.invoke(app, args)
         assert result.exit_code == 0, result.output
@@ -479,7 +479,7 @@ def test_cli_init_start_refresh_status_stop(tmp_path) -> None:
     assert stop_result.exit_code == 0, stop_result.output
 
 
-def test_cli_sessions_without_subcommand_lists_tracking_sessions(tmp_path) -> None:
+def test_cli_run_list_lists_tracking_runs(tmp_path) -> None:
     runner = CliRunner()
     state_db = tmp_path / "toktrail.db"
 
@@ -487,12 +487,11 @@ def test_cli_sessions_without_subcommand_lists_tracking_sessions(tmp_path) -> No
     runner.invoke(
         app, ["--db", str(state_db), "run", "start", "--name", "test-session"]
     )
-    result = runner.invoke(app, ["--db", str(state_db), "sessions"])
+    result = runner.invoke(app, ["--db", str(state_db), "run", "list"])
 
     assert result.exit_code == 0, result.output
     assert "test-session" in result.output
-    assert "started=202" in result.output
-    assert "started=17" not in result.output
+    assert "Started" in result.output
 
 
 def test_cli_refresh_missing_opencode_db_fails(tmp_path) -> None:
@@ -527,7 +526,7 @@ def test_cli_opencode_sessions_lists_source_sessions(tmp_path) -> None:
 
     result = runner.invoke(
         app,
-        ["source-sessions", "opencode", "--opencode-db", str(source_db)],
+        ["sources", "sessions", "opencode", "--source", str(source_db)],
     )
 
     assert result.exit_code == 0, result.output
@@ -786,9 +785,10 @@ def test_cli_sessions_droid_breakdown_shows_token_columns(tmp_path) -> None:
     result = runner.invoke(
         app,
         [
-            "source-sessions",
+            "sources",
+            "sessions",
             "droid",
-            "--droid-path",
+            "--source",
             str(source_path),
             "--last",
             "--breakdown",
@@ -907,7 +907,7 @@ opencode = "{source_db}"
 
     assert result.exit_code == 0, result.output
     assert payload[0]["harness"] == "opencode"
-    assert payload[0]["tracking_session_id"] is None
+    assert payload[0]["run_id"] is None
     assert payload[0]["rows_imported"] == 1
     assert payload[0]["rows_linked"] == 0
 
@@ -1356,7 +1356,7 @@ def test_cli_refresh_with_no_session_inserts_unscoped_rows(tmp_path) -> None:
             "--db",
             str(state_db),
             "refresh",
-            "--no-session",
+            "--no-run",
             "--harness",
             "opencode",
             "--source",
@@ -1367,7 +1367,7 @@ def test_cli_refresh_with_no_session_inserts_unscoped_rows(tmp_path) -> None:
     payload = json.loads(result.output)
 
     assert result.exit_code == 0, result.output
-    assert payload[0]["tracking_session_id"] is None
+    assert payload[0]["run_id"] is None
     assert payload[0]["rows_imported"] == 1
 
 
@@ -1386,7 +1386,7 @@ def test_cli_refresh_with_no_session_is_idempotent(tmp_path) -> None:
             "--db",
             str(state_db),
             "refresh",
-            "--no-session",
+            "--no-run",
             "--harness",
             "opencode",
             "--source",
@@ -1404,7 +1404,7 @@ def test_cli_refresh_with_no_session_is_idempotent(tmp_path) -> None:
             "--db",
             str(state_db),
             "refresh",
-            "--no-session",
+            "--no-run",
             "--harness",
             "opencode",
             "--source",
@@ -1432,7 +1432,7 @@ def test_cli_refresh_with_no_session_dry_run_does_not_persist(tmp_path) -> None:
             "--db",
             str(state_db),
             "refresh",
-            "--no-session",
+            "--no-run",
             "--harness",
             "opencode",
             "--source",
@@ -1875,7 +1875,7 @@ def test_cli_config_prices_lists_virtual_prices(tmp_path) -> None:
 
     result = runner.invoke(
         app,
-        ["--config", str(config_path), "config", "prices", "--provider", "openai"],
+        ["--config", str(config_path), "prices", "list", "--provider", "openai"],
     )
 
     assert result.exit_code == 0, result.output
@@ -1898,8 +1898,8 @@ def test_cli_config_prices_json_includes_effective_fallback_prices(tmp_path) -> 
         [
             "--config",
             str(config_path),
-            "config",
             "prices",
+            "list",
             "--model",
             "gpt-5-mini",
             "--json",
@@ -1929,8 +1929,8 @@ def test_cli_config_prices_filters_provider_model_query_category_release(
         [
             "--config",
             str(config_path),
-            "config",
             "prices",
+            "list",
             "--table",
             "all",
             "--provider",
@@ -1964,11 +1964,11 @@ def test_cli_config_prices_rejects_invalid_filter_values(tmp_path) -> None:
 
     bad_table = runner.invoke(
         app,
-        ["--config", str(config_path), "config", "prices", "--table", "bogus"],
+        ["--config", str(config_path), "prices", "list", "--table", "bogus"],
     )
     bad_sort = runner.invoke(
         app,
-        ["--config", str(config_path), "config", "prices", "--sort", "bogus"],
+        ["--config", str(config_path), "prices", "list", "--sort", "bogus"],
     )
 
     assert bad_table.exit_code == 1
@@ -2028,8 +2028,8 @@ reset_at = "2026-05-01T00:00:00+00:00"
             str(config_path),
             "--prices",
             str(prices_path),
-            "config",
             "prices",
+            "list",
             "--provider",
             "openai",
             "--json",
@@ -2067,7 +2067,7 @@ def test_cli_pricing_parse_openai_standard_to_stdout(tmp_path) -> None:
     result = runner.invoke(
         app,
         [
-            "pricing",
+            "prices",
             "parse",
             "--provider",
             "openai",
@@ -2099,7 +2099,7 @@ def test_cli_pricing_parse_defaults_to_provider_file(tmp_path) -> None:
         [
             "--config",
             str(config_path),
-            "pricing",
+            "prices",
             "parse",
             "--provider",
             "openai",
@@ -2125,7 +2125,7 @@ def test_cli_pricing_parse_accepts_output_alias(tmp_path) -> None:
     result = runner.invoke(
         app,
         [
-            "pricing",
+            "prices",
             "parse",
             "--provider",
             "openai",
@@ -2154,7 +2154,7 @@ def test_cli_pricing_parse_output_dash_prints_stdout(tmp_path) -> None:
         [
             "--config",
             str(config_path),
-            "pricing",
+            "prices",
             "parse",
             "--provider",
             "openai",
@@ -2184,7 +2184,7 @@ def test_cli_pricing_parse_json_writes_file(tmp_path) -> None:
         [
             "--config",
             str(config_path),
-            "pricing",
+            "prices",
             "parse",
             "--provider",
             "openai",
@@ -2214,7 +2214,7 @@ def test_cli_pricing_parse_json_dry_run_does_not_write(tmp_path) -> None:
         [
             "--config",
             str(config_path),
-            "pricing",
+            "prices",
             "parse",
             "--provider",
             "openai",
@@ -2248,7 +2248,7 @@ def test_cli_pricing_parse_zai_to_stdout(tmp_path) -> None:
     result = runner.invoke(
         app,
         [
-            "pricing",
+            "prices",
             "parse",
             "--provider",
             "zai",
@@ -2278,7 +2278,7 @@ GLM 5.1      $1.40    $4.40     $0.26          -
     result = runner.invoke(
         app,
         [
-            "pricing",
+            "prices",
             "parse",
             "--provider",
             "opencode-go",
@@ -2311,7 +2311,7 @@ GPT-5.2\tGA\tVersatile\t$1.75\t$0.175\t$14.00
     result = runner.invoke(
         app,
         [
-            "pricing",
+            "prices",
             "parse",
             "--provider",
             "github-copilot",
@@ -2357,7 +2357,7 @@ output_usd_per_1m = 15
     result = runner.invoke(
         app,
         [
-            "pricing",
+            "prices",
             "parse",
             "--provider",
             "openai",
@@ -2393,7 +2393,7 @@ TextTokenPricingTables tier="standard" rows={[
     result = runner.invoke(
         app,
         [
-            "pricing",
+            "prices",
             "parse",
             "--provider",
             "openai",
@@ -2447,8 +2447,8 @@ output_usd_per_1m = 30
         [
             "--config",
             str(config_path),
-            "config",
             "prices",
+            "list",
             "--provider",
             "openai",
             "--json",
@@ -2729,7 +2729,7 @@ def test_cli_pricing_list_used_only_reports_used_models(tmp_path) -> None:
             str(state_db),
             "--config",
             str(config_path),
-            "pricing",
+            "prices",
             "list",
             "--used-only",
             "--json",
@@ -2757,7 +2757,7 @@ def test_cli_pricing_list_missing_only_reports_unconfigured_used_models(
             str(state_db),
             "--config",
             str(config_path),
-            "pricing",
+            "prices",
             "list",
             "--missing-only",
             "--json",
@@ -2814,7 +2814,7 @@ opencode = "{source_db}"
             str(state_db),
             "--config",
             str(config_path),
-            "pricing",
+            "prices",
             "list",
             "--used-only",
             "--json",
@@ -2831,7 +2831,7 @@ opencode = "{source_db}"
             str(state_db),
             "--config",
             str(config_path),
-            "pricing",
+            "prices",
             "list",
             "--used-only",
             "--json",
@@ -2887,7 +2887,7 @@ def test_cli_pi_sessions_lists_source_sessions(tmp_path) -> None:
 
     result = runner.invoke(
         app,
-        ["source-sessions", "pi", "--pi-path", str(session_dir)],
+        ["sources", "sessions", "pi", "--source", str(session_dir)],
     )
 
     assert result.exit_code == 0, result.output
@@ -2904,7 +2904,7 @@ def test_cli_sessions_codex_lists_source_sessions(tmp_path) -> None:
 
     result = runner.invoke(
         app,
-        ["source-sessions", "codex", "--codex-path", str(codex_file)],
+        ["sources", "sessions", "codex", "--source", str(codex_file)],
     )
 
     assert result.exit_code == 0, result.output
@@ -2921,7 +2921,7 @@ def test_cli_sessions_amp_lists_source_sessions(tmp_path) -> None:
 
     result = runner.invoke(
         app,
-        ["source-sessions", "amp", "--amp-path", str(source_path)],
+        ["sources", "sessions", "amp", "--source", str(source_path)],
     )
 
     assert result.exit_code == 0, result.output
@@ -2938,7 +2938,7 @@ def test_cli_sessions_copilot_lists_source_sessions(tmp_path) -> None:
 
     result = runner.invoke(
         app,
-        ["source-sessions", "copilot", "--copilot-file", str(copilot_file)],
+        ["sources", "sessions", "copilot", "--source", str(copilot_file)],
     )
 
     assert result.exit_code == 0, result.output
@@ -2958,8 +2958,8 @@ def test_cli_harness_first_sessions_are_removed(tmp_path) -> None:
 
     commands = (
         ["opencode", "sessions", "--opencode-db", str(source_db)],
-        ["pi", "sessions", "--pi-path", str(session_dir)],
-        ["copilot", "sessions", "--copilot-file", str(copilot_file)],
+        ["pi", "sessions", "--source", str(session_dir)],
+        ["copilot", "sessions", "--source", str(copilot_file)],
     )
 
     for args in commands:
@@ -2975,9 +2975,10 @@ def test_cli_sessions_pi_breakdown_shows_token_columns(tmp_path) -> None:
     result = runner.invoke(
         app,
         [
-            "source-sessions",
+            "sources",
+            "sessions",
             "pi",
-            "--pi-path",
+            "--source",
             str(session_dir),
             "--last",
             "--breakdown",
@@ -2999,9 +3000,10 @@ def test_cli_sessions_codex_breakdown_shows_token_columns(tmp_path) -> None:
     result = runner.invoke(
         app,
         [
-            "source-sessions",
+            "sources",
+            "sessions",
             "codex",
-            "--codex-path",
+            "--source",
             str(codex_file),
             "--last",
             "--breakdown",
@@ -3023,9 +3025,10 @@ def test_cli_sessions_goose_breakdown_shows_token_columns(tmp_path) -> None:
     result = runner.invoke(
         app,
         [
-            "source-sessions",
+            "sources",
+            "sessions",
             "goose",
-            "--goose-path",
+            "--source",
             str(goose_db),
             "--last",
             "--breakdown",
@@ -3047,9 +3050,10 @@ def test_cli_sessions_amp_breakdown_shows_token_columns(tmp_path) -> None:
     result = runner.invoke(
         app,
         [
-            "source-sessions",
+            "sources",
+            "sessions",
             "amp",
-            "--amp-path",
+            "--source",
             str(source_path),
             "--last",
             "--breakdown",
@@ -3091,9 +3095,10 @@ def test_cli_sessions_codex_supports_limit_sort_and_columns(tmp_path) -> None:
     result = runner.invoke(
         app,
         [
-            "source-sessions",
+            "sources",
+            "sessions",
             "codex",
-            "--codex-path",
+            "--source",
             str(codex_dir),
             "--sort",
             "tokens",
@@ -3148,9 +3153,10 @@ def test_cli_sessions_pi_supports_limit_sort_and_columns(tmp_path) -> None:
     result = runner.invoke(
         app,
         [
-            "source-sessions",
+            "sources",
+            "sessions",
             "pi",
-            "--pi-path",
+            "--source",
             str(session_dir),
             "--sort",
             "tokens",
@@ -3221,9 +3227,10 @@ def test_cli_sessions_copilot_supports_virtual_and_savings_sort(tmp_path) -> Non
             [
                 "--config",
                 str(config_path),
-                "source-sessions",
+                "sources",
+                "sessions",
                 "copilot",
-                "--copilot-file",
+                "--source",
                 str(copilot_dir),
                 "--sort",
                 sort_value,
@@ -3756,7 +3763,7 @@ def test_cli_analyze_session_opencode_last_human_output(tmp_path: Path) -> None:
             "--db",
             str(state_db),
             "analyze",
-            "session",
+            "cache",
             "opencode",
             "--source",
             str(source_db),
@@ -3784,7 +3791,7 @@ def test_cli_analyze_session_opencode_json_shape(tmp_path: Path) -> None:
             "--db",
             str(state_db),
             "analyze",
-            "session",
+            "cache",
             "opencode",
             "--source",
             str(source_db),
@@ -3822,7 +3829,7 @@ def test_cli_analyze_session_opencode_known_source_session_id(tmp_path: Path) ->
             "--db",
             str(state_db),
             "analyze",
-            "session",
+            "cache",
             "opencode",
             "ses-cache",
             "--source",
@@ -3847,7 +3854,7 @@ def test_cli_analyze_session_rejects_last_and_source_session_id(tmp_path: Path) 
             "--db",
             str(state_db),
             "analyze",
-            "session",
+            "cache",
             "opencode",
             "ses-cache",
             "--source",
@@ -3873,7 +3880,7 @@ def test_cli_analyze_session_no_raw_json_in_output(tmp_path: Path) -> None:
             "--db",
             str(state_db),
             "analyze",
-            "session",
+            "cache",
             "opencode",
             "--source",
             str(source_db),
@@ -4095,7 +4102,7 @@ def test_cli_subscriptions_prints_5h_window(tmp_path) -> None:
             "--db",
             str(state_db),
             "refresh",
-            "--no-session",
+            "--no-run",
             "--harness",
             "opencode",
             "--source",
@@ -4140,7 +4147,7 @@ def test_cli_subscriptions_provider_filter_json_shape(tmp_path) -> None:
             "--db",
             str(state_db),
             "refresh",
-            "--no-session",
+            "--no-run",
             "--harness",
             "opencode",
             "--source",
@@ -4197,7 +4204,7 @@ def test_cli_subscriptions_period_filter_accepts_5h(tmp_path) -> None:
             "--db",
             str(state_db),
             "refresh",
-            "--no-session",
+            "--no-run",
             "--harness",
             "opencode",
             "--source",
@@ -4385,7 +4392,7 @@ reset_at = "2026-05-01T00:00:00+00:00"
             "--db",
             str(state_db),
             "refresh",
-            "--no-session",
+            "--no-run",
             "--harness",
             "opencode",
             "--source",
@@ -4529,7 +4536,7 @@ def test_cli_subscriptions_unknown_provider_filter_is_clear(tmp_path) -> None:
             "--db",
             str(state_db),
             "refresh",
-            "--no-session",
+            "--no-run",
             "--harness",
             "opencode",
             "--source",
@@ -4569,7 +4576,7 @@ def test_cli_sync_export_and_import_dry_run_json_shape(tmp_path) -> None:
             "--db",
             str(state_db),
             "refresh",
-            "--no-session",
+            "--no-run",
             "--harness",
             "opencode",
             "--source",
@@ -4903,4 +4910,4 @@ def test_cli_usage_project_rejected(tmp_path) -> None:
         ["--db", str(state_db), "usage", "daily", "--project", "myproj"],
     )
     assert result.exit_code != 0
-    assert "--project is not supported" in result.output
+    assert "No such option: --project" in result.output
