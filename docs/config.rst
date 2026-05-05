@@ -90,7 +90,7 @@ Example
    fixed_cost_period = "monthly"
    fixed_cost_reset_at = "2026-05-01T00:00:00+02:00"
    fixed_cost_basis = "virtual"
-   
+
    [[subscriptions.windows]]
    period = "5h"
    limit_usd = 10
