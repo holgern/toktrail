@@ -25,6 +25,8 @@ def scan_pi_path(
     *,
     source_session_id: str | None = None,
     include_raw_json: bool = True,
+    since_ms: int | None = None,
+    import_state: object | None = None,
 ) -> PiScanResult:
     resolved_path = source_path.expanduser()
     if not resolved_path.exists():
@@ -74,6 +76,8 @@ def scan_pi_file(
     file_path: Path,
     *,
     include_raw_json: bool = True,
+    since_ms: int | None = None,
+    import_state: object | None = None,
 ) -> PiScanResult:
     resolved_path = file_path.expanduser()
     if not resolved_path.exists() or not resolved_path.is_file():

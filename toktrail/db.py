@@ -9,6 +9,7 @@ from pathlib import Path
 from time import time
 from typing import Any, cast
 
+from toktrail.adapters.base import ImportSourceState
 from toktrail.config import (
     CostingConfig,
     SubscriptionConfig,
@@ -18,8 +19,10 @@ from toktrail.config import (
 )
 from toktrail.costing import (
     CostBreakdown,
+    CostingRuntime,
     SimulationTarget,
     UsageCostAtom,
+    compile_costing_config,
     resolve_price_resolution,
     simulate_cost,
 )
@@ -52,7 +55,7 @@ from toktrail.reporting import (
     UsageSessionsReport,
 )
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 _PERIOD_SORT: dict[str, int] = {
     "5h": 0,
     "daily": 1,
@@ -69,6 +72,46 @@ class InsertUsageResult:
     rows_inserted: int
     rows_linked: int = 0
     rows_skipped: int = 0
+
+
+@dataclass(frozen=True)
+class _UsageWhere:
+    source_clause: str
+    where_clause: str
+    params: tuple[object, ...]
+
+
+@dataclass(frozen=True)
+class _AggregateRow:
+    group: tuple[object, ...]
+    harness: str
+    source_session_id: str
+    provider_id: str
+    model_id: str
+    thinking_level: str | None
+    agent: str | None
+    context_tokens: int
+    message_count: int
+    input_tokens: int
+    output_tokens: int
+    reasoning_tokens: int
+    cache_read_tokens: int
+    cache_write_tokens: int
+    cache_output_tokens: int
+    source_cost_usd: Decimal
+    first_created_ms: int | None = None
+    last_created_ms: int | None = None
+
+    @property
+    def tokens(self) -> TokenBreakdown:
+        return TokenBreakdown(
+            input=self.input_tokens,
+            output=self.output_tokens,
+            reasoning=self.reasoning_tokens,
+            cache_read=self.cache_read_tokens,
+            cache_write=self.cache_write_tokens,
+            cache_output=self.cache_output_tokens,
+        )
 
 
 def _now_ms() -> int:
@@ -118,6 +161,9 @@ def migrate(conn: sqlite3.Connection) -> None:
     if current_version == 4:
         _migrate_v4_to_v5(conn)
         current_version = 5
+    if current_version == 5:
+        _migrate_v5_to_v6(conn)
+        current_version = 6
 
     _ensure_machine_id(conn)
     conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
@@ -262,9 +308,12 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             fingerprint_hash TEXT NOT NULL,
             role TEXT NOT NULL DEFAULT 'assistant',
             provider_id TEXT NOT NULL DEFAULT 'unknown',
+            provider_key TEXT NOT NULL DEFAULT 'unknown',
             model_id TEXT NOT NULL,
+            model_key TEXT NOT NULL DEFAULT '',
             thinking_level TEXT,
             agent TEXT,
+            agent_key TEXT,
             created_ms INTEGER NOT NULL,
             completed_ms INTEGER,
             input_tokens INTEGER NOT NULL DEFAULT 0,
@@ -294,6 +343,24 @@ def _create_schema(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_usage_events_provider_created
         ON usage_events(provider_id, created_ms);
 
+        CREATE INDEX IF NOT EXISTS idx_usage_events_created
+        ON usage_events(created_ms);
+
+        CREATE INDEX IF NOT EXISTS idx_usage_events_harness_created
+        ON usage_events(harness, created_ms);
+
+        CREATE INDEX IF NOT EXISTS idx_usage_events_source_session_created
+        ON usage_events(source_session_id, created_ms);
+
+        CREATE INDEX IF NOT EXISTS idx_usage_events_provider_model_created
+        ON usage_events(provider_id, model_id, created_ms);
+
+        CREATE INDEX IF NOT EXISTS idx_usage_events_provider_key_created
+        ON usage_events(provider_key, created_ms);
+
+        CREATE INDEX IF NOT EXISTS idx_usage_events_provider_model_key_created
+        ON usage_events(provider_key, model_key, created_ms);
+
         CREATE TABLE IF NOT EXISTS run_events (
             tracking_session_id INTEGER NOT NULL
                 REFERENCES runs(id) ON DELETE CASCADE,
@@ -310,6 +377,26 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS import_sources (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            harness TEXT NOT NULL,
+            source_path TEXT NOT NULL,
+            source_session_key TEXT NOT NULL DEFAULT '',
+            fingerprint_size INTEGER,
+            fingerprint_mtime_ns INTEGER,
+            fingerprint_inode INTEGER,
+            sqlite_page_count INTEGER,
+            sqlite_schema_version INTEGER,
+            last_imported_created_ms INTEGER,
+            last_seen_rowid INTEGER,
+            last_file_offset INTEGER,
+            updated_at_ms INTEGER NOT NULL,
+            UNIQUE(harness, source_path, source_session_key)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_import_sources_lookup
+        ON import_sources(harness, source_path, source_session_key);
         """
     )
 
@@ -419,6 +506,92 @@ def _migrate_v4_to_v5(conn: sqlite3.Connection) -> None:
         )
 
 
+def _migrate_v5_to_v6(conn: sqlite3.Connection) -> None:
+    _add_column_if_missing(
+        conn,
+        "usage_events",
+        "provider_key",
+        "TEXT NOT NULL DEFAULT 'unknown'",
+    )
+    _add_column_if_missing(
+        conn,
+        "usage_events",
+        "model_key",
+        "TEXT NOT NULL DEFAULT ''",
+    )
+    _add_column_if_missing(conn, "usage_events", "agent_key", "TEXT")
+    conn.execute(
+        """
+        UPDATE usage_events
+        SET provider_key = LOWER(COALESCE(provider_id, 'unknown')),
+            model_key = LOWER(COALESCE(model_id, '')),
+            agent_key = LOWER(COALESCE(agent, ''))
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_usage_events_created
+        ON usage_events(created_ms)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_usage_events_harness_created
+        ON usage_events(harness, created_ms)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_usage_events_source_session_created
+        ON usage_events(source_session_id, created_ms)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_usage_events_provider_model_created
+        ON usage_events(provider_id, model_id, created_ms)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_usage_events_provider_key_created
+        ON usage_events(provider_key, created_ms)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_usage_events_provider_model_key_created
+        ON usage_events(provider_key, model_key, created_ms)
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS import_sources (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            harness TEXT NOT NULL,
+            source_path TEXT NOT NULL,
+            source_session_key TEXT NOT NULL DEFAULT '',
+            fingerprint_size INTEGER,
+            fingerprint_mtime_ns INTEGER,
+            fingerprint_inode INTEGER,
+            sqlite_page_count INTEGER,
+            sqlite_schema_version INTEGER,
+            last_imported_created_ms INTEGER,
+            last_seen_rowid INTEGER,
+            last_file_offset INTEGER,
+            updated_at_ms INTEGER NOT NULL,
+            UNIQUE(harness, source_path, source_session_key)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_import_sources_lookup
+        ON import_sources(harness, source_path, source_session_key)
+        """
+    )
+
+
 def create_tracking_session(
     conn: sqlite3.Connection,
     name: str | None,
@@ -515,6 +688,120 @@ def list_tracking_sessions(conn: sqlite3.Connection) -> list[TrackingSession]:
 
 def get_machine_id(conn: sqlite3.Connection) -> str:
     return _ensure_machine_id(conn)
+
+
+def _source_session_key(source_session_id: str | None) -> str:
+    return source_session_id or ""
+
+
+def get_import_source_state(
+    conn: sqlite3.Connection,
+    *,
+    harness: str,
+    source_path: str,
+    source_session_id: str | None = None,
+) -> ImportSourceState | None:
+    row = conn.execute(
+        """
+        SELECT
+            harness,
+            source_path,
+            source_session_key,
+            fingerprint_size,
+            fingerprint_mtime_ns,
+            fingerprint_inode,
+            sqlite_page_count,
+            sqlite_schema_version,
+            last_imported_created_ms,
+            last_seen_rowid,
+            last_file_offset,
+            updated_at_ms
+        FROM import_sources
+        WHERE harness = ? AND source_path = ? AND source_session_key = ?
+        """,
+        (harness, source_path, _source_session_key(source_session_id)),
+    ).fetchone()
+    if row is None:
+        return None
+    return ImportSourceState(
+        harness=str(row["harness"]),
+        source_path=str(row["source_path"]),
+        source_session_id=(
+            str(row["source_session_key"])
+            if str(row["source_session_key"]) != ""
+            else None
+        ),
+        fingerprint_size=_optional_int(row["fingerprint_size"]),
+        fingerprint_mtime_ns=_optional_int(row["fingerprint_mtime_ns"]),
+        fingerprint_inode=_optional_int(row["fingerprint_inode"]),
+        sqlite_page_count=_optional_int(row["sqlite_page_count"]),
+        sqlite_schema_version=_optional_int(row["sqlite_schema_version"]),
+        last_imported_created_ms=_optional_int(row["last_imported_created_ms"]),
+        last_seen_rowid=_optional_int(row["last_seen_rowid"]),
+        last_file_offset=_optional_int(row["last_file_offset"]),
+        updated_at_ms=_optional_int(row["updated_at_ms"]),
+    )
+
+
+def upsert_import_source_state(
+    conn: sqlite3.Connection,
+    *,
+    harness: str,
+    source_path: str,
+    source_session_id: str | None = None,
+    fingerprint_size: int | None = None,
+    fingerprint_mtime_ns: int | None = None,
+    fingerprint_inode: int | None = None,
+    sqlite_page_count: int | None = None,
+    sqlite_schema_version: int | None = None,
+    last_imported_created_ms: int | None = None,
+    last_seen_rowid: int | None = None,
+    last_file_offset: int | None = None,
+) -> None:
+    now_ms = _now_ms()
+    conn.execute(
+        """
+        INSERT INTO import_sources (
+            harness,
+            source_path,
+            source_session_key,
+            fingerprint_size,
+            fingerprint_mtime_ns,
+            fingerprint_inode,
+            sqlite_page_count,
+            sqlite_schema_version,
+            last_imported_created_ms,
+            last_seen_rowid,
+            last_file_offset,
+            updated_at_ms
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(harness, source_path, source_session_key) DO UPDATE SET
+            fingerprint_size = excluded.fingerprint_size,
+            fingerprint_mtime_ns = excluded.fingerprint_mtime_ns,
+            fingerprint_inode = excluded.fingerprint_inode,
+            sqlite_page_count = excluded.sqlite_page_count,
+            sqlite_schema_version = excluded.sqlite_schema_version,
+            last_imported_created_ms = excluded.last_imported_created_ms,
+            last_seen_rowid = excluded.last_seen_rowid,
+            last_file_offset = excluded.last_file_offset,
+            updated_at_ms = excluded.updated_at_ms
+        """,
+        (
+            harness,
+            source_path,
+            _source_session_key(source_session_id),
+            fingerprint_size,
+            fingerprint_mtime_ns,
+            fingerprint_inode,
+            sqlite_page_count,
+            sqlite_schema_version,
+            last_imported_created_ms,
+            last_seen_rowid,
+            last_file_offset,
+            now_ms,
+        ),
+    )
 
 
 def attach_harness_session(
@@ -627,9 +914,9 @@ def insert_usage_events(
         event for event in events if since_ms is None or event.created_ms >= since_ms
     ]
     harness_session_ids: dict[tuple[str, str], int] = {}
+    imported_at_ms = _now_ms()
     rows_inserted = 0
     rows_linked = 0
-    imported_at_ms = _now_ms()
 
     with conn:
         if tracking_session_id is not None:
@@ -652,44 +939,50 @@ def insert_usage_events(
                     )
                 )
 
+        conn.execute(
+            """
+            CREATE TEMP TABLE IF NOT EXISTS tmp_usage_import (
+                tracking_session_id INTEGER,
+                harness_session_id INTEGER,
+                harness TEXT NOT NULL,
+                source_session_id TEXT NOT NULL,
+                source_row_id TEXT,
+                source_message_id TEXT,
+                source_dedup_key TEXT,
+                global_dedup_key TEXT NOT NULL,
+                fingerprint_hash TEXT NOT NULL,
+                provider_id TEXT NOT NULL,
+                provider_key TEXT NOT NULL,
+                model_id TEXT NOT NULL,
+                model_key TEXT NOT NULL,
+                thinking_level TEXT,
+                agent TEXT,
+                agent_key TEXT,
+                created_ms INTEGER NOT NULL,
+                completed_ms INTEGER,
+                input_tokens INTEGER NOT NULL,
+                output_tokens INTEGER NOT NULL,
+                reasoning_tokens INTEGER NOT NULL,
+                cache_read_tokens INTEGER NOT NULL,
+                cache_write_tokens INTEGER NOT NULL,
+                cache_output_tokens INTEGER NOT NULL,
+                source_cost_usd TEXT NOT NULL,
+                raw_json TEXT,
+                imported_at_ms INTEGER NOT NULL
+            )
+            """
+        )
+        conn.execute("DELETE FROM tmp_usage_import")
+
+        temp_rows: list[tuple[object, ...]] = []
         for event in filtered_events:
             harness_session_id = harness_session_ids.get(
                 (event.harness, event.source_session_id)
             )
-            cursor = conn.execute(
-                """
-                INSERT OR IGNORE INTO usage_events (
-                    tracking_session_id,
-                    harness_session_id,
-                    harness,
-                    source_session_id,
-                     source_row_id,
-                     source_message_id,
-                     source_dedup_key,
-                     global_dedup_key,
-                     fingerprint_hash,
-                     role,
-                     provider_id,
-                     model_id,
-                     thinking_level,
-                     agent,
-                     created_ms,
-                     completed_ms,
-                     input_tokens,
-                     output_tokens,
-                     reasoning_tokens,
-                     cache_read_tokens,
-                     cache_write_tokens,
-                     cache_output_tokens,
-                     source_cost_usd,
-                     raw_json,
-                     imported_at_ms
-                 )
-                 VALUES (
-                     ?, ?, ?, ?, ?, ?, ?, ?, ?, 'assistant',
-                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-                 )
-                 """,
+            provider_key = normalize_identity(event.provider_id)
+            model_key = normalize_identity(event.model_id)
+            agent_key = normalize_identity(event.agent) if event.agent else None
+            temp_rows.append(
                 (
                     tracking_session_id,
                     harness_session_id,
@@ -701,9 +994,12 @@ def insert_usage_events(
                     event.global_dedup_key,
                     event.fingerprint_hash,
                     event.provider_id,
+                    provider_key,
                     event.model_id,
+                    model_key,
                     event.thinking_level,
                     event.agent,
+                    agent_key,
                     event.created_ms,
                     event.completed_ms,
                     event.tokens.input,
@@ -715,41 +1011,161 @@ def insert_usage_events(
                     _source_cost_to_storage(event.source_cost_usd),
                     event.raw_json,
                     imported_at_ms,
-                ),
-            )
-            rows_inserted += cursor.rowcount
-            if tracking_session_id is None:
-                continue
-            event_row = conn.execute(
-                """
-                SELECT id
-                FROM usage_events
-                WHERE harness = ? AND global_dedup_key = ?
-                """,
-                (event.harness, event.global_dedup_key),
-            ).fetchone()
-            if event_row is None:
-                msg = (
-                    "Inserted usage event row could not be reloaded for "
-                    f"{event.harness}:{event.global_dedup_key}"
                 )
-                raise ValueError(msg)
-            link_cursor = conn.execute(
+            )
+        if temp_rows:
+            temp_placeholders = ", ".join("?" for _ in range(27))
+            conn.executemany(
+                """
+                INSERT INTO tmp_usage_import (
+                    tracking_session_id,
+                    harness_session_id,
+                    harness,
+                    source_session_id,
+                    source_row_id,
+                    source_message_id,
+                    source_dedup_key,
+                    global_dedup_key,
+                    fingerprint_hash,
+                    provider_id,
+                    provider_key,
+                    model_id,
+                    model_key,
+                    thinking_level,
+                    agent,
+                    agent_key,
+                    created_ms,
+                    completed_ms,
+                    input_tokens,
+                    output_tokens,
+                    reasoning_tokens,
+                    cache_read_tokens,
+                    cache_write_tokens,
+                    cache_output_tokens,
+                    source_cost_usd,
+                    raw_json,
+                    imported_at_ms
+                )
+                VALUES ("""
+                + temp_placeholders
+                + ")",
+                temp_rows,
+            )
+
+        before_usage_count = _required_int(
+            conn.execute("SELECT COUNT(*) FROM usage_events").fetchone()[0]
+        )
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO usage_events (
+                tracking_session_id,
+                harness_session_id,
+                harness,
+                source_session_id,
+                source_row_id,
+                source_message_id,
+                source_dedup_key,
+                global_dedup_key,
+                fingerprint_hash,
+                role,
+                provider_id,
+                provider_key,
+                model_id,
+                model_key,
+                thinking_level,
+                agent,
+                agent_key,
+                created_ms,
+                completed_ms,
+                input_tokens,
+                output_tokens,
+                reasoning_tokens,
+                cache_read_tokens,
+                cache_write_tokens,
+                cache_output_tokens,
+                source_cost_usd,
+                raw_json,
+                imported_at_ms
+            )
+            SELECT
+                tracking_session_id,
+                harness_session_id,
+                harness,
+                source_session_id,
+                source_row_id,
+                source_message_id,
+                source_dedup_key,
+                global_dedup_key,
+                fingerprint_hash,
+                'assistant',
+                provider_id,
+                provider_key,
+                model_id,
+                model_key,
+                thinking_level,
+                agent,
+                agent_key,
+                created_ms,
+                completed_ms,
+                input_tokens,
+                output_tokens,
+                reasoning_tokens,
+                cache_read_tokens,
+                cache_write_tokens,
+                cache_output_tokens,
+                source_cost_usd,
+                raw_json,
+                imported_at_ms
+            FROM tmp_usage_import
+            """
+        )
+        after_usage_count = _required_int(
+            conn.execute("SELECT COUNT(*) FROM usage_events").fetchone()[0]
+        )
+        rows_inserted = max(after_usage_count - before_usage_count, 0)
+
+        if tracking_session_id is not None:
+            before_link_count = _required_int(
+                conn.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM run_events
+                    WHERE tracking_session_id = ?
+                    """,
+                    (tracking_session_id,),
+                ).fetchone()[0]
+            )
+            conn.execute(
                 """
                 INSERT OR IGNORE INTO run_events (
                     tracking_session_id,
                     usage_event_id,
                     created_at_ms
                 )
-                VALUES (?, ?, ?)
+                SELECT
+                    ?,
+                    ue.id,
+                    ?
+                FROM usage_events AS ue
+                JOIN tmp_usage_import AS tmp
+                  ON tmp.harness = ue.harness
+                 AND tmp.global_dedup_key = ue.global_dedup_key
                 """,
-                (
-                    tracking_session_id,
-                    _required_int(event_row["id"]),
-                    imported_at_ms,
-                ),
+                (tracking_session_id, imported_at_ms),
             )
-            rows_linked += link_cursor.rowcount
+            after_link_count = _required_int(
+                conn.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM run_events
+                    WHERE tracking_session_id = ?
+                    """,
+                    (tracking_session_id,),
+                ).fetchone()[0]
+            )
+            rows_linked = max(after_link_count - before_link_count, 0)
+
+        conn.execute("DELETE FROM tmp_usage_import")
 
     return InsertUsageResult(
         rows_inserted=rows_inserted,
@@ -828,9 +1244,23 @@ def summarize_usage(
     simulation_targets: tuple[SimulationTarget, ...] = (),
 ) -> RunReport:
     filters, session = _apply_tracking_session_time_window(conn, filters)
-    events = list_usage_events(conn, filters, order="created")
+    rows = _aggregate_usage_rows(
+        conn,
+        filters,
+        group_by=(
+            "harness",
+            "source_session_id",
+            "provider_id",
+            "model_id",
+            "thinking_level",
+            "agent",
+            "context_tokens",
+        ),
+        split_thinking=filters.split_thinking,
+    )
 
     config = costing_config or default_costing_config()
+    runtime = compile_costing_config(config)
     totals_tokens = TokenBreakdown()
     totals_costs = CostTotals()
     by_provider: dict[str, _ReportBucket] = {}
@@ -841,25 +1271,33 @@ def summarize_usage(
         tuple[str, str, str, str | None, tuple[str, ...]], _UnconfiguredBucket
     ] = {}
 
-    for event in events:
+    for row in rows:
         atom = UsageCostAtom(
-            harness=event.harness,
-            provider_id=event.provider_id,
-            model_id=event.model_id,
-            thinking_level=event.thinking_level if filters.split_thinking else None,
-            agent=event.agent,
-            message_count=1,
-            tokens=event.tokens,
-            source_cost_usd=event.source_cost_usd,
+            harness=row.harness,
+            provider_id=row.provider_id,
+            model_id=row.model_id,
+            thinking_level=row.thinking_level if filters.split_thinking else None,
+            agent=row.agent,
+            message_count=row.message_count,
+            tokens=row.tokens,
+            source_cost_usd=row.source_cost_usd,
         )
         resolution = resolve_price_resolution(
             harness=atom.harness,
             provider_id=atom.provider_id,
             model_id=atom.model_id,
             config=config,
-            tokens=atom.tokens,
+            context_tokens=row.context_tokens,
+            runtime=runtime,
         )
-        breakdown = atom.compute_costs(config)
+        breakdown = runtime.compute_costs(
+            harness=atom.harness,
+            provider_id=atom.provider_id,
+            model_id=atom.model_id,
+            tokens=atom.tokens,
+            source_cost_usd=atom.source_cost_usd,
+            message_count=atom.message_count,
+        )
         totals_tokens = _add_tokens(totals_tokens, atom.tokens)
         totals_costs = _add_cost_breakdown(totals_costs, breakdown)
 
@@ -1043,17 +1481,22 @@ def summarize_subscription_usage(
         )
     ]
 
-    rows: list[SubscriptionUsageRow] = []
+    runtime = compile_costing_config(config)
+
+    request_details: dict[str, dict[str, object]] = {}
+    request_items: list[_SubscriptionWindowRequest] = []
+    first_use_cache: dict[tuple[tuple[str, ...], int], list[int]] = {}
+    billing_request_by_subscription: dict[str, str] = {}
+    request_counter = 0
+
     for subscription in sorted(subscriptions, key=lambda item: item.id):
         provider_ids = _subscription_usage_provider_ids(subscription)
-        periods: list[SubscriptionUsagePeriod] = []
         for window_config in sorted(
             subscription.windows,
             key=lambda item: (_PERIOD_SORT.get(item.period, 99), item.period),
         ):
             if not window_config.enabled:
                 continue
-
             status = "active"
             since_ms: int | None
             until_ms: int | None
@@ -1061,14 +1504,14 @@ def summarize_subscription_usage(
             last_until_ms: int | None = None
             last_usage_ms: int | None = None
             if window_config.reset_mode == "fixed":
-                window = resolve_fixed_subscription_window(
+                fixed_window = resolve_fixed_subscription_window(
                     period=window_config.period,
                     reset_at=window_config.reset_at,
                     timezone_name=subscription.timezone,
                     now_ms=generated_at_ms,
                 )
-                since_ms = window.since_ms
-                until_ms = window.until_ms
+                since_ms = fixed_window.since_ms
+                until_ms = fixed_window.until_ms
             else:
                 reset_anchor = resolve_fixed_subscription_window(
                     period="daily",
@@ -1076,12 +1519,16 @@ def summarize_subscription_usage(
                     timezone_name=subscription.timezone,
                     now_ms=0,
                 )
-                usage_timestamps = _provider_usage_timestamps(
-                    conn,
-                    provider_ids=provider_ids,
-                    since_ms=reset_anchor.since_ms,
-                    until_ms=generated_at_ms,
-                )
+                cache_key = (provider_ids, reset_anchor.since_ms)
+                usage_timestamps = first_use_cache.get(cache_key)
+                if usage_timestamps is None:
+                    usage_timestamps = _provider_usage_timestamps(
+                        conn,
+                        provider_ids=provider_ids,
+                        since_ms=reset_anchor.since_ms,
+                        until_ms=generated_at_ms,
+                    )
+                    first_use_cache[cache_key] = usage_timestamps
                 first_use_window = resolve_first_use_subscription_window(
                     period=window_config.period,
                     reset_at=window_config.reset_at,
@@ -1096,83 +1543,36 @@ def summarize_subscription_usage(
                 last_until_ms = first_use_window.last_until_ms
                 last_usage_ms = first_use_window.last_usage_ms
 
+            request_id = f"req-{request_counter:04d}"
+            request_counter += 1
+            request_details[request_id] = {
+                "subscription_id": subscription.id,
+                "kind": "quota",
+                "period": window_config.period,
+                "window": window_config,
+                "status": status,
+                "since_ms": since_ms,
+                "until_ms": until_ms,
+                "last_since_ms": last_since_ms,
+                "last_until_ms": last_until_ms,
+                "last_usage_ms": last_usage_ms,
+                "basis": subscription.quota_cost_basis,
+                "provider_ids": provider_ids,
+            }
             if since_ms is not None and until_ms is not None:
-                report = summarize_usage(
-                    conn,
-                    UsageReportFilter(
+                request_items.append(
+                    _SubscriptionWindowRequest(
+                        request_id=request_id,
+                        subscription_id=subscription.id,
+                        kind="quota",
+                        period=window_config.period,
                         provider_ids=provider_ids,
                         since_ms=since_ms,
                         until_ms=until_ms,
-                    ),
-                    costing_config=config,
-                )
-                message_count = sum(row.message_count for row in report.by_harness)
-                tokens = report.totals.tokens
-                costs = report.totals.costs
-            else:
-                message_count = 0
-                tokens = TokenBreakdown()
-                costs = CostTotals()
-
-            used_usd = _select_subscription_cost(
-                costs,
-                basis=subscription.quota_cost_basis,
-            )
-
-            # Generate warnings for cost issues
-            warnings: list[dict[str, object]] = []
-            if message_count > 0 and used_usd == 0:
-                # Cost is zero but there are tokens; find unpriced models
-                for model_row in report.by_model:
-                    model_cost = (
-                        model_row.source_cost_usd
-                        if subscription.quota_cost_basis == "source"
-                        else model_row.actual_cost_usd
-                        if subscription.quota_cost_basis == "actual"
-                        else model_row.virtual_cost_usd
+                        quota_cost_basis=subscription.quota_cost_basis,
                     )
-                    if model_cost == 0 and model_row.message_count > 0:
-                        warnings.append(
-                            {
-                                "kind": "zero_cost_with_tokens",
-                                "cost_basis": subscription.quota_cost_basis,
-                                "provider_id": model_row.provider_id,
-                                "model_id": model_row.model_id,
-                                "message_count": model_row.message_count,
-                            }
-                        )
-
-            limit_usd = Decimal(str(window_config.limit_usd))
-            remaining_usd = max(limit_usd - used_usd, Decimal(0))
-            over_limit_usd = max(used_usd - limit_usd, Decimal(0))
-            percent_used = (
-                None if limit_usd == 0 else (used_usd / limit_usd) * Decimal(100)
-            )
-
-            periods.append(
-                SubscriptionUsagePeriod(
-                    period=window_config.period,
-                    reset_mode=window_config.reset_mode,
-                    reset_at=window_config.reset_at,
-                    status=status,
-                    since_ms=since_ms,
-                    until_ms=until_ms,
-                    limit_usd=limit_usd,
-                    used_usd=used_usd,
-                    remaining_usd=remaining_usd,
-                    over_limit_usd=over_limit_usd,
-                    percent_used=percent_used,
-                    message_count=message_count,
-                    tokens=tokens,
-                    costs=costs,
-                    last_since_ms=last_since_ms,
-                    last_until_ms=last_until_ms,
-                    last_usage_ms=last_usage_ms,
-                    warnings=tuple(warnings),
                 )
-            )
 
-        billing: SubscriptionBillingPeriod | None = None
         if subscription.fixed_cost_usd is not None:
             billing_reset_at = (
                 subscription.fixed_cost_reset_at
@@ -1193,44 +1593,135 @@ def summarize_subscription_usage(
                 timezone_name=subscription.timezone,
                 now_ms=generated_at_ms,
             )
-            billing_report = summarize_usage(
-                conn,
-                UsageReportFilter(
-                    provider_ids=provider_ids,
-                    since_ms=billing_window.since_ms,
-                    until_ms=billing_window.until_ms,
-                ),
-                costing_config=config,
-            )
             billing_basis = (
                 subscription.fixed_cost_basis or subscription.quota_cost_basis
             )
-            value_usd = _select_subscription_cost(
-                billing_report.totals.costs,
-                basis=billing_basis,
+            request_id = f"req-{request_counter:04d}"
+            request_counter += 1
+            request_details[request_id] = {
+                "subscription_id": subscription.id,
+                "kind": "billing",
+                "period": subscription.fixed_cost_period,
+                "reset_at": billing_reset_at,
+                "since_ms": billing_window.since_ms,
+                "until_ms": billing_window.until_ms,
+                "basis": billing_basis,
+                "provider_ids": provider_ids,
+                "fixed_cost_usd": subscription.fixed_cost_usd,
+            }
+            billing_request_by_subscription[subscription.id] = request_id
+            request_items.append(
+                _SubscriptionWindowRequest(
+                    request_id=request_id,
+                    subscription_id=subscription.id,
+                    kind="billing",
+                    period=subscription.fixed_cost_period,
+                    provider_ids=provider_ids,
+                    since_ms=billing_window.since_ms,
+                    until_ms=billing_window.until_ms,
+                    quota_cost_basis=billing_basis,
+                )
             )
-            fixed_cost_usd = Decimal(str(subscription.fixed_cost_usd))
+
+    request_summaries = _summarize_window_requests(
+        conn,
+        requests=tuple(request_items),
+        runtime=runtime,
+    )
+
+    rows: list[SubscriptionUsageRow] = []
+    for subscription in sorted(subscriptions, key=lambda item: item.id):
+        provider_ids = _subscription_usage_provider_ids(subscription)
+        periods: list[SubscriptionUsagePeriod] = []
+        for request_id, detail in sorted(request_details.items()):
+            if (
+                detail["subscription_id"] != subscription.id
+                or detail["kind"] != "quota"
+            ):
+                continue
+            window = cast(SubscriptionWindowConfig, detail["window"])
+            summary = request_summaries.get(request_id, _WindowUsageSummary())
+            used_usd = _select_subscription_cost(
+                summary.costs,
+                basis=str(detail["basis"]),
+            )
+            warnings: list[dict[str, object]] = []
+            if summary.message_count > 0 and used_usd == 0:
+                for (model_provider, model_id), (model_count, model_costs) in sorted(
+                    summary.by_model.items()
+                ):
+                    model_cost = _select_subscription_cost(
+                        model_costs,
+                        basis=str(detail["basis"]),
+                    )
+                    if model_cost == 0 and model_count > 0:
+                        warnings.append(
+                            {
+                                "kind": "zero_cost_with_tokens",
+                                "cost_basis": str(detail["basis"]),
+                                "provider_id": model_provider,
+                                "model_id": model_id,
+                                "message_count": model_count,
+                            }
+                        )
+
+            limit_usd = Decimal(str(window.limit_usd))
+            remaining_usd = max(limit_usd - used_usd, Decimal(0))
+            over_limit_usd = max(used_usd - limit_usd, Decimal(0))
+            percent_used = (
+                None if limit_usd == 0 else (used_usd / limit_usd) * Decimal(100)
+            )
+            periods.append(
+                SubscriptionUsagePeriod(
+                    period=window.period,
+                    reset_mode=window.reset_mode,
+                    reset_at=window.reset_at,
+                    status=str(detail["status"]),
+                    since_ms=cast(int | None, detail["since_ms"]),
+                    until_ms=cast(int | None, detail["until_ms"]),
+                    limit_usd=limit_usd,
+                    used_usd=used_usd,
+                    remaining_usd=remaining_usd,
+                    over_limit_usd=over_limit_usd,
+                    percent_used=percent_used,
+                    message_count=summary.message_count,
+                    tokens=summary.tokens,
+                    costs=summary.costs,
+                    last_since_ms=cast(int | None, detail["last_since_ms"]),
+                    last_until_ms=cast(int | None, detail["last_until_ms"]),
+                    last_usage_ms=cast(int | None, detail["last_usage_ms"]),
+                    warnings=tuple(warnings),
+                )
+            )
+
+        billing: SubscriptionBillingPeriod | None = None
+        billing_request_id = billing_request_by_subscription.get(subscription.id)
+        if billing_request_id is not None:
+            detail = request_details[billing_request_id]
+            summary = request_summaries.get(billing_request_id, _WindowUsageSummary())
+            value_usd = _select_subscription_cost(
+                summary.costs, basis=str(detail["basis"])
+            )
+            fixed_cost_usd = Decimal(str(detail["fixed_cost_usd"]))
             break_even_percent = (
                 None
                 if fixed_cost_usd == 0
                 else (value_usd / fixed_cost_usd) * Decimal(100)
             )
             billing = SubscriptionBillingPeriod(
-                period=subscription.fixed_cost_period,
-                reset_at=billing_reset_at,
-                since_ms=billing_window.since_ms,
-                until_ms=billing_window.until_ms,
-                billing_basis=billing_basis,
+                period=str(detail["period"]),
+                reset_at=str(detail["reset_at"]),
+                since_ms=cast(int, detail["since_ms"]),
+                until_ms=cast(int, detail["until_ms"]),
+                billing_basis=str(detail["basis"]),
                 fixed_cost_usd=fixed_cost_usd,
                 value_usd=value_usd,
                 net_savings_usd=value_usd - fixed_cost_usd,
                 break_even_remaining_usd=max(fixed_cost_usd - value_usd, Decimal(0)),
                 break_even_percent=break_even_percent,
-                message_count=sum(
-                    row.message_count for row in billing_report.by_harness
-                ),
-                tokens=billing_report.totals.tokens,
-                costs=billing_report.totals.costs,
+                message_count=summary.message_count,
+                tokens=summary.tokens,
+                costs=summary.costs,
             )
 
         rows.append(
@@ -1246,8 +1737,7 @@ def summarize_subscription_usage(
         )
 
     return SubscriptionUsageReport(
-        generated_at_ms=generated_at_ms,
-        subscriptions=tuple(rows),
+        generated_at_ms=generated_at_ms, subscriptions=tuple(rows)
     )
 
 
@@ -1303,6 +1793,130 @@ def _provider_usage_timestamps(
     return [_required_int(row["created_ms"]) for row in rows]
 
 
+def _summarize_window_requests(
+    conn: sqlite3.Connection,
+    *,
+    requests: tuple[_SubscriptionWindowRequest, ...],
+    runtime: CostingRuntime,
+) -> dict[str, _WindowUsageSummary]:
+    if not requests:
+        return {}
+
+    value_rows: list[tuple[str, str, int, int]] = []
+    for request in requests:
+        for provider_id in request.provider_ids:
+            value_rows.append(
+                (
+                    request.request_id,
+                    provider_id,
+                    request.since_ms,
+                    request.until_ms,
+                )
+            )
+    if not value_rows:
+        return {request.request_id: _WindowUsageSummary() for request in requests}
+
+    values_sql = ", ".join("(?, ?, ?, ?)" for _ in value_rows)
+    params: list[object] = []
+    for row in value_rows:
+        params.extend(row)
+
+    rows = conn.execute(
+        f"""
+        WITH win(request_id, provider_id, since_ms, until_ms) AS (
+            VALUES {values_sql}
+        )
+        SELECT
+            win.request_id AS request_id,
+            ue.harness AS harness,
+            ue.provider_id AS provider_id,
+            ue.model_id AS model_id,
+            (
+                ue.input_tokens + ue.cache_read_tokens + ue.cache_write_tokens
+            ) AS context_tokens,
+            COUNT(*) AS message_count,
+            SUM(ue.input_tokens) AS input_tokens,
+            SUM(ue.output_tokens) AS output_tokens,
+            SUM(ue.reasoning_tokens) AS reasoning_tokens,
+            SUM(ue.cache_read_tokens) AS cache_read_tokens,
+            SUM(ue.cache_write_tokens) AS cache_write_tokens,
+            SUM(ue.cache_output_tokens) AS cache_output_tokens,
+            DECIMAL_SUM(ue.source_cost_usd) AS source_cost_usd
+        FROM win
+        JOIN usage_events AS ue
+          ON ue.provider_id = win.provider_id
+         AND ue.created_ms >= win.since_ms
+         AND ue.created_ms < win.until_ms
+        GROUP BY
+            win.request_id,
+            ue.harness,
+            ue.provider_id,
+            ue.model_id,
+            context_tokens
+        """,
+        tuple(params),
+    ).fetchall()
+
+    summaries: dict[str, _WindowUsageSummary] = {}
+    for request in requests:
+        summaries[request.request_id] = _WindowUsageSummary()
+
+    for row in rows:
+        request_id = str(row["request_id"])
+        summary = summaries.setdefault(request_id, _WindowUsageSummary())
+        row_tokens = TokenBreakdown(
+            input=_required_int(row["input_tokens"]),
+            output=_required_int(row["output_tokens"]),
+            reasoning=_required_int(row["reasoning_tokens"]),
+            cache_read=_required_int(row["cache_read_tokens"]),
+            cache_write=_required_int(row["cache_write_tokens"]),
+            cache_output=_required_int(row["cache_output_tokens"]),
+        )
+        row_message_count = _required_int(row["message_count"])
+        row_source_cost = _required_decimal(row["source_cost_usd"])
+        row_breakdown = runtime.compute_costs(
+            harness=str(row["harness"]),
+            provider_id=str(row["provider_id"]),
+            model_id=str(row["model_id"]),
+            tokens=row_tokens,
+            source_cost_usd=row_source_cost,
+            message_count=row_message_count,
+        )
+        row_costs = CostTotals().add(
+            source_cost_usd=row_breakdown.source_cost_usd,
+            actual_cost_usd=row_breakdown.actual_cost_usd,
+            virtual_cost_usd=row_breakdown.virtual_cost_usd,
+            unpriced_count=row_breakdown.unpriced_count,
+        )
+
+        summary.message_count += row_message_count
+        summary.tokens = _add_tokens(summary.tokens, row_tokens)
+        summary.costs = summary.costs.add(
+            source_cost_usd=row_breakdown.source_cost_usd,
+            actual_cost_usd=row_breakdown.actual_cost_usd,
+            virtual_cost_usd=row_breakdown.virtual_cost_usd,
+            unpriced_count=row_breakdown.unpriced_count,
+        )
+
+        model_key = (str(row["provider_id"]), str(row["model_id"]))
+        existing = summary.by_model.get(model_key)
+        if existing is None:
+            summary.by_model[model_key] = (row_message_count, row_costs)
+        else:
+            existing_count, existing_costs = existing
+            summary.by_model[model_key] = (
+                existing_count + row_message_count,
+                existing_costs.add(
+                    source_cost_usd=row_breakdown.source_cost_usd,
+                    actual_cost_usd=row_breakdown.actual_cost_usd,
+                    virtual_cost_usd=row_breakdown.virtual_cost_usd,
+                    unpriced_count=row_breakdown.unpriced_count,
+                ),
+            )
+
+    return summaries
+
+
 def summarize_usage_series(
     conn: sqlite3.Connection,
     filters: UsageSeriesFilter,
@@ -1311,7 +1925,8 @@ def summarize_usage_series(
 ) -> UsageSeriesReport:
 
     from toktrail.periods import (
-        bucket_for_timestamp,
+        TimeBucket,
+        iter_time_buckets,
         resolve_timezone,
     )
 
@@ -1321,37 +1936,216 @@ def summarize_usage_series(
         conn,
         filters.to_usage_report_filter(),
     )
-    events = list_usage_events(conn, usage_filters, order="created")
+    where = _usage_where_parts(usage_filters)
+    bounds = conn.execute(
+        f"""
+        SELECT
+            MIN(ue.created_ms) AS min_created_ms,
+            MAX(ue.created_ms) AS max_created_ms
+        {where.source_clause}
+        {where.where_clause}
+        """,
+        where.params,
+    ).fetchone()
+    if (
+        bounds is None
+        or bounds["min_created_ms"] is None
+        or bounds["max_created_ms"] is None
+    ):
+        return UsageSeriesReport(
+            granularity=filters.granularity,
+            timezone=str(tz),
+            locale=filters.locale,
+            start_of_week=filters.start_of_week,
+            filters={
+                "since_ms": usage_filters.since_ms,
+                "until_ms": usage_filters.until_ms,
+                "harness": filters.harness,
+                "provider_id": filters.provider_id,
+                "model_id": filters.model_id,
+                "thinking_level": filters.thinking_level,
+                "agent": filters.agent,
+                "project": filters.project,
+                "instances": filters.instances,
+                "breakdown": filters.breakdown,
+                "split_thinking": filters.split_thinking,
+                "order": filters.order,
+            },
+            buckets=(),
+            instances=(),
+            totals=SessionTotals(tokens=TokenBreakdown(), costs=CostTotals()),
+        )
+
+    min_created_ms = _required_int(bounds["min_created_ms"])
+    max_created_ms = _required_int(bounds["max_created_ms"])
+    range_since_ms = (
+        usage_filters.since_ms if usage_filters.since_ms is not None else min_created_ms
+    )
+    range_until_ms = (
+        usage_filters.until_ms
+        if usage_filters.until_ms is not None
+        else max_created_ms + 1
+    )
+    if range_since_ms >= range_until_ms:
+        return UsageSeriesReport(
+            granularity=filters.granularity,
+            timezone=str(tz),
+            locale=filters.locale,
+            start_of_week=filters.start_of_week,
+            filters={
+                "since_ms": usage_filters.since_ms,
+                "until_ms": usage_filters.until_ms,
+                "harness": filters.harness,
+                "provider_id": filters.provider_id,
+                "model_id": filters.model_id,
+                "thinking_level": filters.thinking_level,
+                "agent": filters.agent,
+                "project": filters.project,
+                "instances": filters.instances,
+                "breakdown": filters.breakdown,
+                "split_thinking": filters.split_thinking,
+                "order": filters.order,
+            },
+            buckets=(),
+            instances=(),
+            totals=SessionTotals(tokens=TokenBreakdown(), costs=CostTotals()),
+        )
+
+    time_buckets = iter_time_buckets(
+        granularity=filters.granularity,
+        since_ms=range_since_ms,
+        until_ms=range_until_ms,
+        tz=tz,
+        start_of_week=filters.start_of_week,
+        locale=filters.locale,
+    )
+    if not time_buckets:
+        return UsageSeriesReport(
+            granularity=filters.granularity,
+            timezone=str(tz),
+            locale=filters.locale,
+            start_of_week=filters.start_of_week,
+            filters={
+                "since_ms": usage_filters.since_ms,
+                "until_ms": usage_filters.until_ms,
+                "harness": filters.harness,
+                "provider_id": filters.provider_id,
+                "model_id": filters.model_id,
+                "thinking_level": filters.thinking_level,
+                "agent": filters.agent,
+                "project": filters.project,
+                "instances": filters.instances,
+                "breakdown": filters.breakdown,
+                "split_thinking": filters.split_thinking,
+                "order": filters.order,
+            },
+            buckets=(),
+            instances=(),
+            totals=SessionTotals(tokens=TokenBreakdown(), costs=CostTotals()),
+        )
+
+    bucket_values_sql = ", ".join("(?, ?, ?, ?)" for _ in time_buckets)
+    bucket_params: list[object] = []
+    for bucket in time_buckets:
+        bucket_params.extend(
+            (bucket.key, bucket.label, bucket.since_ms, bucket.until_ms)
+        )
+
+    series_rows = conn.execute(
+        f"""
+        WITH bucket(key, label, since_ms, until_ms) AS (
+            VALUES {bucket_values_sql}
+        )
+        SELECT
+            bucket.key AS bucket_key,
+            bucket.label AS bucket_label,
+            bucket.since_ms AS bucket_since_ms,
+            bucket.until_ms AS bucket_until_ms,
+            ue.harness AS harness,
+            ue.source_session_id AS source_session_id,
+            ue.provider_id AS provider_id,
+            ue.model_id AS model_id,
+            CASE WHEN ? THEN ue.thinking_level ELSE NULL END AS thinking_level,
+            ue.agent AS agent,
+            (
+                ue.input_tokens + ue.cache_read_tokens + ue.cache_write_tokens
+            ) AS context_tokens,
+            COUNT(*) AS message_count,
+            SUM(ue.input_tokens) AS input_tokens,
+            SUM(ue.output_tokens) AS output_tokens,
+            SUM(ue.reasoning_tokens) AS reasoning_tokens,
+            SUM(ue.cache_read_tokens) AS cache_read_tokens,
+            SUM(ue.cache_write_tokens) AS cache_write_tokens,
+            SUM(ue.cache_output_tokens) AS cache_output_tokens,
+            DECIMAL_SUM(ue.source_cost_usd) AS source_cost_usd
+        {where.source_clause}
+        JOIN bucket
+          ON ue.created_ms >= bucket.since_ms
+         AND ue.created_ms < bucket.until_ms
+        {where.where_clause}
+        GROUP BY
+            bucket.key,
+            bucket.label,
+            bucket.since_ms,
+            bucket.until_ms,
+            ue.harness,
+            ue.source_session_id,
+            ue.provider_id,
+            ue.model_id,
+            thinking_level,
+            ue.agent,
+            context_tokens
+        ORDER BY bucket.since_ms ASC
+        """,
+        (*bucket_params, int(filters.split_thinking), *where.params),
+    ).fetchall()
 
     config = costing_config or default_costing_config()
+    runtime = compile_costing_config(config)
 
     bucket_data: dict[str, _SeriesBucketAccum] = {}
     model_bucket_data: dict[tuple[str, str, str, str | None], _SeriesModelAccum] = {}
     instance_data: dict[str, _SeriesInstanceAccum] = {}
 
-    for event in events:
-        created_ms = event.created_ms
-        harness = event.harness
-        source_session_id = event.source_session_id
-
-        bucket = bucket_for_timestamp(
-            created_ms,
-            granularity=filters.granularity,
-            tz=tz,
-            start_of_week=filters.start_of_week,
+    for row in series_rows:
+        harness = str(row["harness"])
+        source_session_id = str(row["source_session_id"])
+        bucket = TimeBucket(
+            key=str(row["bucket_key"]),
+            label=str(row["bucket_label"]),
+            since_ms=_required_int(row["bucket_since_ms"]),
+            until_ms=_required_int(row["bucket_until_ms"]),
         )
-
+        tokens = TokenBreakdown(
+            input=_required_int(row["input_tokens"]),
+            output=_required_int(row["output_tokens"]),
+            reasoning=_required_int(row["reasoning_tokens"]),
+            cache_read=_required_int(row["cache_read_tokens"]),
+            cache_write=_required_int(row["cache_write_tokens"]),
+            cache_output=_required_int(row["cache_output_tokens"]),
+        )
         atom = UsageCostAtom(
             harness=harness,
-            provider_id=event.provider_id,
-            model_id=event.model_id,
-            thinking_level=event.thinking_level if filters.split_thinking else None,
-            agent=event.agent,
-            message_count=1,
-            tokens=event.tokens,
-            source_cost_usd=event.source_cost_usd,
+            provider_id=str(row["provider_id"]),
+            model_id=str(row["model_id"]),
+            thinking_level=(
+                str(row["thinking_level"])
+                if row["thinking_level"] is not None and filters.split_thinking
+                else None
+            ),
+            agent=str(row["agent"]) if row["agent"] is not None else None,
+            message_count=_required_int(row["message_count"]),
+            tokens=tokens,
+            source_cost_usd=_required_decimal(row["source_cost_usd"]),
         )
-        breakdown = atom.compute_costs(config)
+        breakdown = runtime.compute_costs(
+            harness=atom.harness,
+            provider_id=atom.provider_id,
+            model_id=atom.model_id,
+            tokens=atom.tokens,
+            source_cost_usd=atom.source_cost_usd,
+            message_count=atom.message_count,
+        )
         model_key_str = f"{atom.provider_id}/{atom.model_id}"
 
         bucket_data.setdefault(bucket.key, _SeriesBucketAccum(bucket=bucket)).add(
@@ -1404,7 +2198,7 @@ def summarize_usage_series(
         key=lambda a: a.bucket.since_ms,
         reverse=(filters.order == "desc"),
     )
-    buckets: list[UsageSeriesBucket] = []
+    series_buckets: list[UsageSeriesBucket] = []
     for acc in buckets_list:
         by_model_rows: list[ModelSummaryRow] = []
         if filters.breakdown:
@@ -1412,7 +2206,7 @@ def summarize_usage_series(
                 if ikey != "" or bkey != acc.bucket.key:
                     continue
                 by_model_rows.append(macc.to_model_row(prov, mid or ""))
-        buckets.append(
+        series_buckets.append(
             UsageSeriesBucket(
                 key=acc.bucket.key,
                 label=acc.bucket.label,
@@ -1470,7 +2264,7 @@ def summarize_usage_series(
         locale=filters.locale,
         start_of_week=filters.start_of_week,
         filters=report_filters,
-        buckets=tuple(buckets),
+        buckets=tuple(series_buckets),
         instances=tuple(instances),
         totals=SessionTotals(tokens=totals_tokens, costs=totals_costs),
     )
@@ -1493,42 +2287,64 @@ def summarize_usage_sessions(
         conn,
         filters.to_usage_report_filter(),
     )
-    events = list_usage_events(conn, usage_filters, order="created")
+    aggregate_rows = _aggregate_usage_rows(
+        conn,
+        usage_filters,
+        group_by=(
+            "harness",
+            "source_session_id",
+            "provider_id",
+            "model_id",
+            "thinking_level",
+            "agent",
+            "context_tokens",
+        ),
+        split_thinking=filters.split_thinking,
+        include_range=True,
+    )
 
     config = costing_config or default_costing_config()
+    runtime = compile_costing_config(config)
 
-    # Per-session aggregation keyed by (harness, source_session_id)
+    # Per-session aggregation keyed by (harness, source_session_id).
     session_atoms: dict[tuple[str, str], list[_SessionAtom]] = {}
 
-    for event in events:
-        harness = event.harness
-        source_session_id = event.source_session_id
+    for row in aggregate_rows:
+        harness = row.harness
+        source_session_id = row.source_session_id
         key = (harness, source_session_id)
 
         atom = UsageCostAtom(
             harness=harness,
-            provider_id=event.provider_id,
-            model_id=event.model_id,
-            thinking_level=event.thinking_level if filters.split_thinking else None,
-            agent=event.agent,
-            message_count=1,
-            tokens=event.tokens,
-            source_cost_usd=event.source_cost_usd,
+            provider_id=row.provider_id,
+            model_id=row.model_id,
+            thinking_level=row.thinking_level if filters.split_thinking else None,
+            agent=row.agent,
+            message_count=row.message_count,
+            tokens=row.tokens,
+            source_cost_usd=row.source_cost_usd,
         )
-        cost_breakdown = atom.compute_costs(config)
+        cost_breakdown = runtime.compute_costs(
+            harness=atom.harness,
+            provider_id=atom.provider_id,
+            model_id=atom.model_id,
+            tokens=atom.tokens,
+            source_cost_usd=atom.source_cost_usd,
+            message_count=atom.message_count,
+        )
         session_atoms.setdefault(key, []).append(
             _SessionAtom(
-                first_ms=event.created_ms,
-                last_ms=event.completed_ms
-                if event.completed_ms is not None
-                else event.created_ms,
+                first_ms=row.first_created_ms
+                if row.first_created_ms is not None
+                else 0,
+                last_ms=row.last_created_ms if row.last_created_ms is not None else 0,
                 atom=atom,
                 breakdown=cost_breakdown,
             )
         )
 
     # Build session rows
-    rows: list[UsageSessionRow] = []
+    session_rows: list[UsageSessionRow] = []
     for (harness, source_session_id), atoms in session_atoms.items():
         session_key = f"{harness}/{source_session_id}"
         first_ms = min(a.first_ms for a in atoms)
@@ -1570,7 +2386,7 @@ def summarize_usage_sessions(
                     )
                 )
 
-        rows.append(
+        session_rows.append(
             UsageSessionRow(
                 key=session_key,
                 harness=harness,
@@ -1588,24 +2404,24 @@ def summarize_usage_sessions(
 
     # Sort and limit
     reverse = filters.order == "desc"
-    rows = sorted(
-        rows,
+    session_rows = sorted(
+        session_rows,
         key=lambda r: (r.last_ms, r.harness, r.source_session_id),
         reverse=reverse,
     )
     if filters.limit is not None:
-        rows = rows[: filters.limit]
+        session_rows = session_rows[: filters.limit]
 
     # Totals from returned rows only
     totals_tokens = TokenBreakdown()
     totals_costs = CostTotals()
-    for row in rows:
-        totals_tokens = _add_tokens(totals_tokens, row.tokens)
+    for session_row in session_rows:
+        totals_tokens = _add_tokens(totals_tokens, session_row.tokens)
         totals_costs = totals_costs.add(
-            source_cost_usd=row.costs.source_cost_usd,
-            actual_cost_usd=row.costs.actual_cost_usd,
-            virtual_cost_usd=row.costs.virtual_cost_usd,
-            unpriced_count=row.costs.unpriced_count,
+            source_cost_usd=session_row.costs.source_cost_usd,
+            actual_cost_usd=session_row.costs.actual_cost_usd,
+            virtual_cost_usd=session_row.costs.virtual_cost_usd,
+            unpriced_count=session_row.costs.unpriced_count,
         )
 
     report_filters: dict[str, object] = {
@@ -1625,7 +2441,7 @@ def summarize_usage_sessions(
 
     return UsageSessionsReport(
         filters=report_filters,
-        sessions=tuple(rows),
+        sessions=tuple(session_rows),
         totals=SessionTotals(tokens=totals_tokens, costs=totals_costs),
     )
 
@@ -1659,54 +2475,174 @@ def _apply_tracking_session_time_window(
     return replace(filters, since_ms=since_ms, until_ms=until_ms), session
 
 
-def _usage_report_query_parts(
+def _usage_where_parts(
     filters: UsageReportFilter,
-) -> tuple[str, str, list[object]]:
+    *,
+    alias: str = "ue",
+) -> _UsageWhere:
     clauses: list[str] = []
     params: list[object] = []
 
-    source_clause = " FROM usage_events AS ue"
+    source_clause = f" FROM usage_events AS {alias}"
     if filters.tracking_session_id is not None:
-        source_clause += " JOIN run_events AS tse ON tse.usage_event_id = ue.id"
+        source_clause += f" JOIN run_events AS tse ON tse.usage_event_id = {alias}.id"
         clauses.append("tse.tracking_session_id = ?")
         params.append(filters.tracking_session_id)
     if filters.harness is not None:
-        clauses.append("ue.harness = ?")
+        clauses.append(f"{alias}.harness = ?")
         params.append(filters.harness)
     if filters.source_session_id is not None:
-        clauses.append("ue.source_session_id = ?")
+        clauses.append(f"{alias}.source_session_id = ?")
         params.append(filters.source_session_id)
     if filters.provider_id is not None and filters.provider_ids:
         msg = "provider_id and provider_ids cannot both be set."
         raise ValueError(msg)
     if filters.provider_id is not None:
-        clauses.append("ue.provider_id = ?")
+        clauses.append(f"{alias}.provider_id = ?")
         params.append(filters.provider_id)
     elif filters.provider_ids:
         normalized_provider_ids = tuple(
             normalize_identity(provider_id) for provider_id in filters.provider_ids
         )
         placeholders = ", ".join("?" for _ in normalized_provider_ids)
-        clauses.append(f"ue.provider_id IN ({placeholders})")
+        clauses.append(f"{alias}.provider_id IN ({placeholders})")
         params.extend(normalized_provider_ids)
     if filters.model_id is not None:
-        clauses.append("ue.model_id = ?")
+        clauses.append(f"{alias}.model_id = ?")
         params.append(filters.model_id)
     if filters.thinking_level is not None:
-        clauses.append("COALESCE(ue.thinking_level, '') = ?")
+        clauses.append(f"COALESCE({alias}.thinking_level, '') = ?")
         params.append(filters.thinking_level)
     if filters.agent is not None:
-        clauses.append("ue.agent = ?")
+        clauses.append(f"{alias}.agent = ?")
         params.append(filters.agent)
     if filters.since_ms is not None:
-        clauses.append("ue.created_ms >= ?")
+        clauses.append(f"{alias}.created_ms >= ?")
         params.append(filters.since_ms)
     if filters.until_ms is not None:
-        clauses.append("ue.created_ms < ?")
+        clauses.append(f"{alias}.created_ms < ?")
         params.append(filters.until_ms)
 
     where_clause = f" WHERE {' AND '.join(clauses)}" if clauses else ""
-    return source_clause, where_clause, params
+    return _UsageWhere(
+        source_clause=source_clause,
+        where_clause=where_clause,
+        params=tuple(params),
+    )
+
+
+def _usage_report_query_parts(
+    filters: UsageReportFilter,
+) -> tuple[str, str, list[object]]:
+    where = _usage_where_parts(filters)
+    return where.source_clause, where.where_clause, list(where.params)
+
+
+def _aggregate_usage_rows(
+    conn: sqlite3.Connection,
+    filters: UsageReportFilter,
+    *,
+    group_by: tuple[str, ...],
+    split_thinking: bool,
+    include_range: bool = False,
+) -> list[_AggregateRow]:
+    where = _usage_where_parts(filters)
+    column_map = {
+        "harness": "ue.harness",
+        "source_session_id": "ue.source_session_id",
+        "provider_id": "ue.provider_id",
+        "model_id": "ue.model_id",
+        "thinking_level": ("ue.thinking_level" if split_thinking else "NULL"),
+        "agent": "ue.agent",
+        # Context tokens are needed for exact context-tier pricing when rows
+        # are aggregated.
+        "context_tokens": (
+            "(ue.input_tokens + ue.cache_read_tokens + ue.cache_write_tokens)"
+        ),
+    }
+    select_parts: list[str] = []
+    group_parts: list[str] = []
+    for key in group_by:
+        expr = column_map[key]
+        select_parts.append(f"{expr} AS {key}")
+        group_parts.append(expr)
+    select_sql = ",\n            ".join(select_parts)
+    group_sql = ", ".join(group_parts)
+    range_select = ""
+    if include_range:
+        range_select = (
+            ", MIN(ue.created_ms) AS first_created_ms, "
+            "MAX(ue.created_ms) AS last_created_ms"
+        )
+
+    rows = conn.execute(
+        f"""
+        SELECT
+            {select_sql},
+            COUNT(*) AS message_count,
+            SUM(ue.input_tokens) AS input_tokens,
+            SUM(ue.output_tokens) AS output_tokens,
+            SUM(ue.reasoning_tokens) AS reasoning_tokens,
+            SUM(ue.cache_read_tokens) AS cache_read_tokens,
+            SUM(ue.cache_write_tokens) AS cache_write_tokens,
+            SUM(ue.cache_output_tokens) AS cache_output_tokens,
+            DECIMAL_SUM(ue.source_cost_usd) AS source_cost_usd
+            {range_select}
+        {where.source_clause}
+        {where.where_clause}
+        GROUP BY {group_sql}
+        """,
+        where.params,
+    ).fetchall()
+
+    result: list[_AggregateRow] = []
+    for row in rows:
+        group_values = tuple(row[key] for key in group_by)
+        result.append(
+            _AggregateRow(
+                group=group_values,
+                harness=str(row["harness"])
+                if row["harness"] is not None
+                else "unknown",
+                source_session_id=(
+                    str(row["source_session_id"])
+                    if row["source_session_id"] is not None
+                    else "unknown"
+                ),
+                provider_id=(
+                    str(row["provider_id"])
+                    if row["provider_id"] is not None
+                    else "unknown"
+                ),
+                model_id=str(row["model_id"]) if row["model_id"] is not None else "",
+                thinking_level=(
+                    str(row["thinking_level"])
+                    if row["thinking_level"] is not None
+                    else None
+                ),
+                agent=str(row["agent"]) if row["agent"] is not None else None,
+                context_tokens=_required_int(row["context_tokens"]),
+                message_count=_required_int(row["message_count"]),
+                input_tokens=_required_int(row["input_tokens"]),
+                output_tokens=_required_int(row["output_tokens"]),
+                reasoning_tokens=_required_int(row["reasoning_tokens"]),
+                cache_read_tokens=_required_int(row["cache_read_tokens"]),
+                cache_write_tokens=_required_int(row["cache_write_tokens"]),
+                cache_output_tokens=_required_int(row["cache_output_tokens"]),
+                source_cost_usd=_required_decimal(row["source_cost_usd"]),
+                first_created_ms=(
+                    _required_int(row["first_created_ms"])
+                    if include_range and row["first_created_ms"] is not None
+                    else None
+                ),
+                last_created_ms=(
+                    _required_int(row["last_created_ms"])
+                    if include_range and row["last_created_ms"] is not None
+                    else None
+                ),
+            )
+        )
+    return result
 
 
 def _tracking_session_from_row(row: sqlite3.Row) -> TrackingSession:
@@ -2058,6 +2994,28 @@ class _SessionModelAccum:
         self.costs = _add_cost_breakdown(self.costs, sa.breakdown)
 
 
+@dataclass(frozen=True)
+class _SubscriptionWindowRequest:
+    request_id: str
+    subscription_id: str
+    kind: str
+    period: str
+    provider_ids: tuple[str, ...]
+    since_ms: int
+    until_ms: int
+    quota_cost_basis: str
+
+
+@dataclass
+class _WindowUsageSummary:
+    message_count: int = 0
+    tokens: TokenBreakdown = field(default_factory=TokenBreakdown)
+    costs: CostTotals = field(default_factory=CostTotals)
+    by_model: dict[tuple[str, str], tuple[int, CostTotals]] = field(
+        default_factory=dict
+    )
+
+
 def summarize_usage_runs(
     conn: sqlite3.Connection,
     filters: UsageRunsFilter,
@@ -2154,6 +3112,7 @@ def summarize_usage_runs(
     ).fetchall()
 
     config = costing_config or default_costing_config()
+    runtime = compile_costing_config(config)
 
     run_atoms: dict[int, list[_RunAtom]] = {}
 
@@ -2173,7 +3132,14 @@ def summarize_usage_runs(
             tokens=_row_tokens(row),
             source_cost_usd=_required_decimal(row["source_cost_usd"]),
         )
-        breakdown = atom.compute_costs(config)
+        breakdown = runtime.compute_costs(
+            harness=atom.harness,
+            provider_id=atom.provider_id,
+            model_id=atom.model_id,
+            tokens=atom.tokens,
+            source_cost_usd=atom.source_cost_usd,
+            message_count=atom.message_count,
+        )
         run_atoms.setdefault(run_id, []).append(
             _RunAtom(
                 run_name=row["run_name"],

@@ -25,6 +25,8 @@ def scan_copilot_file(
     *,
     source_session_id: str | None = None,
     include_raw_json: bool = True,
+    since_ms: int | None = None,
+    import_state: object | None = None,
 ) -> CopilotScanResult:
     resolved_path = path.expanduser()
     if not resolved_path.exists():
@@ -88,6 +90,8 @@ def scan_copilot_path(
     *,
     source_session_id: str | None = None,
     include_raw_json: bool = True,
+    since_ms: int | None = None,
+    import_state: object | None = None,
 ) -> CopilotScanResult:
     resolved_path = path.expanduser()
     if not resolved_path.exists():

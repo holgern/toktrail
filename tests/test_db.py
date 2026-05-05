@@ -124,8 +124,9 @@ def test_migrate_creates_tables_and_is_idempotent(tmp_path: Path) -> None:
         "usage_events",
         "run_events",
         "state_metadata",
+        "import_sources",
     } <= table_names
-    assert user_version == 5
+    assert user_version == 6
 
 
 def test_migrate_v3_to_v4_idempotent_with_existing_column(tmp_path: Path) -> None:
@@ -141,7 +142,7 @@ def test_migrate_v3_to_v4_idempotent_with_existing_column(tmp_path: Path) -> Non
     # Re-running migrate must not crash on duplicate column.
     migrate(conn)
 
-    assert int(conn.execute("PRAGMA user_version").fetchone()[0]) == 5
+    assert int(conn.execute("PRAGMA user_version").fetchone()[0]) == 6
 
 
 def test_source_costs_are_stored_and_aggregated_as_exact_decimals(

@@ -58,6 +58,16 @@ For development:
 python -m pip install -e ".[dev]"
 ```
 
+## Performance benchmark
+
+Run the local synthetic report benchmark:
+
+```bash
+python tests/perf/bench_reports.py
+```
+
+The benchmark is intentionally not part of default test runs.
+
 ## Public Python API
 
 Automation should prefer the stable Python API in `toktrail.api.*` instead of

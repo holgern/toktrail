@@ -20,6 +20,22 @@ class ScanResult:
 
 
 @dataclass(frozen=True)
+class ImportSourceState:
+    harness: str
+    source_path: str
+    source_session_id: str | None = None
+    fingerprint_size: int | None = None
+    fingerprint_mtime_ns: int | None = None
+    fingerprint_inode: int | None = None
+    sqlite_page_count: int | None = None
+    sqlite_schema_version: int | None = None
+    last_imported_created_ms: int | None = None
+    last_seen_rowid: int | None = None
+    last_file_offset: int | None = None
+    updated_at_ms: int | None = None
+
+
+@dataclass(frozen=True)
 class SourceSessionSummary:
     harness: str
     source_session_id: str
@@ -63,6 +79,8 @@ class HarnessAdapter(Protocol):
         *,
         source_session_id: str | None = None,
         include_raw_json: bool = True,
+        since_ms: int | None = None,
+        import_state: ImportSourceState | None = None,
     ) -> ScanResult: ...
 
     def list_sessions(

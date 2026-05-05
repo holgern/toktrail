@@ -36,6 +36,8 @@ def scan_goose_sqlite(
     *,
     source_session_id: str | None = None,
     include_raw_json: bool = True,
+    since_ms: int | None = None,
+    import_state: object | None = None,
 ) -> GooseScanResult:
     resolved_path = db_path.expanduser()
     if not resolved_path.exists():
@@ -48,7 +50,10 @@ def scan_goose_sqlite(
 
     try:
         with closing(open_readonly_sqlite(resolved_path)) as conn:
-            rows = _select_candidate_rows(conn, source_session_id=source_session_id)
+            rows = _select_candidate_rows(
+                conn,
+                source_session_id=source_session_id,
+            )
     except (OSError, sqlite3.Error):
         return GooseScanResult(
             source_path=resolved_path,
@@ -62,6 +67,9 @@ def scan_goose_sqlite(
     for row in rows:
         event = _parse_goose_row(row, include_raw_json=include_raw_json)
         if event is None:
+            rows_skipped += 1
+            continue
+        if since_ms is not None and event.created_ms < since_ms:
             rows_skipped += 1
             continue
         events.append(event)

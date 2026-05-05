@@ -108,6 +108,8 @@ def scan_codex_path(
     *,
     source_session_id: str | None = None,
     include_raw_json: bool = True,
+    since_ms: int | None = None,
+    import_state: object | None = None,
 ) -> CodexScanResult:
     resolved_path = source_path.expanduser()
     if not resolved_path.exists():
@@ -124,6 +126,8 @@ def scan_codex_path(
             resolved_path,
             source_session_id=source_session_id,
             include_raw_json=include_raw_json,
+            since_ms=since_ms,
+            import_state=import_state,
         )
 
     file_paths = sorted(
@@ -133,7 +137,12 @@ def scan_codex_path(
     rows_skipped = 0
     events: list[UsageEvent] = []
     for file_path in file_paths:
-        scan = scan_codex_file(file_path, include_raw_json=include_raw_json)
+        scan = scan_codex_file(
+            file_path,
+            include_raw_json=include_raw_json,
+            since_ms=since_ms,
+            import_state=import_state,
+        )
         rows_seen += scan.rows_seen
         rows_skipped += scan.rows_skipped
         if source_session_id is None:
@@ -161,6 +170,8 @@ def scan_codex_file(
     *,
     source_session_id: str | None = None,
     include_raw_json: bool = True,
+    since_ms: int | None = None,
+    import_state: object | None = None,
 ) -> CodexScanResult:
     resolved_path = file_path.expanduser()
     if not resolved_path.exists() or not resolved_path.is_file():
@@ -211,6 +222,9 @@ def scan_codex_file(
                     source_session_id is not None
                     and event.source_session_id != source_session_id
                 ):
+                    rows_skipped += 1
+                    continue
+                if since_ms is not None and event.created_ms < since_ms:
                     rows_skipped += 1
                     continue
                 events.append(event)

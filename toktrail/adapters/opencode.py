@@ -34,6 +34,8 @@ def scan_opencode_sqlite(
     *,
     source_session_id: str | None = None,
     include_raw_json: bool = True,
+    since_ms: int | None = None,
+    import_state: object | None = None,
 ) -> OpenCodeScanResult:
     resolved_path = db_path.expanduser()
     if not resolved_path.exists():
@@ -46,7 +48,11 @@ def scan_opencode_sqlite(
 
     try:
         with closing(open_readonly_sqlite(resolved_path)) as conn:
-            rows = _select_candidate_rows(conn, source_session_id=source_session_id)
+            rows = _select_candidate_rows(
+                conn,
+                source_session_id=source_session_id,
+                since_ms=since_ms,
+            )
     except (OSError, sqlite3.Error):
         return OpenCodeScanResult(
             source_path=resolved_path,
@@ -66,6 +72,9 @@ def scan_opencode_sqlite(
             include_raw_json=include_raw_json,
         )
         if event is None:
+            rows_skipped += 1
+            continue
+        if since_ms is not None and event.created_ms < since_ms:
             rows_skipped += 1
             continue
 
@@ -203,13 +212,22 @@ def _parse_opencode_row(
 
 
 def _select_candidate_rows(
-    conn: sqlite3.Connection, *, source_session_id: str | None
+    conn: sqlite3.Connection,
+    *,
+    source_session_id: str | None,
+    since_ms: int | None = None,
 ) -> list[sqlite3.Row]:
     session_filter = ""
-    params: list[str] = []
+    since_filter = ""
+    params: list[object] = []
     if source_session_id is not None:
         session_filter = " AND m.session_id = ?"
         params.append(source_session_id)
+    if since_ms is not None:
+        since_filter = (
+            " AND CAST(json_extract(m.data, '$.time.created') * 1000 AS INTEGER) >= ?"
+        )
+        params.append(since_ms)
 
     json_query = f"""
         SELECT m.id, m.session_id, m.data
@@ -217,6 +235,7 @@ def _select_candidate_rows(
         WHERE json_extract(m.data, '$.role') = 'assistant'
           AND json_extract(m.data, '$.tokens') IS NOT NULL
           {session_filter}
+          {since_filter}
         ORDER BY m.rowid
     """
     fallback_query = f"""

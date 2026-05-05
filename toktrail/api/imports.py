@@ -5,6 +5,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from toktrail import db as db_module
+from toktrail.adapters.base import ScanResult
 from toktrail.api._common import _get_harness, _open_state_db, _validate_source_path
 from toktrail.api.models import ImportUsageResult
 from toktrail.api.paths import resolve_source_path
@@ -67,11 +68,53 @@ def import_usage(
                     tracking_session.started_at_ms,
                 )
 
-        scan = definition.scan(
-            resolved,
+        source_state = db_module.get_import_source_state(
+            conn,
+            harness=definition.name,
+            source_path=str(resolved),
             source_session_id=source_session_id,
-            include_raw_json=include_raw_json,
         )
+        scan_since_ms = effective_since_ms
+        if (
+            source_state is not None
+            and source_state.last_imported_created_ms is not None
+        ):
+            scan_since_ms = (
+                max(scan_since_ms, source_state.last_imported_created_ms)
+                if scan_since_ms is not None
+                else source_state.last_imported_created_ms
+            )
+
+        pre_scan_fingerprint = _source_fingerprint(resolved)
+        scan: ScanResult
+        if (
+            source_state is not None
+            and source_state.fingerprint_size == pre_scan_fingerprint[0]
+            and source_state.fingerprint_mtime_ns == pre_scan_fingerprint[1]
+            and source_state.fingerprint_inode == pre_scan_fingerprint[2]
+            and source_state.sqlite_page_count == pre_scan_fingerprint[3]
+            and source_state.sqlite_schema_version == pre_scan_fingerprint[4]
+            and source_state.last_imported_created_ms is not None
+            and (
+                scan_since_ms is None
+                or scan_since_ms <= source_state.last_imported_created_ms
+            )
+        ):
+            scan = ScanResult(
+                source_path=resolved,
+                rows_seen=0,
+                rows_skipped=0,
+                events=[],
+                files_seen=0,
+            )
+        else:
+            scan = definition.scan(
+                resolved,
+                source_session_id=source_session_id,
+                include_raw_json=include_raw_json,
+                since_ms=scan_since_ms,
+                import_state=source_state,
+            )
         filtered_events = [
             event
             for event in scan.events
@@ -89,6 +132,36 @@ def import_usage(
                 f"{selected_session_id}: {exc}"
             )
             raise UsageImportError(msg) from exc
+
+        fingerprint = pre_scan_fingerprint
+        latest_seen_ms = max(
+            (event.created_ms for event in filtered_events), default=None
+        )
+        latest_imported_ms = latest_seen_ms
+        if (
+            source_state is not None
+            and source_state.last_imported_created_ms is not None
+            and latest_imported_ms is not None
+        ):
+            latest_imported_ms = max(
+                latest_imported_ms,
+                source_state.last_imported_created_ms,
+            )
+        elif source_state is not None and latest_imported_ms is None:
+            latest_imported_ms = source_state.last_imported_created_ms
+
+        db_module.upsert_import_source_state(
+            conn,
+            harness=definition.name,
+            source_path=str(resolved),
+            source_session_id=source_session_id,
+            fingerprint_size=fingerprint[0],
+            fingerprint_mtime_ns=fingerprint[1],
+            fingerprint_inode=fingerprint[2],
+            sqlite_page_count=fingerprint[3],
+            sqlite_schema_version=fingerprint[4],
+            last_imported_created_ms=latest_imported_ms,
+        )
     finally:
         conn.close()
 
@@ -219,3 +292,35 @@ def import_configured_usage(
 
 
 __all__ = ["import_configured_usage", "import_usage"]
+
+
+def _source_fingerprint(
+    path: Path,
+) -> tuple[int | None, int | None, int | None, int | None, int | None]:
+    if not path.exists():
+        return (None, None, None, None, None)
+    try:
+        stat = path.stat()
+        size = int(stat.st_size)
+        mtime_ns = int(stat.st_mtime_ns)
+        inode = int(stat.st_ino)
+    except OSError:
+        return (None, None, None, None, None)
+
+    sqlite_page_count: int | None = None
+    sqlite_schema_version: int | None = None
+    if path.is_file() and path.suffix == ".db":
+        try:
+            sqlite_conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+            sqlite_conn.execute("PRAGMA query_only = ON")
+            sqlite_page_count = int(
+                sqlite_conn.execute("PRAGMA page_count").fetchone()[0]
+            )
+            sqlite_schema_version = int(
+                sqlite_conn.execute("PRAGMA user_version").fetchone()[0]
+            )
+            sqlite_conn.close()
+        except (sqlite3.Error, OSError, TypeError, ValueError):
+            sqlite_page_count = None
+            sqlite_schema_version = None
+    return (size, mtime_ns, inode, sqlite_page_count, sqlite_schema_version)

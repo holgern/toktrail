@@ -26,6 +26,8 @@ def scan_droid_path(
     *,
     source_session_id: str | None = None,
     include_raw_json: bool = True,
+    since_ms: int | None = None,
+    import_state: object | None = None,
 ) -> DroidScanResult:
     resolved_path = source_path.expanduser()
     if not resolved_path.exists():
@@ -75,6 +77,8 @@ def scan_droid_file(
     file_path: Path,
     *,
     include_raw_json: bool = True,
+    since_ms: int | None = None,
+    import_state: object | None = None,
 ) -> DroidScanResult:
     resolved_path = file_path.expanduser()
     if not resolved_path.exists() or not resolved_path.is_file():
