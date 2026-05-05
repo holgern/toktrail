@@ -58,8 +58,13 @@ from toktrail.api.models import (
 )
 from toktrail.api.paths import (
     default_source_path,
+    default_toktrail_config_dir,
+    default_toktrail_prices_path,
+    default_toktrail_subscriptions_path,
     default_toktrail_db_path,
     resolve_source_path,
+    resolve_toktrail_prices_path,
+    resolve_toktrail_subscriptions_path,
     resolve_toktrail_db_path,
 )
 from toktrail.api.reports import (
@@ -132,7 +137,10 @@ __all__ = [
     "config_exists",
     "config_summary",
     "default_source_path",
+    "default_toktrail_config_dir",
     "default_toktrail_config_path",
+    "default_toktrail_prices_path",
+    "default_toktrail_subscriptions_path",
     "default_toktrail_db_path",
     "diff_source_snapshots",
     "finalize_manual_run",
@@ -153,6 +161,8 @@ __all__ = [
     "require_active_run",
     "resolve_source_path",
     "resolve_toktrail_config_path",
+    "resolve_toktrail_prices_path",
+    "resolve_toktrail_subscriptions_path",
     "resolve_toktrail_db_path",
     "scan_usage",
     "session_cache_analysis",

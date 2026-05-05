@@ -44,10 +44,23 @@ def _open_state_db(db_path: Path | None) -> tuple[sqlite3.Connection, Path]:
 def _load_costing_config(config_path: Path | None) -> CostingConfig:
     resolved = resolve_toktrail_config_path(config_path)
     try:
-        return config_module.load_costing_config(resolved)
-    except ValueError as exc:
-        msg = f"Invalid toktrail config at {resolved}: {exc}"
-        raise ConfigurationError(msg) from exc
+        prices_path = None
+        subscriptions_path = None
+        if config_path is not None:
+            prices_path = resolved.with_name("prices.toml")
+            subscriptions_path = resolved.with_name("subscriptions.toml")
+        loaded = config_module.load_resolved_costing_config(
+            config_cli_value=resolved,
+            prices_cli_value=prices_path,
+            subscriptions_cli_value=subscriptions_path,
+        )
+        return loaded.config
+    except ValueError:
+        try:
+            return config_module.load_costing_config(resolved)
+        except ValueError as fallback_exc:
+            msg = f"Invalid toktrail config at {resolved}: {fallback_exc}"
+            raise ConfigurationError(msg) from fallback_exc
 
 
 def _missing_source_path_message(

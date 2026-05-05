@@ -9,6 +9,8 @@ from toktrail.paths import (
     default_droid_sessions_path,
     default_goose_sessions_db_path,
     default_toktrail_config_path,
+    default_toktrail_prices_path,
+    default_toktrail_subscriptions_path,
     new_copilot_otel_file_path,
     resolve_amp_threads_path,
     resolve_codex_sessions_path,
@@ -17,6 +19,8 @@ from toktrail.paths import (
     resolve_droid_sessions_path,
     resolve_goose_sessions_path,
     resolve_toktrail_config_path,
+    resolve_toktrail_prices_path,
+    resolve_toktrail_subscriptions_path,
 )
 
 
@@ -77,6 +81,62 @@ def test_resolve_toktrail_config_path_prefers_cli_over_env(
 
     assert resolve_toktrail_config_path(cli_path) == cli_path
     assert resolve_toktrail_config_path(None) == env_path
+
+
+def test_default_toktrail_prices_path_uses_xdg_config_home(
+    monkeypatch, tmp_path
+) -> None:
+    config_home = tmp_path / "xdg-config"
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+
+    assert default_toktrail_prices_path() == config_home / "toktrail" / "prices.toml"
+
+
+def test_resolve_toktrail_prices_path_prefers_cli(monkeypatch, tmp_path) -> None:
+    env_path = tmp_path / "env-prices.toml"
+    cli_path = tmp_path / "cli-prices.toml"
+    monkeypatch.setenv("TOKTRAIL_PRICES", str(env_path))
+
+    assert resolve_toktrail_prices_path(cli_path) == cli_path
+
+
+def test_resolve_toktrail_prices_path_prefers_env(monkeypatch, tmp_path) -> None:
+    env_path = tmp_path / "env-prices.toml"
+    monkeypatch.setenv("TOKTRAIL_PRICES", str(env_path))
+
+    assert resolve_toktrail_prices_path(None) == env_path
+
+
+def test_default_toktrail_subscriptions_path_uses_xdg_config_home(
+    monkeypatch, tmp_path
+) -> None:
+    config_home = tmp_path / "xdg-config"
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+
+    assert default_toktrail_subscriptions_path() == (
+        config_home / "toktrail" / "subscriptions.toml"
+    )
+
+
+def test_resolve_toktrail_subscriptions_path_prefers_cli(
+    monkeypatch, tmp_path
+) -> None:
+    env_path = tmp_path / "env-subscriptions.toml"
+    cli_path = tmp_path / "cli-subscriptions.toml"
+    monkeypatch.setenv("TOKTRAIL_SUBSCRIPTIONS", str(env_path))
+
+    assert resolve_toktrail_subscriptions_path(cli_path) == cli_path
+
+
+def test_resolve_toktrail_subscriptions_path_prefers_env(
+    monkeypatch, tmp_path
+) -> None:
+    env_path = tmp_path / "env-subscriptions.toml"
+    monkeypatch.setenv("TOKTRAIL_SUBSCRIPTIONS", str(env_path))
+
+    assert resolve_toktrail_subscriptions_path(None) == env_path
 
 
 def test_default_codex_sessions_path_uses_home(monkeypatch, tmp_path) -> None:

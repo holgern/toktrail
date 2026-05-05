@@ -95,11 +95,7 @@ def test_load_costing_config_parses_copilot_template(tmp_path) -> None:
     config = load_costing_config(config_path)
 
     assert config.price_profile == "copilot-public-api-equivalent"
-    assert len(config.virtual_prices) >= 10
-    assert any(
-        price.provider == "anthropic" and price.model == "claude-sonnet-4"
-        for price in config.virtual_prices
-    )
+    assert config.virtual_prices == ()
 
 
 def test_load_costing_config_rejects_duplicate_aliases(tmp_path) -> None:

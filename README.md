@@ -29,6 +29,22 @@ The first implementation focuses on:
 toktrail reads supported source data in read-only mode and does not modify the
 source database or source JSONL files.
 
+## Configuration files
+
+toktrail uses three TOML files:
+
+- `config.toml` for imports and costing policy
+- `prices.toml` for `[[pricing.virtual]]` and `[[pricing.actual]]`
+- `subscriptions.toml` for `[[subscriptions]]` plans/windows
+
+Initialize them together:
+
+```bash
+toktrail config init
+toktrail config path
+toktrail config show
+```
+
 ## Install
 
 ```bash
@@ -197,55 +213,15 @@ amp = "~/.local/share/amp/threads"
 claude = "~/.claude/projects"
 ```
 
-```toml
-[[subscriptions]]
-id = "opencode-go"
-usage_providers = ["opencode-go"]
-display_name = "OpenCode Go"
-timezone = "Europe/Berlin"
-quota_cost_basis = "virtual"
-fixed_cost_usd = 10.00
-fixed_cost_period = "monthly"
-fixed_cost_reset_at = "2026-05-01T00:00:00+02:00"
-fixed_cost_basis = "virtual"
+`[[subscriptions]]` rows live in `subscriptions.toml`.
 
-[[subscriptions.windows]]
-period = "5h"
-limit_usd = 12
-reset_mode = "first_use"
-reset_at = "2026-05-01T00:00:00+02:00"
+Pricing rows live in `prices.toml`. You can generate/merge them from provider
+docs text:
 
-[[subscriptions.windows]]
-period = "weekly"
-limit_usd = 30
-reset_mode = "fixed"
-reset_at = "2026-05-01T00:00:00+02:00"
-
-[[subscriptions.windows]]
-period = "monthly"
-limit_usd = 60
-reset_mode = "fixed"
-reset_at = "2026-05-01T00:00:00+02:00"
-```
-
-```toml
-
-[[subscriptions]]
-id = "zai-coding-plan"
-usage_providers = ["zai"]
-display_name = "Zai Coding Plan"
-timezone = "Asia/Singapore"
-quota_cost_basis = "virtual"
-fixed_cost_usd = 36.00
-fixed_cost_period = "yearly"
-fixed_cost_reset_at = "2025-09-01T00:00:00+02:00"
-fixed_cost_basis = "virtual"
-
-[[subscriptions.windows]]
-period = "5h"
-limit_usd = 10
-reset_mode = "first_use"
-reset_at = "2026-05-01T00:00:00+02:00"
+```bash
+toktrail pricing parse --provider openai --tier standard --input openai-pricing.jsx --out -
+toktrail pricing parse --provider zai --input zai-pricing.md --out ~/.config/toktrail/prices.toml --merge
+toktrail pricing parse --provider opencode-go --table actual --input opencode-go.txt --out ~/.config/toktrail/prices.toml --merge
 ```
 
 `imports.sources.<harness>` accepts either a single path string or a list of
@@ -392,9 +368,9 @@ If `XDG_CONFIG_HOME` is set, toktrail uses:
 $XDG_CONFIG_HOME/toktrail/config.toml
 ```
 
-The `TOKTRAIL_CONFIG` environment variable or global `--config` option can
-override the pricing config path. Missing config files are safe: toktrail falls
-back to built-in defaults and still reports source and actual costs.
+`TOKTRAIL_CONFIG`/`--config`, `TOKTRAIL_PRICES`/`--prices`, and
+`TOKTRAIL_SUBSCRIPTIONS`/`--subscriptions` can override each config file path.
+Missing files are safe: toktrail falls back to built-in defaults.
 
 Usage imports store normalized usage metadata locally. Raw source JSON is
 disabled by default and remains opt-in local debugging data only. Use `--raw`
@@ -451,7 +427,7 @@ toktrail source-sessions --harness copilot
 ```
 
 Virtual and pricing-based actual costs are computed at report time, not during
-refresh. Updating `config.toml` immediately changes future `status` and
+refresh. Updating `prices.toml` or `config.toml` immediately changes future `status` and
 `sessions` output for already imported data without re-importing source files.
 
 Pricing is provider-aware. If an event already has a real provider, toktrail

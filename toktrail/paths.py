@@ -6,6 +6,8 @@ from pathlib import Path
 
 TOKTRAIL_DB_ENV = "TOKTRAIL_DB"
 TOKTRAIL_CONFIG_ENV = "TOKTRAIL_CONFIG"
+TOKTRAIL_PRICES_ENV = "TOKTRAIL_PRICES"
+TOKTRAIL_SUBSCRIPTIONS_ENV = "TOKTRAIL_SUBSCRIPTIONS"
 COPILOT_FILE_ENV = "TOKTRAIL_COPILOT_FILE"
 COPILOT_OTEL_FILE_EXPORTER_PATH_ENV = "COPILOT_OTEL_FILE_EXPORTER_PATH"
 COPILOT_OTEL_DIR_ENV = "TOKTRAIL_COPILOT_OTEL_DIR"
@@ -37,11 +39,23 @@ def resolve_toktrail_db_path(cli_value: Path | None = None) -> Path:
     return path
 
 
-def default_toktrail_config_path() -> Path:
+def default_toktrail_config_dir() -> Path:
     xdg_config_home = os.environ.get("XDG_CONFIG_HOME")
     if xdg_config_home:
-        return Path(xdg_config_home).expanduser() / "toktrail" / "config.toml"
-    return Path.home() / ".config" / "toktrail" / "config.toml"
+        return Path(xdg_config_home).expanduser() / "toktrail"
+    return Path.home() / ".config" / "toktrail"
+
+
+def default_toktrail_config_path() -> Path:
+    return default_toktrail_config_dir() / "config.toml"
+
+
+def default_toktrail_prices_path() -> Path:
+    return default_toktrail_config_dir() / "prices.toml"
+
+
+def default_toktrail_subscriptions_path() -> Path:
+    return default_toktrail_config_dir() / "subscriptions.toml"
 
 
 def resolve_toktrail_config_path(cli_value: Path | None = None) -> Path:
@@ -51,6 +65,24 @@ def resolve_toktrail_config_path(cli_value: Path | None = None) -> Path:
     if env_value:
         return Path(env_value).expanduser()
     return default_toktrail_config_path()
+
+
+def resolve_toktrail_prices_path(cli_value: Path | None = None) -> Path:
+    if cli_value is not None:
+        return cli_value.expanduser()
+    env_value = os.environ.get(TOKTRAIL_PRICES_ENV)
+    if env_value:
+        return Path(env_value).expanduser()
+    return default_toktrail_prices_path()
+
+
+def resolve_toktrail_subscriptions_path(cli_value: Path | None = None) -> Path:
+    if cli_value is not None:
+        return cli_value.expanduser()
+    env_value = os.environ.get(TOKTRAIL_SUBSCRIPTIONS_ENV)
+    if env_value:
+        return Path(env_value).expanduser()
+    return default_toktrail_subscriptions_path()
 
 
 def default_opencode_db_path() -> Path:

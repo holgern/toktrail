@@ -90,6 +90,7 @@ Core commands
    toktrail refresh --harness amp --source ~/.local/share/amp/threads
    toktrail pricing list
    toktrail pricing list --missing-only
+   toktrail pricing parse --provider zai --input zai-pricing.md --out ~/.config/toktrail/prices.toml --merge
 
 For harness-session inspection, use ``toktrail sessions <harness>`` to inspect
 raw harness sessions without mutating toktrail state.
@@ -113,3 +114,15 @@ windows. The command reports configured windows (for example ``5h``, ``weekly``,
 If ``fixed_cost_usd`` is configured for a subscription, the output also
 includes a billing row with fixed fee, value, net savings, and break-even
 progress for the configured billing period.
+
+Pricing parser
+--------------
+
+Use ``toktrail pricing parse`` to convert provider pricing text into
+``prices.toml`` rows:
+
+.. code-block:: bash
+
+   toktrail pricing parse --provider openai --tier standard --input openai-pricing.jsx --out -
+   toktrail pricing parse --provider zai --input zai-pricing.md --out ~/.config/toktrail/prices.toml --merge
+   toktrail pricing parse --provider opencode-go --table actual --input opencode-go.txt --out ~/.config/toktrail/prices.toml --merge

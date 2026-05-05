@@ -20,10 +20,19 @@ from toktrail.paths import (
     default_goose_sessions_db_path as _default_goose_sessions_db_path,
 )
 from toktrail.paths import (
+    default_toktrail_config_dir as _default_toktrail_config_dir,
+)
+from toktrail.paths import (
     default_toktrail_config_path as _default_toktrail_config_path,
 )
 from toktrail.paths import (
     default_toktrail_db_path as _default_toktrail_db_path,
+)
+from toktrail.paths import (
+    default_toktrail_prices_path as _default_toktrail_prices_path,
+)
+from toktrail.paths import (
+    default_toktrail_subscriptions_path as _default_toktrail_subscriptions_path,
 )
 from toktrail.paths import (
     default_vibe_logs_path as _default_vibe_logs_path,
@@ -45,6 +54,12 @@ from toktrail.paths import (
 from toktrail.paths import (
     resolve_toktrail_db_path as _resolve_toktrail_db_path,
 )
+from toktrail.paths import (
+    resolve_toktrail_prices_path as _resolve_toktrail_prices_path,
+)
+from toktrail.paths import (
+    resolve_toktrail_subscriptions_path as _resolve_toktrail_subscriptions_path,
+)
 
 
 def default_toktrail_db_path() -> Path:
@@ -64,8 +79,30 @@ def default_toktrail_config_path() -> Path:
     return _default_toktrail_config_path()
 
 
+def default_toktrail_config_dir() -> Path:
+    return _default_toktrail_config_dir()
+
+
+def default_toktrail_prices_path() -> Path:
+    return _default_toktrail_prices_path()
+
+
+def default_toktrail_subscriptions_path() -> Path:
+    return _default_toktrail_subscriptions_path()
+
+
 def resolve_toktrail_config_path(config_path: Path | None = None) -> Path:
     return _resolve_toktrail_config_path(config_path)
+
+
+def resolve_toktrail_prices_path(prices_path: Path | None = None) -> Path:
+    return _resolve_toktrail_prices_path(prices_path)
+
+
+def resolve_toktrail_subscriptions_path(
+    subscriptions_path: Path | None = None,
+) -> Path:
+    return _resolve_toktrail_subscriptions_path(subscriptions_path)
 
 
 def default_source_path(harness: str) -> Path | None:
@@ -131,9 +168,14 @@ __all__ = [
     "default_goose_sessions_db_path",
     "default_source_path",
     "default_toktrail_config_path",
+    "default_toktrail_config_dir",
+    "default_toktrail_prices_path",
+    "default_toktrail_subscriptions_path",
     "default_toktrail_db_path",
     "default_vibe_logs_path",
     "resolve_source_path",
     "resolve_toktrail_config_path",
+    "resolve_toktrail_prices_path",
+    "resolve_toktrail_subscriptions_path",
     "resolve_toktrail_db_path",
 ]

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, cast
 
@@ -11,7 +11,11 @@ if sys.version_info >= (3, 11):
 else:  # pragma: no cover - Python < 3.11
     import tomli as tomllib
 
-from toktrail.paths import resolve_toktrail_config_path
+from toktrail.paths import (
+    resolve_toktrail_config_path,
+    resolve_toktrail_prices_path,
+    resolve_toktrail_subscriptions_path,
+)
 
 ActualCostMode = Literal["source", "zero", "pricing"]
 VirtualCostMode = Literal["zero", "pricing"]
@@ -82,6 +86,22 @@ _ROOT_FIELDS = {
     "actual_cost",
     "pricing",
     "subscriptions",
+}
+_RUNTIME_CONFIG_ROOT_FIELDS = {
+    "config_version",
+    "imports",
+    "costing",
+    "actual_cost",
+}
+_PRICE_CONFIG_ROOT_FIELDS = {
+    "config_version",
+    "pricing",
+    "metadata",
+}
+_SUBSCRIPTION_CONFIG_ROOT_FIELDS = {
+    "config_version",
+    "subscriptions",
+    "metadata",
 }
 _SUPPORTED_HARNESSES = {
     "opencode",
@@ -164,6 +184,85 @@ mode = "zero"
 [[actual_cost]]
 harness = "copilot"
 mode = "zero"
+
+[[actual_cost]]
+harness = "codex"
+mode = "zero"
+
+[[actual_cost]]
+harness = "goose"
+mode = "zero"
+
+[[actual_cost]]
+harness = "droid"
+mode = "zero"
+
+[[actual_cost]]
+harness = "amp"
+mode = "source"
+
+[[actual_cost]]
+harness = "claude"
+mode = "zero"
+
+[[actual_cost]]
+harness = "vibe"
+mode = "source"
+"""
+
+DEFAULT_PRICES_TEXT = """\
+config_version = 1
+
+[metadata]
+# generated_by = "toktrail pricing parse"
+# updated_at = "2026-05-05"
+"""
+
+DEFAULT_SUBSCRIPTIONS_TEXT = """\
+config_version = 1
+
+[metadata]
+# updated_at = "2026-05-05"
+"""
+
+COPILOT_CONFIG_TEXT = """\
+config_version = 1
+
+[imports]
+harnesses = [
+  "opencode", "pi", "copilot", "codex", "goose", "droid", "amp", "claude", "vibe"
+]
+missing_source = "warn"
+include_raw_json = false
+
+[imports.sources]
+opencode = "~/.local/share/opencode/opencode.db"
+pi = "~/.pi/agent/sessions"
+copilot = "~/.copilot/otel"
+codex = "~/.codex/sessions"
+goose = "~/.local/share/goose/sessions/sessions.db"
+droid = "~/.factory/sessions"
+amp = "~/.local/share/amp/threads"
+claude = "~/.claude/projects"
+vibe = "~/.vibe/logs/session"
+
+[costing]
+default_actual_mode = "source"
+default_virtual_mode = "pricing"
+missing_price = "warn"
+price_profile = "copilot-public-api-equivalent"
+
+[[actual_cost]]
+harness = "copilot"
+mode = "zero"
+
+[[actual_cost]]
+harness = "pi"
+mode = "zero"
+
+[[actual_cost]]
+harness = "opencode"
+mode = "source"
 
 [[actual_cost]]
 harness = "codex"
@@ -650,17 +749,78 @@ class ToktrailConfig:
 
 
 @dataclass(frozen=True)
-class LoadedCostingConfig:
+class RuntimeConfig:
+    config_version: int = CONFIG_VERSION
+    imports: ImportConfig = field(default_factory=ImportConfig)
+    default_actual_mode: ActualCostMode = "source"
+    default_virtual_mode: VirtualCostMode = "pricing"
+    missing_price: MissingPriceMode = "warn"
+    price_profile: str | None = None
+    actual_rules: tuple[ActualCostRule, ...] = ()
+
+
+@dataclass(frozen=True)
+class PricingConfig:
+    config_version: int = CONFIG_VERSION
+    virtual_prices: tuple[Price, ...] = ()
+    actual_prices: tuple[Price, ...] = ()
+
+
+@dataclass(frozen=True)
+class SubscriptionsConfig:
+    config_version: int = CONFIG_VERSION
+    subscriptions: tuple[SubscriptionConfig, ...] = ()
+
+
+@dataclass(frozen=True)
+class LoadedRuntimeConfig:
     path: Path
     exists: bool
-    config: CostingConfig
+    config: RuntimeConfig
+
+
+@dataclass(frozen=True)
+class LoadedPricingConfig:
+    path: Path
+    exists: bool
+    config: PricingConfig
+
+
+@dataclass(frozen=True)
+class LoadedSubscriptionsConfig:
+    path: Path
+    exists: bool
+    config: SubscriptionsConfig
 
 
 @dataclass(frozen=True)
 class LoadedToktrailConfig:
-    path: Path
-    exists: bool
+    config_path: Path
+    prices_path: Path
+    subscriptions_path: Path
+    config_exists: bool
+    prices_exists: bool
+    subscriptions_exists: bool
     config: ToktrailConfig
+
+
+@dataclass(frozen=True)
+class LoadedCostingConfig:
+    config_path: Path
+    prices_path: Path
+    subscriptions_path: Path
+    config_exists: bool
+    prices_exists: bool
+    subscriptions_exists: bool
+    config: CostingConfig
+
+    @property
+    def path(self) -> Path:
+        return self.config_path
+
+    @property
+    def exists(self) -> bool:
+        return self.config_exists
 
 
 @dataclass(frozen=True)
@@ -736,10 +896,32 @@ def default_import_config() -> ImportConfig:
     return ImportConfig()
 
 
-def default_toktrail_config() -> ToktrailConfig:
-    return ToktrailConfig(
-        costing=default_costing_config(),
+def default_runtime_config() -> RuntimeConfig:
+    costing = default_costing_config()
+    return RuntimeConfig(
+        config_version=costing.config_version,
         imports=default_import_config(),
+        default_actual_mode=costing.default_actual_mode,
+        default_virtual_mode=costing.default_virtual_mode,
+        missing_price=costing.missing_price,
+        price_profile=costing.price_profile,
+        actual_rules=costing.actual_rules,
+    )
+
+
+def default_pricing_config() -> PricingConfig:
+    return PricingConfig()
+
+
+def default_subscriptions_config() -> SubscriptionsConfig:
+    return SubscriptionsConfig()
+
+
+def default_toktrail_config() -> ToktrailConfig:
+    return merge_configs(
+        default_runtime_config(),
+        default_pricing_config(),
+        default_subscriptions_config(),
     )
 
 
@@ -747,80 +929,211 @@ def render_config_template(template: str = DEFAULT_TEMPLATE_NAME) -> str:
     if template == DEFAULT_TEMPLATE_NAME:
         return DEFAULT_CONFIG_TEXT
     if template == COPILOT_TEMPLATE_NAME:
-        return COPILOT_TEMPLATE_TEXT
+        return COPILOT_CONFIG_TEXT
     msg = f"Unsupported config template: {template}"
     raise ValueError(msg)
 
 
+def render_prices_template(template: str = DEFAULT_TEMPLATE_NAME) -> str:
+    if template == DEFAULT_TEMPLATE_NAME:
+        return DEFAULT_PRICES_TEXT
+    if template == COPILOT_TEMPLATE_NAME:
+        marker = "# OpenAI"
+        marker_index = COPILOT_TEMPLATE_TEXT.find(marker)
+        pricing_body = (
+            COPILOT_TEMPLATE_TEXT[marker_index:].strip()
+            if marker_index >= 0
+            else ""
+        )
+        if pricing_body:
+            return f"config_version = 1\n\n{pricing_body}\n"
+        return DEFAULT_PRICES_TEXT
+    msg = f"Unsupported prices template: {template}"
+    raise ValueError(msg)
+
+
+def render_subscriptions_template(template: str = DEFAULT_TEMPLATE_NAME) -> str:
+    if template in {DEFAULT_TEMPLATE_NAME, COPILOT_TEMPLATE_NAME}:
+        return DEFAULT_SUBSCRIPTIONS_TEXT
+    msg = f"Unsupported subscriptions template: {template}"
+    raise ValueError(msg)
+
+
 def load_costing_config(path: Path) -> CostingConfig:
-    return load_toktrail_config(path).costing
+    if path.name == "config.toml":
+        try:
+            return load_toktrail_config(path).costing
+        except ValueError:
+            data = _load_optional_toml(path, context="toktrail config")
+            if data is None:
+                return default_costing_config()
+            if "pricing" in data or "subscriptions" in data:
+                return _parse_legacy_costing_config(data)
+            raise
+    data = _load_optional_toml(path, context="toktrail config")
+    if data is None:
+        return default_costing_config()
+    return _parse_legacy_costing_config(data)
 
 
 def load_toktrail_config(path: Path) -> ToktrailConfig:
-    if not path.exists():
-        return default_toktrail_config()
-    if not path.is_file():
-        msg = f"Toktrail config path is not a file: {path}"
-        raise ValueError(msg)
-    try:
-        with path.open("rb") as handle:
-            data = tomllib.load(handle)
-    except tomllib.TOMLDecodeError as exc:
-        msg = f"Invalid TOML in toktrail config {path}: {exc}"
-        raise ValueError(msg) from exc
-    return parse_toktrail_config(data)
+    return merge_configs(
+        load_runtime_config(path),
+        default_pricing_config(),
+        default_subscriptions_config(),
+    )
 
 
 def load_resolved_costing_config(
-    cli_value: Path | None = None,
+    config_cli_value: Path | None = None,
+    prices_cli_value: Path | None = None,
+    subscriptions_cli_value: Path | None = None,
 ) -> LoadedCostingConfig:
-    loaded = load_resolved_toktrail_config(cli_value)
+    loaded = load_resolved_toktrail_config(
+        config_cli_value=config_cli_value,
+        prices_cli_value=prices_cli_value,
+        subscriptions_cli_value=subscriptions_cli_value,
+    )
     return LoadedCostingConfig(
-        path=loaded.path,
-        exists=loaded.exists,
+        config_path=loaded.config_path,
+        prices_path=loaded.prices_path,
+        subscriptions_path=loaded.subscriptions_path,
+        config_exists=loaded.config_exists,
+        prices_exists=loaded.prices_exists,
+        subscriptions_exists=loaded.subscriptions_exists,
         config=loaded.config.costing,
     )
 
 
 def load_resolved_toktrail_config(
-    cli_value: Path | None = None,
+    config_cli_value: Path | None = None,
+    prices_cli_value: Path | None = None,
+    subscriptions_cli_value: Path | None = None,
 ) -> LoadedToktrailConfig:
-    path = resolve_toktrail_config_path(cli_value)
+    config_path = resolve_toktrail_config_path(config_cli_value)
+    prices_path = resolve_toktrail_prices_path(prices_cli_value)
+    subscriptions_path = resolve_toktrail_subscriptions_path(subscriptions_cli_value)
+    legacy_data = _load_optional_toml(config_path, context="toktrail config")
+    use_legacy_monolithic = (
+        config_path.name != "config.toml"
+        and prices_cli_value is None
+        and subscriptions_cli_value is None
+        and legacy_data is not None
+        and ("pricing" in legacy_data or "subscriptions" in legacy_data)
+    )
+    if use_legacy_monolithic:
+        runtime_defaults = default_runtime_config()
+        return LoadedToktrailConfig(
+            config_path=config_path,
+            prices_path=prices_path,
+            subscriptions_path=subscriptions_path,
+            config_exists=config_path.exists(),
+            prices_exists=prices_path.exists(),
+            subscriptions_exists=subscriptions_path.exists(),
+            config=ToktrailConfig(
+                costing=_parse_legacy_costing_config(legacy_data),
+                imports=_parse_import_config(
+                    legacy_data.get("imports"),
+                    runtime_defaults.imports,
+                ),
+            ),
+        )
     return LoadedToktrailConfig(
-        path=path,
-        exists=path.exists(),
-        config=load_toktrail_config(path),
+        config_path=config_path,
+        prices_path=prices_path,
+        subscriptions_path=subscriptions_path,
+        config_exists=config_path.exists(),
+        prices_exists=prices_path.exists(),
+        subscriptions_exists=subscriptions_path.exists(),
+        config=merge_configs(
+            load_runtime_config(config_path),
+            load_pricing_config(prices_path),
+            load_subscriptions_config(subscriptions_path),
+        ),
     )
 
 
 def parse_costing_config(data: object) -> CostingConfig:
-    return parse_toktrail_config(data).costing
+    return merge_configs(
+        parse_runtime_config(data),
+        default_pricing_config(),
+        default_subscriptions_config(),
+    ).costing
 
 
-def parse_toktrail_config(data: object) -> ToktrailConfig:
+def parse_toktrail_config(
+    runtime_data: object,
+    pricing_data: object | None = None,
+    subscriptions_data: object | None = None,
+) -> ToktrailConfig:
+    return merge_configs(
+        parse_runtime_config(runtime_data),
+        parse_pricing_config(pricing_data or {}),
+        parse_subscriptions_config(subscriptions_data or {}),
+    )
+
+
+def load_runtime_config(path: Path) -> RuntimeConfig:
+    data = _load_optional_toml(path, context="config.toml")
+    if data is None:
+        return default_runtime_config()
+    return parse_runtime_config(data)
+
+
+def load_pricing_config(path: Path) -> PricingConfig:
+    data = _load_optional_toml(path, context="prices.toml")
+    if data is None:
+        return default_pricing_config()
+    return parse_pricing_config(data)
+
+
+def load_subscriptions_config(path: Path) -> SubscriptionsConfig:
+    data = _load_optional_toml(path, context="subscriptions.toml")
+    if data is None:
+        return default_subscriptions_config()
+    return parse_subscriptions_config(data)
+
+
+def parse_runtime_config(data: object) -> RuntimeConfig:
     if not isinstance(data, dict):
         msg = "Toktrail config must be a TOML table."
         raise ValueError(msg)
 
-    _validate_allowed_keys(data, _ROOT_FIELDS, context="root")
+    _reject_misplaced_keys(
+        data,
+        invalid={"pricing"},
+        context="config.toml",
+        destination_hint="Move token prices to ~/.config/toktrail/prices.toml.",
+    )
+    _reject_misplaced_keys(
+        data,
+        invalid={"subscriptions"},
+        context="config.toml",
+        destination_hint=(
+            "Move subscription plans to ~/.config/toktrail/subscriptions.toml."
+        ),
+    )
+    _validate_allowed_keys(data, _RUNTIME_CONFIG_ROOT_FIELDS, context="config.toml")
 
-    default_config = default_toktrail_config()
-    costing_default = default_config.costing
+    default_config = default_runtime_config()
     config_version = _parse_config_version(data.get("config_version", CONFIG_VERSION))
     costing_table = _parse_optional_table(data.get("costing"), context="costing")
     _validate_allowed_keys(costing_table, _COSTING_FIELDS, context="costing")
     default_actual_mode = _parse_choice(
-        costing_table.get("default_actual_mode", costing_default.default_actual_mode),
+        costing_table.get("default_actual_mode", default_config.default_actual_mode),
         valid=_VALID_ACTUAL_COST_MODES,
         context="costing.default_actual_mode",
     )
     default_virtual_mode = _parse_choice(
-        costing_table.get("default_virtual_mode", costing_default.default_virtual_mode),
+        costing_table.get(
+            "default_virtual_mode",
+            default_config.default_virtual_mode,
+        ),
         valid=_VALID_VIRTUAL_COST_MODES,
         context="costing.default_virtual_mode",
     )
     missing_price = _parse_choice(
-        costing_table.get("missing_price", costing_default.missing_price),
+        costing_table.get("missing_price", default_config.missing_price),
         valid=_VALID_MISSING_PRICE_MODES,
         context="costing.missing_price",
     )
@@ -828,10 +1141,167 @@ def parse_toktrail_config(data: object) -> ToktrailConfig:
         costing_table.get("price_profile"),
         context="costing.price_profile",
     )
-
     actual_rules = _parse_actual_cost_rules(
         data.get("actual_cost"),
-        costing_default.actual_rules,
+        default_config.actual_rules,
+    )
+
+    return RuntimeConfig(
+        config_version=config_version,
+        imports=_parse_import_config(data.get("imports"), default_config.imports),
+        default_actual_mode=cast(ActualCostMode, default_actual_mode),
+        default_virtual_mode=cast(VirtualCostMode, default_virtual_mode),
+        missing_price=cast(MissingPriceMode, missing_price),
+        price_profile=price_profile,
+        actual_rules=actual_rules,
+    )
+
+
+def parse_pricing_config(data: object) -> PricingConfig:
+    if not isinstance(data, dict):
+        msg = "prices.toml must be a TOML table."
+        raise ValueError(msg)
+
+    _reject_misplaced_keys(
+        data,
+        invalid={"imports"},
+        context="prices.toml",
+        destination_hint="Import settings belong in ~/.config/toktrail/config.toml.",
+    )
+    _reject_misplaced_keys(
+        data,
+        invalid={"actual_cost", "costing"},
+        context="prices.toml",
+        destination_hint="Costing policy belongs in ~/.config/toktrail/config.toml.",
+    )
+    _reject_misplaced_keys(
+        data,
+        invalid={"subscriptions"},
+        context="prices.toml",
+        destination_hint=(
+            "Subscription plans belong in ~/.config/toktrail/subscriptions.toml."
+        ),
+    )
+    _validate_allowed_keys(data, _PRICE_CONFIG_ROOT_FIELDS, context="prices.toml")
+
+    config_version = _parse_config_version(data.get("config_version", CONFIG_VERSION))
+    pricing_table = _parse_optional_table(data.get("pricing"), context="pricing")
+    _validate_allowed_keys(pricing_table, _PRICING_FIELDS, context="pricing")
+    return PricingConfig(
+        config_version=config_version,
+        virtual_prices=_parse_prices(
+            pricing_table.get("virtual"),
+            context="pricing.virtual",
+        ),
+        actual_prices=_parse_prices(
+            pricing_table.get("actual"),
+            context="pricing.actual",
+        ),
+    )
+
+
+def parse_subscriptions_config(data: object) -> SubscriptionsConfig:
+    if not isinstance(data, dict):
+        msg = "subscriptions.toml must be a TOML table."
+        raise ValueError(msg)
+
+    _reject_misplaced_keys(
+        data,
+        invalid={"imports", "actual_cost", "costing"},
+        context="subscriptions.toml",
+        destination_hint=(
+            "Import and costing settings belong in ~/.config/toktrail/config.toml."
+        ),
+    )
+    _reject_misplaced_keys(
+        data,
+        invalid={"pricing"},
+        context="subscriptions.toml",
+        destination_hint="Token prices belong in ~/.config/toktrail/prices.toml.",
+    )
+    _validate_allowed_keys(
+        data,
+        _SUBSCRIPTION_CONFIG_ROOT_FIELDS,
+        context="subscriptions.toml",
+    )
+
+    config_version = _parse_config_version(data.get("config_version", CONFIG_VERSION))
+    return SubscriptionsConfig(
+        config_version=config_version,
+        subscriptions=_parse_subscriptions(data.get("subscriptions")),
+    )
+
+
+def merge_configs(
+    runtime: RuntimeConfig,
+    pricing: PricingConfig,
+    subscriptions: SubscriptionsConfig,
+) -> ToktrailConfig:
+    return ToktrailConfig(
+        costing=CostingConfig(
+            config_version=runtime.config_version,
+            default_actual_mode=runtime.default_actual_mode,
+            default_virtual_mode=runtime.default_virtual_mode,
+            missing_price=runtime.missing_price,
+            price_profile=runtime.price_profile,
+            actual_rules=runtime.actual_rules,
+            virtual_prices=pricing.virtual_prices,
+            actual_prices=pricing.actual_prices,
+            subscriptions=subscriptions.subscriptions,
+        ),
+        imports=runtime.imports,
+    )
+
+
+def _load_optional_toml(path: Path, *, context: str) -> dict[str, object] | None:
+    if not path.exists():
+        return None
+    if not path.is_file():
+        msg = f"{context} path is not a file: {path}"
+        raise ValueError(msg)
+    try:
+        with path.open("rb") as handle:
+            data = tomllib.load(handle)
+    except tomllib.TOMLDecodeError as exc:
+        msg = f"Invalid TOML in {context} {path}: {exc}"
+        raise ValueError(msg) from exc
+    if not isinstance(data, dict):
+        msg = f"{context} must contain a TOML table at the root."
+        raise ValueError(msg)
+    return cast(dict[str, object], data)
+
+
+def _parse_legacy_costing_config(data: dict[str, object]) -> CostingConfig:
+    _validate_allowed_keys(data, _ROOT_FIELDS, context="root")
+    default_runtime = default_runtime_config()
+    config_version = _parse_config_version(data.get("config_version", CONFIG_VERSION))
+    costing_table = _parse_optional_table(data.get("costing"), context="costing")
+    _validate_allowed_keys(costing_table, _COSTING_FIELDS, context="costing")
+    default_actual_mode = _parse_choice(
+        costing_table.get("default_actual_mode", default_runtime.default_actual_mode),
+        valid=_VALID_ACTUAL_COST_MODES,
+        context="costing.default_actual_mode",
+    )
+    default_virtual_mode = _parse_choice(
+        costing_table.get(
+            "default_virtual_mode",
+            default_runtime.default_virtual_mode,
+        ),
+        valid=_VALID_VIRTUAL_COST_MODES,
+        context="costing.default_virtual_mode",
+    )
+    missing_price = _parse_choice(
+        costing_table.get("missing_price", default_runtime.missing_price),
+        valid=_VALID_MISSING_PRICE_MODES,
+        context="costing.missing_price",
+    )
+    price_profile = _parse_optional_string(
+        costing_table.get("price_profile"),
+        context="costing.price_profile",
+    )
+    actual_rules = _parse_actual_cost_rules(
+        data.get("actual_cost"),
+        default_runtime.actual_rules,
     )
     pricing_table = _parse_optional_table(data.get("pricing"), context="pricing")
     _validate_allowed_keys(pricing_table, _PRICING_FIELDS, context="pricing")
@@ -844,23 +1314,16 @@ def parse_toktrail_config(data: object) -> ToktrailConfig:
         context="pricing.actual",
     )
     subscriptions = _parse_subscriptions(data.get("subscriptions"))
-
-    return ToktrailConfig(
-        costing=CostingConfig(
-            config_version=config_version,
-            default_actual_mode=cast(ActualCostMode, default_actual_mode),
-            default_virtual_mode=cast(VirtualCostMode, default_virtual_mode),
-            missing_price=cast(MissingPriceMode, missing_price),
-            price_profile=price_profile,
-            actual_rules=actual_rules,
-            virtual_prices=virtual_prices,
-            actual_prices=actual_prices,
-            subscriptions=subscriptions,
-        ),
-        imports=_parse_import_config(
-            data.get("imports"),
-            default_config.imports,
-        ),
+    return CostingConfig(
+        config_version=config_version,
+        default_actual_mode=cast(ActualCostMode, default_actual_mode),
+        default_virtual_mode=cast(VirtualCostMode, default_virtual_mode),
+        missing_price=cast(MissingPriceMode, missing_price),
+        price_profile=price_profile,
+        actual_rules=actual_rules,
+        virtual_prices=virtual_prices,
+        actual_prices=actual_prices,
+        subscriptions=subscriptions,
     )
 
 
@@ -1538,6 +2001,17 @@ def _validate_allowed_keys(
         return
     msg = f"{context} has unsupported keys: {', '.join(unknown)}"
     raise ValueError(msg)
+
+
+def _reject_misplaced_keys(
+    data: dict[str, object],
+    *,
+    invalid: set[str],
+    context: str,
+    destination_hint: str,
+) -> None:
+    for key in sorted(invalid & set(data)):
+        raise ValueError(f"{context} contains [{key}]. {destination_hint}")
 
 
 def _matches_rule_value(rule_value: str | None, actual_value: str | None) -> bool:

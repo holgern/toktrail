@@ -1832,13 +1832,17 @@ opencode = "{source_db}"
 def test_cli_config_path_init_and_validate(tmp_path) -> None:
     runner = CliRunner()
     config_path = tmp_path / "config" / "toktrail.toml"
+    prices_path = tmp_path / ".config" / "toktrail" / "prices.toml"
+    subscriptions_path = tmp_path / ".config" / "toktrail" / "subscriptions.toml"
 
     path_result = runner.invoke(
         app,
         ["--config", str(config_path), "config", "path"],
     )
     assert path_result.exit_code == 0, path_result.output
-    assert path_result.output.strip() == str(config_path)
+    assert f"config:        {config_path}" in path_result.output
+    assert f"prices:        {prices_path}" in path_result.output
+    assert f"subscriptions: {subscriptions_path}" in path_result.output
 
     init_result = runner.invoke(
         app,
@@ -1846,6 +1850,8 @@ def test_cli_config_path_init_and_validate(tmp_path) -> None:
     )
     assert init_result.exit_code == 0, init_result.output
     assert config_path.exists()
+    assert prices_path.exists()
+    assert subscriptions_path.exists()
 
     validate_result = runner.invoke(
         app,
@@ -1966,6 +1972,255 @@ def test_cli_config_prices_rejects_invalid_filter_values(tmp_path) -> None:
     assert "Unsupported --table" in bad_table.output
     assert bad_sort.exit_code == 1
     assert "Unsupported --sort" in bad_sort.output
+
+
+def test_cli_root_prices_and_subscriptions_overrides(tmp_path) -> None:
+    runner = CliRunner()
+    config_path = tmp_path / "config.toml"
+    prices_path = tmp_path / "prices.toml"
+    subscriptions_path = tmp_path / "subscriptions.toml"
+    config_path.write_text(
+        """
+config_version = 1
+
+[imports]
+harnesses = ["opencode"]
+missing_source = "warn"
+include_raw_json = false
+""".strip(),
+        encoding="utf-8",
+    )
+    prices_path.write_text(
+        """
+config_version = 1
+
+[[pricing.virtual]]
+provider = "openai"
+model = "gpt-5-mini"
+input_usd_per_1m = 0.25
+output_usd_per_1m = 2.0
+""".strip(),
+        encoding="utf-8",
+    )
+    subscriptions_path.write_text(
+        """
+config_version = 1
+
+[[subscriptions]]
+id = "opencode-go"
+usage_providers = ["opencode-go"]
+
+[[subscriptions.windows]]
+period = "monthly"
+limit_usd = 100
+reset_at = "2026-05-01T00:00:00+00:00"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    prices_result = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config_path),
+            "--prices",
+            str(prices_path),
+            "config",
+            "prices",
+            "--provider",
+            "openai",
+            "--json",
+        ],
+    )
+    assert prices_result.exit_code == 0, prices_result.output
+    prices_payload = json.loads(prices_result.output)
+    assert prices_payload[0]["provider"] == "openai"
+
+    show_result = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config_path),
+            "--prices",
+            str(prices_path),
+            "--subscriptions",
+            str(subscriptions_path),
+            "config",
+            "show",
+        ],
+    )
+    assert show_result.exit_code == 0, show_result.output
+    assert f"subs path:       {subscriptions_path}" in show_result.output
+
+
+def test_cli_pricing_parse_openai_standard_to_stdout(tmp_path) -> None:
+    runner = CliRunner()
+    input_path = tmp_path / "openai-pricing.jsx"
+    input_path.write_text(
+        'TextTokenPricingTables tier="standard" rows={[ ["gpt-5.5", 5, 0.5, 30] ]}',
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "pricing",
+            "parse",
+            "--provider",
+            "openai",
+            "--input",
+            str(input_path),
+            "--out",
+            "-",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "[[pricing.virtual]]" in result.output
+    assert 'provider = "openai"' in result.output
+
+
+def test_cli_pricing_parse_zai_to_stdout(tmp_path) -> None:
+    runner = CliRunner()
+    input_path = tmp_path / "zai-pricing.md"
+    input_path.write_text(
+        """
+### Text Models
+| Model | Input | Cached Input | Output |
+| --- | --- | --- | --- |
+| GLM-5.1 | $1.4 | $0.26 | $4.4 |
+""".strip(),
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "pricing",
+            "parse",
+            "--provider",
+            "zai",
+            "--input",
+            str(input_path),
+            "--out",
+            "-",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert 'provider = "zai"' in result.output
+    assert 'model = "glm-5.1"' in result.output
+
+
+def test_cli_pricing_parse_opencode_go_actual_to_stdout(tmp_path) -> None:
+    runner = CliRunner()
+    input_path = tmp_path / "opencode-go.txt"
+    input_path.write_text(
+        """
+Model        Input    Output    Cached Read    Cached Write
+GLM 5.1      $1.40    $4.40     $0.26          -
+""".strip(),
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "pricing",
+            "parse",
+            "--provider",
+            "opencode-go",
+            "--table",
+            "actual",
+            "--input",
+            str(input_path),
+            "--out",
+            "-",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "[[pricing.actual]]" in result.output
+    assert 'provider = "opencode-go"' in result.output
+
+
+def test_cli_pricing_parse_merge_replaces_provider_rows(tmp_path) -> None:
+    runner = CliRunner()
+    input_path = tmp_path / "openai-pricing.jsx"
+    prices_path = tmp_path / "prices.toml"
+    input_path.write_text(
+        'TextTokenPricingTables tier="standard" rows={[ ["gpt-5.5", 6, 0.6, 36] ]}',
+        encoding="utf-8",
+    )
+    prices_path.write_text(
+        """
+config_version = 1
+
+[[pricing.virtual]]
+provider = "openai"
+model = "gpt-5.5"
+input_usd_per_1m = 5
+output_usd_per_1m = 30
+
+[[pricing.virtual]]
+provider = "anthropic"
+model = "claude-sonnet-4"
+input_usd_per_1m = 3
+output_usd_per_1m = 15
+""".strip(),
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "pricing",
+            "parse",
+            "--provider",
+            "openai",
+            "--input",
+            str(input_path),
+            "--out",
+            str(prices_path),
+            "--merge",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    merged = prices_path.read_text(encoding="utf-8")
+    assert "input_usd_per_1m = 6.0" in merged
+    assert 'provider = "anthropic"' in merged
+
+
+def test_cli_pricing_parse_context_tier_warning(tmp_path) -> None:
+    runner = CliRunner()
+    input_path = tmp_path / "openai-pricing.jsx"
+    input_path.write_text(
+        """
+TextTokenPricingTables tier="standard" rows={[
+  ["gpt-5.5 (<272K context length)", 5, 0.5, 30],
+  ["GPT 5.5 (> 272K tokens)", 6, 0.6, 36],
+]}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "pricing",
+            "parse",
+            "--provider",
+            "openai",
+            "--input",
+            str(input_path),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["warnings"]
 
 
 def test_cli_status_with_template_config_computes_copilot_virtual_cost(

@@ -183,8 +183,8 @@ Public reporting preserves the current cost model:
 
 The API does not collapse these into a single cost field.
 
-Report and source-summary APIs accept `config_path` so callers can choose the
-pricing config used for actual and virtual costs.
+Report and source-summary APIs accept `config_path`. The runtime loader merges
+`config.toml` with sibling `prices.toml` and `subscriptions.toml` when present.
 
 Provider identity is strict: when a usage event already has an explicit provider,
 toktrail does not fall back to inferred provider aliases from the model name.
@@ -226,7 +226,8 @@ period/time-range reporting, it returns `RunReport(session=None, ...)`.
 ### Subscription usage report
 
 `subscription_usage_report()` returns subscription quota usage for configured
-`[[subscriptions]]` (keyed by `id` with `usage_providers` coverage), including
+`[[subscriptions]]` from `subscriptions.toml` (keyed by `id` with
+`usage_providers` coverage), including
 configured windows (`5h`, `daily`, `weekly`, `monthly`, `yearly`) with
 per-window `reset_mode` (`fixed` or `first_use`), `reset_at`, status
 (`active`, `waiting_for_first_use`, `expired_waiting_for_next_use`), and

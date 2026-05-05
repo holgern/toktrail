@@ -1,18 +1,13 @@
 Configuration
 =============
 
-toktrail reads pricing, refresh defaults, and optional subscription quota
-settings from ``config.toml``.
+toktrail uses three user config files:
 
-Key sections:
+- ``config.toml`` for imports + costing policy
+- ``prices.toml`` for ``[[pricing.virtual]]`` and ``[[pricing.actual]]`` rows
+- ``subscriptions.toml`` for ``[[subscriptions]]`` plans and windows
 
-- ``[imports]``
-- ``[imports.sources]``
-- ``[costing]``
-- ``[[actual_cost]]``
-- ``[[pricing.virtual]]``
-- ``[[pricing.actual]]``
-- ``[[subscriptions]]``
+Use ``toktrail config init`` to create all three files.
 
 Report commands use ``[imports]`` as their automatic refresh policy by default.
 Use ``toktrail refresh`` for manual refresh operations.
@@ -20,7 +15,11 @@ Use ``toktrail refresh`` for manual refresh operations.
 Example
 -------
 
+``config.toml``:
+
 .. code-block:: toml
+
+   config_version = 1
 
    [imports]
    harnesses = ["opencode", "pi", "copilot", "codex", "goose", "droid", "amp"]
@@ -40,6 +39,24 @@ Example
    default_actual_mode = "source"
    default_virtual_mode = "pricing"
    missing_price = "warn"
+
+``prices.toml``:
+
+.. code-block:: toml
+
+   config_version = 1
+
+   [[pricing.virtual]]
+   provider = "openai"
+   model = "gpt-5-mini"
+   input_usd_per_1m = 0.25
+   output_usd_per_1m = 2.0
+
+``subscriptions.toml``:
+
+.. code-block:: toml
+
+   config_version = 1
 
    [[subscriptions]]
    id = "opencode-go"

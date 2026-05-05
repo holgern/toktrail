@@ -5,7 +5,11 @@ from pathlib import Path
 from toktrail import config as config_module
 from toktrail.api.paths import (
     default_toktrail_config_path,
+    default_toktrail_prices_path,
+    default_toktrail_subscriptions_path,
     resolve_toktrail_config_path,
+    resolve_toktrail_prices_path,
+    resolve_toktrail_subscriptions_path,
 )
 from toktrail.errors import ConfigurationError, InvalidAPIUsageError
 
@@ -17,14 +21,34 @@ def config_exists(config_path: Path | None = None) -> bool:
 def config_summary(config_path: Path | None = None) -> dict[str, object]:
     resolved = resolve_toktrail_config_path(config_path)
     try:
-        loaded = config_module.load_resolved_costing_config(config_path)
+        prices_path = (
+            resolved.with_name("prices.toml")
+            if config_path is not None
+            else None
+        )
+        subscriptions_path = (
+            resolved.with_name("subscriptions.toml")
+            if config_path is not None
+            else None
+        )
+        loaded = config_module.load_resolved_costing_config(
+            config_cli_value=resolved,
+            prices_cli_value=prices_path,
+            subscriptions_cli_value=subscriptions_path,
+        )
         summary = config_module.summarize_costing_config(loaded.config)
     except ValueError as exc:
         msg = f"Invalid toktrail config at {resolved}: {exc}"
         raise ConfigurationError(msg) from exc
     return {
-        "path": str(loaded.path),
-        "exists": loaded.exists,
+        "path": str(loaded.config_path),
+        "exists": loaded.config_exists,
+        "config_path": str(loaded.config_path),
+        "prices_path": str(loaded.prices_path),
+        "subscriptions_path": str(loaded.subscriptions_path),
+        "config_exists": loaded.config_exists,
+        "prices_exists": loaded.prices_exists,
+        "subscriptions_exists": loaded.subscriptions_exists,
         "config_version": summary.config_version,
         "default_actual_mode": summary.default_actual_mode,
         "default_virtual_mode": summary.default_virtual_mode,
@@ -52,20 +76,33 @@ def init_config(
     force: bool = False,
 ) -> Path:
     resolved = resolve_toktrail_config_path(config_path)
-    if resolved.exists() and not force:
-        msg = (
-            f"Toktrail config already exists at {resolved}; "
-            "pass force=True to overwrite."
-        )
-        raise InvalidAPIUsageError(msg)
+    prices_path = resolved.with_name("prices.toml")
+    subscriptions_path = resolved.with_name("subscriptions.toml")
+    if not force:
+        existing = [
+            path
+            for path in (resolved, prices_path, subscriptions_path)
+            if path.exists()
+        ]
+        if existing:
+            msg = (
+                "Toktrail config files already exists: "
+                + ", ".join(str(path) for path in existing)
+                + "; pass force=True to overwrite."
+            )
+            raise InvalidAPIUsageError(msg)
     try:
         content = config_module.render_config_template(template)
+        prices_content = config_module.render_prices_template(template)
+        subscriptions_content = config_module.render_subscriptions_template(template)
     except ValueError as exc:
         msg = f"Unsupported toktrail config template {template!r}: {exc}"
         raise ConfigurationError(msg) from exc
     try:
         resolved.parent.mkdir(parents=True, exist_ok=True)
         resolved.write_text(content, encoding="utf-8")
+        prices_path.write_text(prices_content, encoding="utf-8")
+        subscriptions_path.write_text(subscriptions_content, encoding="utf-8")
     except OSError as exc:
         msg = f"Could not write toktrail config to {resolved}: {exc}"
         raise ConfigurationError(msg) from exc
@@ -76,7 +113,11 @@ __all__ = [
     "config_exists",
     "config_summary",
     "default_toktrail_config_path",
+    "default_toktrail_prices_path",
+    "default_toktrail_subscriptions_path",
     "init_config",
     "render_config_template",
     "resolve_toktrail_config_path",
+    "resolve_toktrail_prices_path",
+    "resolve_toktrail_subscriptions_path",
 ]
