@@ -6,8 +6,11 @@ from toktrail.config import (
     COPILOT_TEMPLATE_NAME,
     Price,
     load_costing_config,
+    load_pricing_config,
+    load_resolved_costing_config,
     load_toktrail_config,
     normalize_identity,
+    parse_pricing_config,
     render_config_template,
     summarize_costing_config,
 )
@@ -813,3 +816,193 @@ unknown_root_key = true
 
     with pytest.raises(ValueError, match="root has unsupported keys"):
         load_costing_config(config_path)
+
+
+def test_load_resolved_costing_config_loads_provider_price_files(tmp_path) -> None:
+    config_path = tmp_path / "config" / "config.toml"
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(render_config_template(), encoding="utf-8")
+    prices_dir = config_path.with_name("prices")
+    prices_dir.mkdir(parents=True, exist_ok=True)
+    (prices_dir / "openai.toml").write_text(
+        """
+config_version = 1
+
+[[pricing.virtual]]
+provider = "openai"
+model = "gpt-5.5"
+input_usd_per_1m = 5
+output_usd_per_1m = 30
+""".strip(),
+        encoding="utf-8",
+    )
+    (prices_dir / "zai.toml").write_text(
+        """
+config_version = 1
+
+[[pricing.virtual]]
+provider = "zai"
+model = "glm-5.1"
+input_usd_per_1m = 1.4
+output_usd_per_1m = 4.4
+""".strip(),
+        encoding="utf-8",
+    )
+
+    loaded = load_resolved_costing_config(config_cli_value=config_path)
+
+    assert loaded.manual_prices_exists is False
+    assert loaded.provider_prices_exists is True
+    assert loaded.prices_exists is True
+    assert loaded.price_paths == (prices_dir / "openai.toml", prices_dir / "zai.toml")
+    assert {
+        (price.provider, price.model) for price in loaded.config.virtual_prices
+    } == {
+        ("openai", "gpt-5.5"),
+        ("zai", "glm-5.1"),
+    }
+
+
+def test_manual_prices_override_provider_prices(tmp_path) -> None:
+    config_path = tmp_path / "config" / "config.toml"
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(render_config_template(), encoding="utf-8")
+    prices_dir = config_path.with_name("prices")
+    prices_dir.mkdir(parents=True, exist_ok=True)
+    (prices_dir / "openai.toml").write_text(
+        """
+config_version = 1
+
+[[pricing.virtual]]
+provider = "openai"
+model = "gpt-5.5"
+input_usd_per_1m = 5
+output_usd_per_1m = 30
+""".strip(),
+        encoding="utf-8",
+    )
+    config_path.with_name("prices.toml").write_text(
+        """
+config_version = 1
+
+[[pricing.virtual]]
+provider = "openai"
+model = "gpt-5.5"
+input_usd_per_1m = 6
+output_usd_per_1m = 30
+""".strip(),
+        encoding="utf-8",
+    )
+
+    loaded = load_resolved_costing_config(config_cli_value=config_path)
+    selected = next(
+        price
+        for price in loaded.config.virtual_prices
+        if price.provider == "openai" and price.model == "gpt-5.5"
+    )
+
+    assert selected.input_usd_per_1m == 6.0
+
+
+def test_duplicate_provider_price_files_error(tmp_path) -> None:
+    config_path = tmp_path / "config" / "config.toml"
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(render_config_template(), encoding="utf-8")
+    prices_dir = config_path.with_name("prices")
+    prices_dir.mkdir(parents=True, exist_ok=True)
+    (prices_dir / "openai.toml").write_text(
+        """
+config_version = 1
+
+[[pricing.virtual]]
+provider = "openai"
+model = "gpt-5.5"
+input_usd_per_1m = 5
+output_usd_per_1m = 30
+""".strip(),
+        encoding="utf-8",
+    )
+    (prices_dir / "openai-copy.toml").write_text(
+        """
+config_version = 1
+
+[[pricing.virtual]]
+provider = "openai"
+model = "gpt-5.5"
+input_usd_per_1m = 6
+output_usd_per_1m = 36
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="duplicate generated price"):
+        load_resolved_costing_config(config_cli_value=config_path)
+
+
+def test_provider_price_files_preserve_current_single_file_loader(tmp_path) -> None:
+    prices_path = tmp_path / "prices.toml"
+    prices_path.write_text(
+        """
+config_version = 1
+
+[[pricing.virtual]]
+provider = "openai"
+model = "gpt-5.5"
+input_usd_per_1m = 5
+output_usd_per_1m = 30
+""".strip(),
+        encoding="utf-8",
+    )
+
+    loaded = load_pricing_config(prices_path)
+    parsed_empty = parse_pricing_config({})
+
+    assert len(loaded.virtual_prices) == 1
+    assert parsed_empty.virtual_prices == ()
+    assert parsed_empty.actual_prices == ()
+
+
+def test_config_summary_counts_provider_and_manual_prices(tmp_path) -> None:
+    config_path = tmp_path / "config" / "config.toml"
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(render_config_template(), encoding="utf-8")
+    prices_dir = config_path.with_name("prices")
+    prices_dir.mkdir(parents=True, exist_ok=True)
+    openai_path = prices_dir / "openai.toml"
+    openai_path.write_text(
+        """
+config_version = 1
+
+[[pricing.virtual]]
+provider = "openai"
+model = "gpt-5.5"
+input_usd_per_1m = 5
+output_usd_per_1m = 30
+""".strip(),
+        encoding="utf-8",
+    )
+    manual_path = config_path.with_name("prices.toml")
+    manual_path.write_text(
+        """
+config_version = 1
+
+[[pricing.virtual]]
+provider = "openai"
+model = "gpt-5.5"
+input_usd_per_1m = 6
+output_usd_per_1m = 30
+
+[[pricing.virtual]]
+provider = "zai"
+model = "glm-5.1"
+input_usd_per_1m = 1.4
+output_usd_per_1m = 4.4
+""".strip(),
+        encoding="utf-8",
+    )
+
+    loaded = load_resolved_costing_config(config_cli_value=config_path)
+    summary = summarize_costing_config(loaded.config)
+
+    assert summary.virtual_price_count == 2
+    assert loaded.price_paths == (openai_path, manual_path)

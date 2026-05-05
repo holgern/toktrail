@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from toktrail.price_parser import (
     parse_openai_pricing,
     parse_opencode_go_pricing,
@@ -27,6 +29,30 @@ TextTokenPricingTables tier="batch" rows={[
     assert any(price.model == "gpt-5.5" for price in parsed.prices)
     assert any(price.model == "gpt-5.5-pro" for price in parsed.prices)
     assert parsed.warnings
+
+
+def test_parse_openai_pricing_reads_markdown_table() -> None:
+    text = """
+| Model | Input | Cached Input | Output |
+| --- | --- | --- | --- |
+| GPT-5.5 | $5.00 | $0.50 | $30.00 |
+""".strip()
+
+    parsed = parse_openai_pricing(text, tier="standard")
+
+    assert parsed.provider == "openai"
+    assert parsed.prices[0].model == "gpt-5.5"
+    assert parsed.prices[0].cached_input_usd_per_1m == 0.5
+
+
+def test_parse_openai_pricing_warns_when_no_rows_parsed() -> None:
+    parsed = parse_openai_pricing("not a pricing document", tier="standard")
+
+    assert parsed.prices == ()
+    assert any(
+        "No OpenAI pricing rows were parsed" in warning
+        for warning in parsed.warnings
+    )
 
 
 def test_parse_zai_pricing_reads_markdown_tables() -> None:
@@ -74,6 +100,11 @@ def test_parse_price_document_dispatches_provider() -> None:
 
     assert parsed.provider == "openai"
     assert parsed.prices[0].model == "gpt-5.5"
+
+
+def test_parse_price_document_lists_supported_providers_on_error() -> None:
+    with pytest.raises(ValueError, match="Supported providers"):
+        parse_price_document("x", provider="mistral")
 
 
 def test_render_prices_toml_outputs_sorted_sections() -> None:

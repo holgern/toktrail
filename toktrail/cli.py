@@ -65,6 +65,7 @@ from toktrail.paths import (
     new_copilot_otel_file_path,
     resolve_toktrail_config_path,
     resolve_toktrail_db_path,
+    resolve_toktrail_prices_dir,
     resolve_toktrail_prices_path,
     resolve_toktrail_subscriptions_path,
 )
@@ -193,6 +194,10 @@ ConfigPathOption = Annotated[
 PricesPathOption = Annotated[
     Path | None,
     typer.Option("--prices", help="Override toktrail prices TOML path."),
+]
+PricesDirOption = Annotated[
+    Path | None,
+    typer.Option("--prices-dir", help="Override toktrail provider prices directory."),
 ]
 SubscriptionsPathOption = Annotated[
     Path | None,
@@ -353,12 +358,14 @@ def main(
     db_path: DbPathOption = None,
     config_path: ConfigPathOption = None,
     prices_path: PricesPathOption = None,
+    prices_dir_path: PricesDirOption = None,
     subscriptions_path: SubscriptionsPathOption = None,
 ) -> None:
     ctx.obj = {
         "db_path": db_path,
         "config_path": config_path,
         "prices_path": prices_path,
+        "prices_dir_path": prices_dir_path,
         "subscriptions_path": subscriptions_path,
     }
 
@@ -1807,10 +1814,13 @@ def config_path(
     which: Annotated[str, typer.Option("--which")] = "all",
 ) -> None:
     normalized = which.strip().lower()
-    if normalized not in {"all", "config", "prices", "subscriptions"}:
-        _exit_with_error("--which must be one of: all, config, prices, subscriptions.")
+    if normalized not in {"all", "config", "prices", "prices-dir", "subscriptions"}:
+        _exit_with_error(
+            "--which must be one of: all, config, prices, prices-dir, subscriptions."
+        )
     config = _resolve_config_path(ctx)
     prices = _resolve_prices_path(ctx)
+    prices_dir = _resolve_prices_dir(ctx)
     subscriptions = _resolve_subscriptions_path(ctx)
     if normalized == "config":
         typer.echo(config)
@@ -1818,11 +1828,15 @@ def config_path(
     if normalized == "prices":
         typer.echo(prices)
         return
+    if normalized == "prices-dir":
+        typer.echo(prices_dir)
+        return
     if normalized == "subscriptions":
         typer.echo(subscriptions)
         return
     typer.echo(f"config:        {config}")
     typer.echo(f"prices:        {prices}")
+    typer.echo(f"prices dir:    {prices_dir}")
     typer.echo(f"subscriptions: {subscriptions}")
 
 
@@ -1838,6 +1852,7 @@ def config_init(
         _exit_with_error("--only must be one of: all, config, prices, subscriptions.")
     config = _resolve_config_path(ctx)
     prices = _resolve_prices_path(ctx)
+    prices_dir = _resolve_prices_dir(ctx)
     subscriptions = _resolve_subscriptions_path(ctx)
     targets = []
     if normalized_only in {"all", "config"}:
@@ -1849,6 +1864,8 @@ def config_init(
 
     if not force:
         existing = [path for _, path, _ in targets if path.exists()]
+        if normalized_only in {"all", "prices"} and prices_dir.exists():
+            existing.append(prices_dir)
         if existing:
             if len(existing) == 1:
                 _exit_with_error(f"Toktrail config file already exists: {existing[0]}")
@@ -1866,6 +1883,9 @@ def config_init(
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
         written.append((label, path))
+    if normalized_only in {"all", "prices"}:
+        prices_dir.mkdir(parents=True, exist_ok=True)
+        written.append(("prices-dir", prices_dir))
 
     typer.echo("Initialized toktrail config files:")
     for label, path in written:
@@ -1879,11 +1899,13 @@ def config_validate(ctx: typer.Context) -> None:
     typer.echo("Config valid:")
     typer.echo(f"  config:        {loaded.config_path}")
     typer.echo(f"  prices:        {loaded.prices_path}")
+    typer.echo(f"  prices dir:    {loaded.prices_dir}")
     typer.echo(f"  subscriptions: {loaded.subscriptions_path}")
     typer.echo(f"  actual rules:   {summary.actual_rule_count}")
     typer.echo(f"  actual prices:  {summary.actual_price_count}")
     typer.echo(f"  virtual prices: {summary.virtual_price_count}")
     typer.echo(f"  subscriptions:  {summary.subscription_count}")
+    typer.echo(f"  price files:    {len(loaded.price_paths)}")
     warnings = [
         price
         for price in (*loaded.config.actual_prices, *loaded.config.virtual_prices)
@@ -1902,9 +1924,13 @@ def config_show(ctx: typer.Context) -> None:
     summary = summarize_costing_config(loaded.config)
     typer.echo(f"config path:     {loaded.config_path}")
     typer.echo(f"prices path:     {loaded.prices_path}")
+    typer.echo(f"prices dir:      {loaded.prices_dir}")
+    typer.echo(f"price files:     {len(loaded.price_paths)}")
     typer.echo(f"subs path:       {loaded.subscriptions_path}")
     typer.echo(f"config exists:   {'yes' if loaded.config_exists else 'no'}")
     typer.echo(f"prices exists:   {'yes' if loaded.prices_exists else 'no'}")
+    typer.echo(f"manual exists:   {'yes' if loaded.manual_prices_exists else 'no'}")
+    typer.echo(f"provider exists: {'yes' if loaded.provider_prices_exists else 'no'}")
     typer.echo(f"subs exists:     {'yes' if loaded.subscriptions_exists else 'no'}")
     typer.echo(f"config_version:  {summary.config_version}")
     typer.echo(f"default actual:  {summary.default_actual_mode}")
@@ -1915,6 +1941,10 @@ def config_show(ctx: typer.Context) -> None:
     typer.echo(f"actual prices:   {summary.actual_price_count}")
     typer.echo(f"virtual prices:  {summary.virtual_price_count}")
     typer.echo(f"subscriptions:   {summary.subscription_count}")
+    if loaded.price_paths:
+        typer.echo("price paths:")
+        for path in loaded.price_paths:
+            typer.echo(f"  - {path}")
     typer.echo("Run `toktrail config prices` to inspect configured price rows.")
 
 
@@ -2148,13 +2178,36 @@ def pricing_list(
     _print_price_table(price_rows, aliases=aliases, rich_output=rich_output)
 
 
+def _default_pricing_parse_output_path(ctx: typer.Context, provider: str) -> Path:
+    return _resolve_prices_dir(ctx) / f"{normalize_identity(provider)}.toml"
+
+
+def _is_provider_price_file(ctx: typer.Context, target: Path, provider: str) -> bool:
+    expected = _default_pricing_parse_output_path(ctx, provider)
+    try:
+        return target.resolve() == expected.resolve()
+    except OSError:
+        return target.absolute() == expected.absolute()
+
+
 @pricing_app.command("parse")
 def pricing_parse(
+    ctx: typer.Context,
     provider: Annotated[str, typer.Option("--provider")],
     table: PriceTableOption = "virtual",
     tier: Annotated[str, typer.Option("--tier")] = "standard",
     input_path: Annotated[Path | None, typer.Option("--input")] = None,
-    out_path: Annotated[str, typer.Option("--out")] = "-",
+    output_path: Annotated[
+        str | None,
+        typer.Option(
+            "--output",
+            "--out",
+            help=(
+                "Output TOML path, '-' for stdout. "
+                "Defaults to prices/<provider>.toml."
+            ),
+        ),
+    ] = None,
     merge: Annotated[bool, typer.Option("--merge")] = False,
     replace_provider: Annotated[bool, typer.Option("--replace-provider")] = False,
     dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
@@ -2179,54 +2232,101 @@ def pricing_parse(
     except ValueError as exc:
         _exit_with_error(str(exc))
 
-    output_text = render_prices_toml(
-        virtual_prices=parsed.prices if parsed.table == "virtual" else (),
-        actual_prices=parsed.prices if parsed.table == "actual" else (),
+    if output_path is None:
+        target = _default_pricing_parse_output_path(ctx, provider)
+    elif output_path == "-":
+        target = None
+    else:
+        raw = Path(output_path).expanduser()
+        target = (
+            raw / f"{normalize_identity(provider)}.toml"
+            if raw.exists() and raw.is_dir()
+            else raw
+        )
+
+    if target is None and (merge or replace_provider):
+        _exit_with_error("--merge and --replace-provider require file output.")
+
+    write_mode = "stdout" if target is None else "render"
+    if target is not None and target.exists():
+        if merge:
+            write_mode = "merge"
+        elif (
+            replace_provider
+            or output_path is None
+            or _is_provider_price_file(ctx, target, provider)
+        ):
+            write_mode = "replace-provider"
+        else:
+            _exit_with_error(
+                f"Refusing to overwrite existing {target}; pass --merge, "
+                "--replace-provider, or --output - for stdout."
+            )
+    elif target is not None:
+        if merge:
+            write_mode = "merge"
+        elif replace_provider:
+            write_mode = "replace-provider"
+
+    include_metadata = (
+        target is not None and _is_provider_price_file(ctx, target, provider)
     )
-    target: Path | None = None
-    if out_path != "-":
-        target = Path(out_path).expanduser()
-        if merge or replace_provider:
-            existing_text = (
-                target.read_text(encoding="utf-8") if target.exists() else None
-            )
-            output_text = merge_prices_document(
-                existing_text=existing_text,
-                parsed=parsed,
-                replace_provider=replace_provider,
-            )
+    source_label = str(input_path) if input_path is not None else "stdin"
+    metadata = (
+        {
+            "generated_by": "toktrail pricing parse",
+            "provider": normalize_identity(provider),
+            "source": source_label,
+            "tier": tier,
+        }
+        if include_metadata
+        else None
+    )
+
+    if write_mode in {"merge", "replace-provider"}:
+        existing_text = (
+            target.read_text(encoding="utf-8")
+            if target is not None and target.exists()
+            else None
+        )
+        output_text = merge_prices_document(
+            existing_text=existing_text,
+            parsed=parsed,
+            replace_provider=(write_mode == "replace-provider"),
+            metadata=metadata,
+        )
+    else:
+        output_text = render_prices_toml(
+            virtual_prices=parsed.prices if parsed.table == "virtual" else (),
+            actual_prices=parsed.prices if parsed.table == "actual" else (),
+            metadata=metadata,
+        )
+
+    wrote = False
+    if target is not None and not dry_run:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(output_text, encoding="utf-8")
+        wrote = True
 
     if json_output:
-        typer.echo(
-            json.dumps(
-                {
-                    "provider": parsed.provider,
-                    "table": parsed.table,
-                    "price_count": len(parsed.prices),
-                    "warnings": list(parsed.warnings),
-                    "out": out_path,
-                    "dry_run": dry_run,
-                },
-                indent=2,
-            )
-        )
+        payload = {
+            "provider": parsed.provider,
+            "table": parsed.table,
+            "price_count": len(parsed.prices),
+            "warnings": list(parsed.warnings),
+            "output": str(target) if target is not None else "-",
+            "out": str(target) if target is not None else "-",
+            "wrote": wrote,
+            "dry_run": dry_run,
+            "mode": write_mode,
+        }
+        typer.echo(json.dumps(payload, indent=2))
         return
 
-    if target is None:
+    if target is None or dry_run:
         typer.echo(output_text)
-        for warning in parsed.warnings:
-            typer.echo(f"warning: {warning}", err=True)
-        return
-
-    if dry_run:
-        typer.echo(output_text)
-        for warning in parsed.warnings:
-            typer.echo(f"warning: {warning}", err=True)
-        return
-
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(output_text, encoding="utf-8")
-    typer.echo(f"Wrote prices TOML: {target}")
+    else:
+        typer.echo(f"Wrote prices TOML: {target}")
     for warning in parsed.warnings:
         typer.echo(f"warning: {warning}", err=True)
 
@@ -4636,7 +4736,13 @@ def _config_cli_path(ctx: typer.Context) -> Path | None:
 
 
 def _resolve_prices_path(ctx: typer.Context) -> Path:
-    return resolve_toktrail_prices_path(_prices_cli_path(ctx))
+    cli_value = _prices_cli_path(ctx)
+    if cli_value is not None:
+        return resolve_toktrail_prices_path(cli_value)
+    config_path = _config_cli_path(ctx)
+    if config_path is not None:
+        return config_path.with_name("prices.toml")
+    return resolve_toktrail_prices_path(None)
 
 
 def _prices_cli_path(ctx: typer.Context) -> Path | None:
@@ -4648,8 +4754,33 @@ def _prices_cli_path(ctx: typer.Context) -> Path | None:
     return prices_path
 
 
+def _resolve_prices_dir(ctx: typer.Context) -> Path:
+    cli_value = _prices_dir_cli_path(ctx)
+    if cli_value is not None:
+        return resolve_toktrail_prices_dir(cli_value)
+    config_path = _config_cli_path(ctx)
+    if config_path is not None:
+        return config_path.with_name("prices")
+    return resolve_toktrail_prices_dir(None)
+
+
+def _prices_dir_cli_path(ctx: typer.Context) -> Path | None:
+    root_obj = ctx.find_root().obj or {}
+    prices_dir_path = root_obj.get("prices_dir_path")
+    if prices_dir_path is not None and not isinstance(prices_dir_path, Path):
+        msg = "Unexpected CLI state for --prices-dir."
+        raise TypeError(msg)
+    return prices_dir_path
+
+
 def _resolve_subscriptions_path(ctx: typer.Context) -> Path:
-    return resolve_toktrail_subscriptions_path(_subscriptions_cli_path(ctx))
+    cli_value = _subscriptions_cli_path(ctx)
+    if cli_value is not None:
+        return resolve_toktrail_subscriptions_path(cli_value)
+    config_path = _config_cli_path(ctx)
+    if config_path is not None:
+        return config_path.with_name("subscriptions.toml")
+    return resolve_toktrail_subscriptions_path(None)
 
 
 def _subscriptions_cli_path(ctx: typer.Context) -> Path | None:
@@ -4666,6 +4797,7 @@ def _load_resolved_costing_config_or_exit(ctx: typer.Context) -> LoadedCostingCo
         return load_resolved_costing_config(
             config_cli_value=_config_cli_path(ctx),
             prices_cli_value=_prices_cli_path(ctx),
+            prices_dir_cli_value=_prices_dir_cli_path(ctx),
             subscriptions_cli_value=_subscriptions_cli_path(ctx),
         )
     except ValueError as exc:
@@ -4677,6 +4809,7 @@ def _load_resolved_toktrail_config_or_exit(ctx: typer.Context) -> LoadedToktrail
         return load_resolved_toktrail_config(
             config_cli_value=_config_cli_path(ctx),
             prices_cli_value=_prices_cli_path(ctx),
+            prices_dir_cli_value=_prices_dir_cli_path(ctx),
             subscriptions_cli_value=_subscriptions_cli_path(ctx),
         )
     except ValueError as exc:

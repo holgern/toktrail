@@ -45,13 +45,16 @@ def _load_costing_config(config_path: Path | None) -> CostingConfig:
     resolved = resolve_toktrail_config_path(config_path)
     try:
         prices_path = None
+        prices_dir = None
         subscriptions_path = None
         if config_path is not None:
             prices_path = resolved.with_name("prices.toml")
+            prices_dir = resolved.with_name("prices")
             subscriptions_path = resolved.with_name("subscriptions.toml")
         loaded = config_module.load_resolved_costing_config(
             config_cli_value=resolved,
             prices_cli_value=prices_path,
+            prices_dir_cli_value=prices_dir,
             subscriptions_cli_value=subscriptions_path,
         )
         return loaded.config

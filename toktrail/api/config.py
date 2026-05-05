@@ -5,9 +5,11 @@ from pathlib import Path
 from toktrail import config as config_module
 from toktrail.api.paths import (
     default_toktrail_config_path,
+    default_toktrail_prices_dir,
     default_toktrail_prices_path,
     default_toktrail_subscriptions_path,
     resolve_toktrail_config_path,
+    resolve_toktrail_prices_dir,
     resolve_toktrail_prices_path,
     resolve_toktrail_subscriptions_path,
 )
@@ -26,6 +28,11 @@ def config_summary(config_path: Path | None = None) -> dict[str, object]:
             if config_path is not None
             else None
         )
+        prices_dir = (
+            resolved.with_name("prices")
+            if config_path is not None
+            else None
+        )
         subscriptions_path = (
             resolved.with_name("subscriptions.toml")
             if config_path is not None
@@ -34,6 +41,7 @@ def config_summary(config_path: Path | None = None) -> dict[str, object]:
         loaded = config_module.load_resolved_costing_config(
             config_cli_value=resolved,
             prices_cli_value=prices_path,
+            prices_dir_cli_value=prices_dir,
             subscriptions_cli_value=subscriptions_path,
         )
         summary = config_module.summarize_costing_config(loaded.config)
@@ -45,9 +53,14 @@ def config_summary(config_path: Path | None = None) -> dict[str, object]:
         "exists": loaded.config_exists,
         "config_path": str(loaded.config_path),
         "prices_path": str(loaded.prices_path),
+        "manual_prices_path": str(loaded.prices_path),
+        "provider_prices_dir": str(loaded.prices_dir),
+        "price_paths": [str(path) for path in loaded.price_paths],
         "subscriptions_path": str(loaded.subscriptions_path),
         "config_exists": loaded.config_exists,
         "prices_exists": loaded.prices_exists,
+        "manual_prices_exists": loaded.manual_prices_exists,
+        "provider_prices_exists": loaded.provider_prices_exists,
         "subscriptions_exists": loaded.subscriptions_exists,
         "config_version": summary.config_version,
         "default_actual_mode": summary.default_actual_mode,
@@ -77,11 +90,12 @@ def init_config(
 ) -> Path:
     resolved = resolve_toktrail_config_path(config_path)
     prices_path = resolved.with_name("prices.toml")
+    prices_dir = resolved.with_name("prices")
     subscriptions_path = resolved.with_name("subscriptions.toml")
     if not force:
         existing = [
             path
-            for path in (resolved, prices_path, subscriptions_path)
+            for path in (resolved, prices_path, prices_dir, subscriptions_path)
             if path.exists()
         ]
         if existing:
@@ -101,6 +115,7 @@ def init_config(
     try:
         resolved.parent.mkdir(parents=True, exist_ok=True)
         resolved.write_text(content, encoding="utf-8")
+        prices_dir.mkdir(parents=True, exist_ok=True)
         prices_path.write_text(prices_content, encoding="utf-8")
         subscriptions_path.write_text(subscriptions_content, encoding="utf-8")
     except OSError as exc:
@@ -113,11 +128,13 @@ __all__ = [
     "config_exists",
     "config_summary",
     "default_toktrail_config_path",
+    "default_toktrail_prices_dir",
     "default_toktrail_prices_path",
     "default_toktrail_subscriptions_path",
     "init_config",
     "render_config_template",
     "resolve_toktrail_config_path",
+    "resolve_toktrail_prices_dir",
     "resolve_toktrail_prices_path",
     "resolve_toktrail_subscriptions_path",
 ]

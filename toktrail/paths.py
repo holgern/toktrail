@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import os
+import re
 from datetime import datetime
 from pathlib import Path
 
 TOKTRAIL_DB_ENV = "TOKTRAIL_DB"
 TOKTRAIL_CONFIG_ENV = "TOKTRAIL_CONFIG"
 TOKTRAIL_PRICES_ENV = "TOKTRAIL_PRICES"
+TOKTRAIL_PRICES_DIR_ENV = "TOKTRAIL_PRICES_DIR"
 TOKTRAIL_SUBSCRIPTIONS_ENV = "TOKTRAIL_SUBSCRIPTIONS"
 COPILOT_FILE_ENV = "TOKTRAIL_COPILOT_FILE"
 COPILOT_OTEL_FILE_EXPORTER_PATH_ENV = "COPILOT_OTEL_FILE_EXPORTER_PATH"
@@ -19,6 +21,9 @@ TOKTRAIL_DROID_SESSIONS_ENV = "TOKTRAIL_DROID_SESSIONS"
 TOKTRAIL_VIBE_LOGS_ENV = "TOKTRAIL_VIBE_LOGS"
 GOOSE_PATH_ROOT_ENV = "GOOSE_PATH_ROOT"
 TOKTRAIL_CLAUDE_PROJECTS_ENV = "TOKTRAIL_CLAUDE_PROJECTS"
+_SEPARATOR_RE = re.compile(r"[/_\s]+")
+_INVALID_IDENTITY_CHARS_RE = re.compile(r"[^a-z0-9.-]+")
+_DASH_RE = re.compile(r"-+")
 
 
 def default_toktrail_db_path() -> Path:
@@ -54,6 +59,15 @@ def default_toktrail_prices_path() -> Path:
     return default_toktrail_config_dir() / "prices.toml"
 
 
+def default_toktrail_prices_dir() -> Path:
+    return default_toktrail_config_dir() / "prices"
+
+
+def default_provider_prices_path(provider: str) -> Path:
+    filename = f"{_normalize_provider_filename(provider)}.toml"
+    return default_toktrail_prices_dir() / filename
+
+
 def default_toktrail_subscriptions_path() -> Path:
     return default_toktrail_config_dir() / "subscriptions.toml"
 
@@ -74,6 +88,23 @@ def resolve_toktrail_prices_path(cli_value: Path | None = None) -> Path:
     if env_value:
         return Path(env_value).expanduser()
     return default_toktrail_prices_path()
+
+
+def resolve_toktrail_prices_dir(cli_value: Path | None = None) -> Path:
+    if cli_value is not None:
+        return cli_value.expanduser()
+    env_value = os.environ.get(TOKTRAIL_PRICES_DIR_ENV)
+    if env_value:
+        return Path(env_value).expanduser()
+    return default_toktrail_prices_dir()
+
+
+def resolve_provider_prices_path(
+    provider: str,
+    cli_dir_value: Path | None = None,
+) -> Path:
+    prices_dir = resolve_toktrail_prices_dir(cli_dir_value)
+    return prices_dir / f"{_normalize_provider_filename(provider)}.toml"
 
 
 def resolve_toktrail_subscriptions_path(cli_value: Path | None = None) -> Path:
@@ -266,3 +297,14 @@ def resolve_vibe_logs_path(cli_value: Path | None = None) -> Path:
     if env_value:
         return Path(env_value).expanduser()
     return default_vibe_logs_path()
+
+
+def _normalize_provider_filename(provider: str) -> str:
+    normalized = provider.strip().lower()
+    normalized = _SEPARATOR_RE.sub("-", normalized)
+    normalized = _INVALID_IDENTITY_CHARS_RE.sub("", normalized)
+    normalized = _DASH_RE.sub("-", normalized).strip("-")
+    if not normalized:
+        msg = "Provider name is empty after normalization."
+        raise ValueError(msg)
+    return normalized

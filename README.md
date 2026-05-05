@@ -34,7 +34,8 @@ source database or source JSONL files.
 toktrail uses three TOML files:
 
 - `config.toml` for imports and costing policy
-- `prices.toml` for `[[pricing.virtual]]` and `[[pricing.actual]]`
+- `prices.toml` for manual `[[pricing.virtual]]` and `[[pricing.actual]]` overrides
+- `prices/` for generated provider files like `prices/openai.toml`
 - `subscriptions.toml` for `[[subscriptions]]` plans/windows
 
 Initialize them together:
@@ -215,13 +216,18 @@ claude = "~/.claude/projects"
 
 `[[subscriptions]]` rows live in `subscriptions.toml`.
 
-Pricing rows live in `prices.toml`. You can generate/merge them from provider
-docs text:
+Manual pricing rows live in `prices.toml`. Generated provider pricing files
+live in `prices/<provider>.toml`. toktrail loads provider files first and
+`prices.toml` last, so manual rows override generated rows.
+
+You can generate provider files directly from provider docs text:
 
 ```bash
-toktrail pricing parse --provider openai --tier standard --input openai-pricing.jsx --out -
-toktrail pricing parse --provider zai --input zai-pricing.md --out ~/.config/toktrail/prices.toml --merge
-toktrail pricing parse --provider opencode-go --table actual --input opencode-go.txt --out ~/.config/toktrail/prices.toml --merge
+toktrail pricing parse --provider openai --tier standard --input openai-pricing.jsx
+toktrail pricing parse --provider zai --input zai-pricing.md
+toktrail pricing parse --provider opencode-go --table actual --input opencode-go.txt
+toktrail pricing parse --provider openai --input openai-pricing.jsx --output -
+toktrail pricing parse --provider openai --input openai-pricing.jsx --output ~/.config/toktrail/prices/openai.toml
 ```
 
 `imports.sources.<harness>` accepts either a single path string or a list of
@@ -427,8 +433,9 @@ toktrail source-sessions --harness copilot
 ```
 
 Virtual and pricing-based actual costs are computed at report time, not during
-refresh. Updating `prices.toml` or `config.toml` immediately changes future `status` and
-`sessions` output for already imported data without re-importing source files.
+refresh. Updating `prices.toml`, files under `prices/`, or `config.toml`
+immediately changes future `status` and `sessions` output for already imported
+data without re-importing source files.
 
 Pricing is provider-aware. If an event already has a real provider, toktrail
 does not fall back to an inferred provider from the model name. That keeps

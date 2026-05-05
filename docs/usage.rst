@@ -90,7 +90,7 @@ Core commands
    toktrail refresh --harness amp --source ~/.local/share/amp/threads
    toktrail pricing list
    toktrail pricing list --missing-only
-   toktrail pricing parse --provider zai --input zai-pricing.md --out ~/.config/toktrail/prices.toml --merge
+   toktrail pricing parse --provider zai --input zai-pricing.md
 
 For harness-session inspection, use ``toktrail sessions <harness>`` to inspect
 raw harness sessions without mutating toktrail state.
@@ -118,11 +118,15 @@ progress for the configured billing period.
 Pricing parser
 --------------
 
-Use ``toktrail pricing parse`` to convert provider pricing text into
-``prices.toml`` rows:
+Use ``toktrail pricing parse`` to convert provider pricing text into provider
+price files under ``prices/<provider>.toml`` by default:
 
 .. code-block:: bash
 
-   toktrail pricing parse --provider openai --tier standard --input openai-pricing.jsx --out -
-   toktrail pricing parse --provider zai --input zai-pricing.md --out ~/.config/toktrail/prices.toml --merge
-   toktrail pricing parse --provider opencode-go --table actual --input opencode-go.txt --out ~/.config/toktrail/prices.toml --merge
+   toktrail pricing parse --provider openai --tier standard --input openai-pricing.jsx
+   toktrail pricing parse --provider zai --input zai-pricing.md
+   toktrail pricing parse --provider opencode-go --table actual --input opencode-go.txt
+   toktrail pricing parse --provider openai --input openai-pricing.jsx --output -
+
+Manual overrides still belong in ``prices.toml``. toktrail loads provider files
+first and ``prices.toml`` last, so manual rows override generated rows.

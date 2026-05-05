@@ -13,6 +13,7 @@ else:  # pragma: no cover - Python < 3.11
 
 from toktrail.paths import (
     resolve_toktrail_config_path,
+    resolve_toktrail_prices_dir,
     resolve_toktrail_prices_path,
     resolve_toktrail_subscriptions_path,
 )
@@ -781,9 +782,20 @@ class LoadedRuntimeConfig:
 
 @dataclass(frozen=True)
 class LoadedPricingConfig:
-    path: Path
-    exists: bool
+    manual_path: Path
+    provider_dir: Path
+    paths: tuple[Path, ...]
+    manual_exists: bool
+    provider_dir_exists: bool
     config: PricingConfig
+
+    @property
+    def path(self) -> Path:
+        return self.manual_path
+
+    @property
+    def exists(self) -> bool:
+        return self.manual_exists or bool(self.paths)
 
 
 @dataclass(frozen=True)
@@ -797,9 +809,13 @@ class LoadedSubscriptionsConfig:
 class LoadedToktrailConfig:
     config_path: Path
     prices_path: Path
+    prices_dir: Path
+    price_paths: tuple[Path, ...]
     subscriptions_path: Path
     config_exists: bool
     prices_exists: bool
+    manual_prices_exists: bool
+    provider_prices_exists: bool
     subscriptions_exists: bool
     config: ToktrailConfig
 
@@ -808,9 +824,13 @@ class LoadedToktrailConfig:
 class LoadedCostingConfig:
     config_path: Path
     prices_path: Path
+    prices_dir: Path
+    price_paths: tuple[Path, ...]
     subscriptions_path: Path
     config_exists: bool
     prices_exists: bool
+    manual_prices_exists: bool
+    provider_prices_exists: bool
     subscriptions_exists: bool
     config: CostingConfig
 
@@ -987,19 +1007,25 @@ def load_toktrail_config(path: Path) -> ToktrailConfig:
 def load_resolved_costing_config(
     config_cli_value: Path | None = None,
     prices_cli_value: Path | None = None,
+    prices_dir_cli_value: Path | None = None,
     subscriptions_cli_value: Path | None = None,
 ) -> LoadedCostingConfig:
     loaded = load_resolved_toktrail_config(
         config_cli_value=config_cli_value,
         prices_cli_value=prices_cli_value,
+        prices_dir_cli_value=prices_dir_cli_value,
         subscriptions_cli_value=subscriptions_cli_value,
     )
     return LoadedCostingConfig(
         config_path=loaded.config_path,
         prices_path=loaded.prices_path,
+        prices_dir=loaded.prices_dir,
+        price_paths=loaded.price_paths,
         subscriptions_path=loaded.subscriptions_path,
         config_exists=loaded.config_exists,
         prices_exists=loaded.prices_exists,
+        manual_prices_exists=loaded.manual_prices_exists,
+        provider_prices_exists=loaded.provider_prices_exists,
         subscriptions_exists=loaded.subscriptions_exists,
         config=loaded.config.costing,
     )
@@ -1008,27 +1034,54 @@ def load_resolved_costing_config(
 def load_resolved_toktrail_config(
     config_cli_value: Path | None = None,
     prices_cli_value: Path | None = None,
+    prices_dir_cli_value: Path | None = None,
     subscriptions_cli_value: Path | None = None,
 ) -> LoadedToktrailConfig:
     config_path = resolve_toktrail_config_path(config_cli_value)
-    prices_path = resolve_toktrail_prices_path(prices_cli_value)
-    subscriptions_path = resolve_toktrail_subscriptions_path(subscriptions_cli_value)
+    prices_path = (
+        config_path.with_name("prices.toml")
+        if config_cli_value is not None and prices_cli_value is None
+        else resolve_toktrail_prices_path(prices_cli_value)
+    )
+    prices_dir = (
+        config_path.with_name("prices")
+        if config_cli_value is not None and prices_dir_cli_value is None
+        else resolve_toktrail_prices_dir(prices_dir_cli_value)
+    )
+    subscriptions_path = (
+        config_path.with_name("subscriptions.toml")
+        if config_cli_value is not None and subscriptions_cli_value is None
+        else resolve_toktrail_subscriptions_path(subscriptions_cli_value)
+    )
     legacy_data = _load_optional_toml(config_path, context="toktrail config")
     use_legacy_monolithic = (
         config_path.name != "config.toml"
         and prices_cli_value is None
+        and prices_dir_cli_value is None
         and subscriptions_cli_value is None
         and legacy_data is not None
         and ("pricing" in legacy_data or "subscriptions" in legacy_data)
     )
     if use_legacy_monolithic:
+        assert legacy_data is not None
         runtime_defaults = default_runtime_config()
+        provider_paths = (
+            tuple(sorted(prices_dir.glob("*.toml"))) if prices_dir.is_dir() else ()
+        )
+        manual_prices_exists = prices_path.exists()
+        price_paths: tuple[Path, ...] = provider_paths + (
+            (prices_path,) if manual_prices_exists else ()
+        )
         return LoadedToktrailConfig(
             config_path=config_path,
             prices_path=prices_path,
+            prices_dir=prices_dir,
+            price_paths=price_paths,
             subscriptions_path=subscriptions_path,
             config_exists=config_path.exists(),
-            prices_exists=prices_path.exists(),
+            prices_exists=manual_prices_exists or bool(price_paths),
+            manual_prices_exists=manual_prices_exists,
+            provider_prices_exists=prices_dir.exists(),
             subscriptions_exists=subscriptions_path.exists(),
             config=ToktrailConfig(
                 costing=_parse_legacy_costing_config(legacy_data),
@@ -1038,16 +1091,24 @@ def load_resolved_toktrail_config(
                 ),
             ),
         )
+    loaded_pricing = load_pricing_configs(
+        manual_path=prices_path,
+        provider_dir=prices_dir,
+    )
     return LoadedToktrailConfig(
         config_path=config_path,
         prices_path=prices_path,
+        prices_dir=prices_dir,
+        price_paths=loaded_pricing.paths,
         subscriptions_path=subscriptions_path,
         config_exists=config_path.exists(),
-        prices_exists=prices_path.exists(),
+        prices_exists=loaded_pricing.exists,
+        manual_prices_exists=loaded_pricing.manual_exists,
+        provider_prices_exists=loaded_pricing.provider_dir_exists,
         subscriptions_exists=subscriptions_path.exists(),
         config=merge_configs(
             load_runtime_config(config_path),
-            load_pricing_config(prices_path),
+            loaded_pricing.config,
             load_subscriptions_config(subscriptions_path),
         ),
     )
@@ -1087,11 +1148,121 @@ def load_pricing_config(path: Path) -> PricingConfig:
     return parse_pricing_config(data)
 
 
+def load_pricing_configs(
+    *,
+    manual_path: Path,
+    provider_dir: Path,
+) -> LoadedPricingConfig:
+    provider_paths = (
+        tuple(sorted(provider_dir.glob("*.toml"))) if provider_dir.is_dir() else ()
+    )
+    sources: list[tuple[Path, PricingConfig, Literal["provider", "manual"]]] = []
+    for provider_path in provider_paths:
+        sources.append((provider_path, load_pricing_config(provider_path), "provider"))
+    manual_exists = manual_path.exists()
+    if manual_exists:
+        sources.append((manual_path, load_pricing_config(manual_path), "manual"))
+    return LoadedPricingConfig(
+        manual_path=manual_path,
+        provider_dir=provider_dir,
+        paths=tuple(path for path, _config, _kind in sources),
+        manual_exists=manual_exists,
+        provider_dir_exists=provider_dir.exists(),
+        config=merge_pricing_configs(sources),
+    )
+
+
 def load_subscriptions_config(path: Path) -> SubscriptionsConfig:
     data = _load_optional_toml(path, context="subscriptions.toml")
     if data is None:
         return default_subscriptions_config()
     return parse_subscriptions_config(data)
+
+
+def merge_pricing_configs(
+    sources: list[tuple[Path, PricingConfig, Literal["provider", "manual"]]],
+) -> PricingConfig:
+    virtual_prices = _merge_price_table(sources, table="virtual")
+    actual_prices = _merge_price_table(sources, table="actual")
+    _validate_aliases_across_prices(virtual_prices, context="pricing.virtual")
+    _validate_aliases_across_prices(actual_prices, context="pricing.actual")
+    return PricingConfig(
+        config_version=CONFIG_VERSION,
+        virtual_prices=virtual_prices,
+        actual_prices=actual_prices,
+    )
+
+
+def _merge_price_table(
+    sources: list[tuple[Path, PricingConfig, Literal["provider", "manual"]]],
+    *,
+    table: Literal["virtual", "actual"],
+) -> tuple[Price, ...]:
+    merged: dict[
+        tuple[str, str],
+        tuple[Price, Path, Literal["provider", "manual"]],
+    ] = {}
+    for path, config, kind in sources:
+        table_prices = (
+            config.virtual_prices if table == "virtual" else config.actual_prices
+        )
+        for price in table_prices:
+            key = (
+                normalize_identity(price.provider),
+                normalize_identity(price.model),
+            )
+            existing = merged.get(key)
+            if existing is None:
+                merged[key] = (price, path, kind)
+                continue
+            existing_price, existing_path, existing_kind = existing
+            if kind == "manual":
+                merged[key] = (price, path, kind)
+                continue
+            if existing_kind == "manual":
+                continue
+            if existing_price == price:
+                continue
+            msg = (
+                f"pricing.{table} duplicate generated price for {key[0]}/{key[1]} in "
+                f"{existing_path} and {path}; keep only one provider file or move the "
+                "override to prices.toml"
+            )
+            raise ValueError(msg)
+    merged_prices = [entry[0] for entry in merged.values()]
+    merged_prices.sort(
+        key=lambda price: (
+            normalize_identity(price.provider),
+            normalize_identity(price.model),
+        )
+    )
+    return tuple(merged_prices)
+
+
+def _validate_aliases_across_prices(
+    prices: tuple[Price, ...],
+    *,
+    context: str,
+) -> None:
+    lookup_keys: dict[tuple[str, str], tuple[str, str]] = {}
+    for price in prices:
+        canonical_key = (
+            normalize_identity(price.provider),
+            normalize_identity(price.model),
+        )
+        for lookup in (price.model, *price.aliases):
+            lookup_key = (
+                normalize_identity(price.provider),
+                normalize_identity(lookup),
+            )
+            previous = lookup_keys.get(lookup_key)
+            if previous is not None and previous != canonical_key:
+                msg = (
+                    f"{context} reuses alias {lookup!r} for "
+                    f"{price.provider}/{price.model}."
+                )
+                raise ValueError(msg)
+            lookup_keys[lookup_key] = canonical_key
 
 
 def parse_runtime_config(data: object) -> RuntimeConfig:
@@ -1261,14 +1432,14 @@ def _load_optional_toml(path: Path, *, context: str) -> dict[str, object] | None
         raise ValueError(msg)
     try:
         with path.open("rb") as handle:
-            data = tomllib.load(handle)
+            raw_data: object = tomllib.load(handle)
     except tomllib.TOMLDecodeError as exc:
         msg = f"Invalid TOML in {context} {path}: {exc}"
         raise ValueError(msg) from exc
-    if not isinstance(data, dict):
+    if not isinstance(raw_data, dict):
         msg = f"{context} must contain a TOML table at the root."
         raise ValueError(msg)
-    return cast(dict[str, object], data)
+    return cast(dict[str, object], raw_data)
 
 
 def _parse_legacy_costing_config(data: dict[str, object]) -> CostingConfig:

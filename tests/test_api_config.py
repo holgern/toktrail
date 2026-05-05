@@ -13,6 +13,8 @@ from toktrail.errors import ConfigurationError, InvalidAPIUsageError
 
 def test_api_config_init_and_summary(tmp_path) -> None:
     config_path = tmp_path / "config" / "toktrail.toml"
+    prices_path = config_path.with_name("prices.toml")
+    prices_dir = config_path.with_name("prices")
 
     assert config_exists(config_path) is False
     created = init_config(config_path, template="copilot")
@@ -20,8 +22,15 @@ def test_api_config_init_and_summary(tmp_path) -> None:
 
     assert created == config_path
     assert config_exists(config_path) is True
+    assert prices_path.exists()
+    assert prices_dir.exists()
     assert summary["path"] == str(config_path)
     assert summary["exists"] is True
+    assert summary["manual_prices_path"] == str(prices_path)
+    assert summary["provider_prices_dir"] == str(prices_dir)
+    assert summary["manual_prices_exists"] is True
+    assert summary["provider_prices_exists"] is True
+    assert summary["price_paths"] == [str(prices_path)]
     assert summary["virtual_price_count"] > 0
 
 

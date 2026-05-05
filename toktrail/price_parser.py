@@ -3,7 +3,7 @@ from __future__ import annotations
 import ast
 import re
 import sys
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Literal
@@ -38,6 +38,9 @@ class ParsedPriceDocument:
     table: Literal["virtual", "actual"]
     prices: tuple[Price, ...]
     warnings: tuple[str, ...]
+
+
+ParserFn = Callable[..., ParsedPriceDocument]
 
 
 def parse_price_value(
@@ -79,17 +82,14 @@ def parse_price_document(
     tier: str | None = None,
 ) -> ParsedPriceDocument:
     normalized_provider = normalize_identity(provider)
-    if normalized_provider == "openai":
-        return parse_openai_pricing(
-            text,
-            tier=tier or "standard",
-            table=table,
+    parser = _PRICE_PARSERS.get(normalized_provider)
+    if parser is None:
+        supported = ", ".join(sorted({"openai", "opencode-go", "zai"}))
+        raise ValueError(
+            "Unsupported pricing parser provider: "
+            f"{provider}. Supported providers: {supported}."
         )
-    if normalized_provider == "zai":
-        return parse_zai_pricing(text, table=table)
-    if normalized_provider in {"opencode-go", "opencodego"}:
-        return parse_opencode_go_pricing(text, table=table)
-    raise ValueError(f"Unsupported pricing parser provider: {provider}")
+    return parser(text=text, table=table, tier=tier or "standard")
 
 
 def parse_openai_pricing(
@@ -136,6 +136,17 @@ def parse_openai_pricing(
                 continue
             seen_keys[key] = parsed
             prices.append(parsed)
+
+    if not prices:
+        markdown_prices, markdown_warnings = _parse_openai_markdown_prices(
+            text,
+            tier=tier,
+        )
+        prices.extend(markdown_prices)
+        warnings.extend(markdown_warnings)
+
+    if not prices:
+        warnings.append("No OpenAI pricing rows were parsed from the provided input.")
 
     return ParsedPriceDocument(
         provider="openai",
@@ -385,6 +396,7 @@ def merge_prices_document(
     existing_text: str | None,
     parsed: ParsedPriceDocument,
     replace_provider: bool,
+    metadata: Mapping[str, str] | None = None,
 ) -> str:
     if existing_text is None:
         existing = parse_pricing_config({})
@@ -422,7 +434,100 @@ def merge_prices_document(
     return render_prices_toml(
         virtual_prices=tuple(virtual),
         actual_prices=tuple(actual),
+        metadata=metadata,
     )
+
+
+def _parse_openai_markdown_prices(
+    text: str,
+    *,
+    tier: str,
+) -> tuple[list[Price], list[str]]:
+    warnings: list[str] = []
+    prices: list[Price] = []
+    seen_keys: dict[tuple[str, str], Price] = {}
+    cached_header_seen = False
+    model_headers_seen = False
+    input_headers_seen = False
+    output_headers_seen = False
+
+    for table_rows in _extract_markdown_tables(text):
+        if not table_rows:
+            continue
+        lookup = _openai_markdown_header_lookup(table_rows[0])
+        model_idx = lookup.get("model")
+        input_idx = lookup.get("input")
+        output_idx = lookup.get("output")
+        cached_idx = lookup.get("cached_input")
+        reasoning_idx = lookup.get("reasoning")
+        model_headers_seen = model_headers_seen or model_idx is not None
+        input_headers_seen = input_headers_seen or input_idx is not None
+        output_headers_seen = output_headers_seen or output_idx is not None
+        cached_header_seen = cached_header_seen or cached_idx is not None
+        if model_idx is None or input_idx is None or output_idx is None:
+            continue
+        for raw_row in table_rows[1:]:
+            if max(model_idx, input_idx, output_idx) >= len(raw_row):
+                continue
+            model_text = raw_row[model_idx].strip()
+            if not model_text:
+                continue
+            input_price = parse_price_value(raw_row[input_idx])
+            output_price = parse_price_value(raw_row[output_idx])
+            if input_price is None or output_price is None:
+                warnings.append(
+                    "Skipped OpenAI markdown row without required prices: "
+                    f"{model_text}"
+                )
+                continue
+            cached_input = (
+                parse_price_value(raw_row[cached_idx])
+                if cached_idx is not None and cached_idx < len(raw_row)
+                else None
+            )
+            reasoning = (
+                parse_price_value(raw_row[reasoning_idx])
+                if reasoning_idx is not None and reasoning_idx < len(raw_row)
+                else None
+            )
+            canonical = normalize_identity(
+                _strip_parenthetical(model_text) or model_text
+            )
+            parsed = Price(
+                provider="openai",
+                model=canonical,
+                aliases=_build_aliases(model_text),
+                input_usd_per_1m=input_price,
+                cached_input_usd_per_1m=cached_input,
+                output_usd_per_1m=output_price,
+                reasoning_usd_per_1m=reasoning,
+                release_status=tier,
+            )
+            key = (parsed.provider, parsed.model)
+            existing = seen_keys.get(key)
+            if existing is not None and existing != parsed:
+                warnings.append(
+                    "OpenAI markdown row "
+                    f"{model_text!r} normalizes to {parsed.provider}/{parsed.model} "
+                    "with different prices; skipped duplicate row."
+                )
+                continue
+            seen_keys[key] = parsed
+            prices.append(parsed)
+
+    if not model_headers_seen or not input_headers_seen or not output_headers_seen:
+        warnings.append("OpenAI markdown table is missing required columns.")
+    if (
+        model_headers_seen
+        and input_headers_seen
+        and output_headers_seen
+        and not cached_header_seen
+    ):
+        warnings.append(
+            "OpenAI markdown table is missing cached input/read column; "
+            "cached prices were omitted."
+        )
+    return prices, warnings
 
 
 def _extract_openai_tier_rows(text: str) -> list[tuple[str, list[object]]]:
@@ -448,6 +553,43 @@ def _extract_openai_tier_rows(text: str) -> list[tuple[str, list[object]]]:
             rows_by_tier.append((tier_match.group(1), parsed_rows))
         cursor = start + len(marker)
     return rows_by_tier
+
+
+def _extract_markdown_tables(text: str) -> list[list[list[str]]]:
+    tables: list[list[list[str]]] = []
+    lines = text.splitlines()
+    index = 0
+    while index < len(lines):
+        line = lines[index].strip()
+        if not line.startswith("|"):
+            index += 1
+            continue
+        table_lines = [line]
+        index += 1
+        while index < len(lines) and lines[index].strip().startswith("|"):
+            table_lines.append(lines[index].strip())
+            index += 1
+        parsed = _parse_markdown_table(table_lines)
+        if parsed:
+            tables.append(parsed)
+    return tables
+
+
+def _openai_markdown_header_lookup(header: Sequence[str]) -> dict[str, int]:
+    lookup: dict[str, int] = {}
+    for index, column in enumerate(header):
+        normalized = normalize_identity(column)
+        if normalized in {"model", "models"}:
+            lookup.setdefault("model", index)
+        elif normalized in {"input", "input-price"}:
+            lookup.setdefault("input", index)
+        elif normalized in {"cached-input", "cached-read", "cache-read"}:
+            lookup.setdefault("cached_input", index)
+        elif normalized in {"output", "output-price"}:
+            lookup.setdefault("output", index)
+        elif normalized in {"reasoning", "reasoning-output"}:
+            lookup.setdefault("reasoning", index)
+    return lookup
 
 
 def _scan_balanced_brackets(text: str, start_index: int) -> str:
@@ -541,6 +683,43 @@ def _toml_float(value: float) -> str:
 def _render_string_array(values: Sequence[str]) -> str:
     quoted = ", ".join(_toml_quote(value) for value in values)
     return f"[{quoted}]"
+
+
+def _parse_openai_document(
+    *,
+    text: str,
+    table: Literal["virtual", "actual"],
+    tier: str,
+) -> ParsedPriceDocument:
+    return parse_openai_pricing(text, tier=tier, table=table)
+
+
+def _parse_zai_document(
+    *,
+    text: str,
+    table: Literal["virtual", "actual"],
+    tier: str,
+) -> ParsedPriceDocument:
+    del tier
+    return parse_zai_pricing(text, table=table)
+
+
+def _parse_opencode_go_document(
+    *,
+    text: str,
+    table: Literal["virtual", "actual"],
+    tier: str,
+) -> ParsedPriceDocument:
+    del tier
+    return parse_opencode_go_pricing(text, table=table)
+
+
+_PRICE_PARSERS: dict[str, ParserFn] = {
+    "openai": _parse_openai_document,
+    "zai": _parse_zai_document,
+    "opencode-go": _parse_opencode_go_document,
+    "opencodego": _parse_opencode_go_document,
+}
 
 
 __all__ = [

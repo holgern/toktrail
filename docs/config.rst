@@ -4,7 +4,8 @@ Configuration
 toktrail uses three user config files:
 
 - ``config.toml`` for imports + costing policy
-- ``prices.toml`` for ``[[pricing.virtual]]`` and ``[[pricing.actual]]`` rows
+- ``prices.toml`` for manual ``[[pricing.virtual]]`` and ``[[pricing.actual]]`` rows
+- ``prices/`` for generated provider files such as ``prices/openai.toml``
 - ``subscriptions.toml`` for ``[[subscriptions]]`` plans and windows
 
 Use ``toktrail config init`` to create all three files.
@@ -40,7 +41,7 @@ Example
    default_virtual_mode = "pricing"
    missing_price = "warn"
 
-``prices.toml``:
+``prices.toml`` (manual overrides):
 
 .. code-block:: toml
 
@@ -95,6 +96,10 @@ quota per configured subscription.
 When ``fixed_cost_usd`` is set, ``toktrail subscriptions`` also reports billing
 value, net savings, and break-even progress for the fixed billing period
 (``daily``, ``weekly``, ``monthly``, or ``yearly``).
+
+Effective pricing is loaded from ``prices/*.toml`` first and then ``prices.toml``
+last. This lets manual rows override generated provider rows when they share the
+same provider/model key.
 
 See ``README.md`` for the canonical CLI workflow and ``API.md`` for the public
 Python integration surface.

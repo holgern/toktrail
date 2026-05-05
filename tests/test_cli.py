@@ -1832,8 +1832,9 @@ opencode = "{source_db}"
 def test_cli_config_path_init_and_validate(tmp_path) -> None:
     runner = CliRunner()
     config_path = tmp_path / "config" / "toktrail.toml"
-    prices_path = tmp_path / ".config" / "toktrail" / "prices.toml"
-    subscriptions_path = tmp_path / ".config" / "toktrail" / "subscriptions.toml"
+    prices_path = config_path.with_name("prices.toml")
+    prices_dir = config_path.with_name("prices")
+    subscriptions_path = config_path.with_name("subscriptions.toml")
 
     path_result = runner.invoke(
         app,
@@ -1842,6 +1843,7 @@ def test_cli_config_path_init_and_validate(tmp_path) -> None:
     assert path_result.exit_code == 0, path_result.output
     assert f"config:        {config_path}" in path_result.output
     assert f"prices:        {prices_path}" in path_result.output
+    assert f"prices dir:    {prices_dir}" in path_result.output
     assert f"subscriptions: {subscriptions_path}" in path_result.output
 
     init_result = runner.invoke(
@@ -1851,6 +1853,7 @@ def test_cli_config_path_init_and_validate(tmp_path) -> None:
     assert init_result.exit_code == 0, init_result.output
     assert config_path.exists()
     assert prices_path.exists()
+    assert prices_dir.exists()
     assert subscriptions_path.exists()
 
     validate_result = runner.invoke(
@@ -2080,6 +2083,155 @@ def test_cli_pricing_parse_openai_standard_to_stdout(tmp_path) -> None:
     assert 'provider = "openai"' in result.output
 
 
+def test_cli_pricing_parse_defaults_to_provider_file(tmp_path) -> None:
+    runner = CliRunner()
+    config_path = tmp_path / "config" / "toktrail.toml"
+    input_path = tmp_path / "openai-pricing.jsx"
+    input_path.write_text(
+        'TextTokenPricingTables tier="standard" rows={[ ["gpt-5.5", 5, 0.5, 30] ]}',
+        encoding="utf-8",
+    )
+
+    runner.invoke(app, ["--config", str(config_path), "config", "init"])
+    target_path = config_path.with_name("prices") / "openai.toml"
+    result = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config_path),
+            "pricing",
+            "parse",
+            "--provider",
+            "openai",
+            "--input",
+            str(input_path),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert target_path.exists()
+    assert f"Wrote prices TOML: {target_path}" in result.output
+
+
+def test_cli_pricing_parse_accepts_output_alias(tmp_path) -> None:
+    runner = CliRunner()
+    input_path = tmp_path / "openai-pricing.jsx"
+    output_path = tmp_path / "custom-openai.toml"
+    input_path.write_text(
+        'TextTokenPricingTables tier="standard" rows={[ ["gpt-5.5", 5, 0.5, 30] ]}',
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "pricing",
+            "parse",
+            "--provider",
+            "openai",
+            "--input",
+            str(input_path),
+            "--output",
+            str(output_path),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert output_path.exists()
+
+
+def test_cli_pricing_parse_output_dash_prints_stdout(tmp_path) -> None:
+    runner = CliRunner()
+    config_path = tmp_path / "config" / "toktrail.toml"
+    input_path = tmp_path / "openai-pricing.jsx"
+    input_path.write_text(
+        'TextTokenPricingTables tier="standard" rows={[ ["gpt-5.5", 5, 0.5, 30] ]}',
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config_path),
+            "pricing",
+            "parse",
+            "--provider",
+            "openai",
+            "--input",
+            str(input_path),
+            "--output",
+            "-",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "[[pricing.virtual]]" in result.output
+    assert not (config_path.with_name("prices") / "openai.toml").exists()
+
+
+def test_cli_pricing_parse_json_writes_file(tmp_path) -> None:
+    runner = CliRunner()
+    config_path = tmp_path / "config" / "toktrail.toml"
+    input_path = tmp_path / "openai-pricing.jsx"
+    input_path.write_text(
+        'TextTokenPricingTables tier="standard" rows={[ ["gpt-5.5", 5, 0.5, 30] ]}',
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config_path),
+            "pricing",
+            "parse",
+            "--provider",
+            "openai",
+            "--input",
+            str(input_path),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["wrote"] is True
+    assert (config_path.with_name("prices") / "openai.toml").exists()
+
+
+def test_cli_pricing_parse_json_dry_run_does_not_write(tmp_path) -> None:
+    runner = CliRunner()
+    config_path = tmp_path / "config" / "toktrail.toml"
+    input_path = tmp_path / "openai-pricing.jsx"
+    input_path.write_text(
+        'TextTokenPricingTables tier="standard" rows={[ ["gpt-5.5", 5, 0.5, 30] ]}',
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config_path),
+            "pricing",
+            "parse",
+            "--provider",
+            "openai",
+            "--input",
+            str(input_path),
+            "--json",
+            "--dry-run",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["wrote"] is False
+    assert payload["dry_run"] is True
+    assert not (config_path.with_name("prices") / "openai.toml").exists()
+
+
 def test_cli_pricing_parse_zai_to_stdout(tmp_path) -> None:
     runner = CliRunner()
     input_path = tmp_path / "zai-pricing.md"
@@ -2221,6 +2373,84 @@ TextTokenPricingTables tier="standard" rows={[
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
     assert payload["warnings"]
+
+
+def test_cli_config_prices_loads_provider_directory(tmp_path) -> None:
+    runner = CliRunner()
+    config_path = tmp_path / "config" / "toktrail.toml"
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(
+        f"""
+config_version = 1
+
+[imports]
+harnesses = ["opencode"]
+missing_source = "warn"
+include_raw_json = false
+
+[imports.sources]
+opencode = "{tmp_path / "missing-opencode.db"}"
+""".strip(),
+        encoding="utf-8",
+    )
+    provider_path = config_path.with_name("prices") / "openai.toml"
+    provider_path.parent.mkdir(parents=True, exist_ok=True)
+    provider_path.write_text(
+        """
+config_version = 1
+
+[[pricing.virtual]]
+provider = "openai"
+model = "gpt-5.5"
+input_usd_per_1m = 5
+output_usd_per_1m = 30
+""".strip(),
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config_path),
+            "config",
+            "prices",
+            "--provider",
+            "openai",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload
+    assert payload[0]["provider"] == "openai"
+
+
+def test_cli_config_show_lists_price_paths(tmp_path) -> None:
+    runner = CliRunner()
+    config_path = tmp_path / "config" / "toktrail.toml"
+    runner.invoke(app, ["--config", str(config_path), "config", "init"])
+    provider_path = config_path.with_name("prices") / "openai.toml"
+    provider_path.write_text(
+        """
+config_version = 1
+
+[[pricing.virtual]]
+provider = "openai"
+model = "gpt-5.5"
+input_usd_per_1m = 5
+output_usd_per_1m = 30
+""".strip(),
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["--config", str(config_path), "config", "show"])
+
+    assert result.exit_code == 0, result.output
+    assert f"prices dir:      {config_path.with_name('prices')}" in result.output
+    assert "price files:" in result.output
+    assert str(provider_path) in result.output
 
 
 def test_cli_status_with_template_config_computes_copilot_virtual_cost(
