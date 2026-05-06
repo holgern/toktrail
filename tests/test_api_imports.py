@@ -380,7 +380,7 @@ include_raw_json = false
 
 [imports.sources]
 opencode = "{_toml_path_value(source_db)}"
-pi = "{_toml_path_value(tmp_path / 'missing-pi')}"
+pi = "{_toml_path_value(tmp_path / "missing-pi")}"
 codex = "{_toml_path_value(codex_file)}"
 goose = "{_toml_path_value(goose_db)}"
 droid = "{_toml_path_value(droid_source)}"

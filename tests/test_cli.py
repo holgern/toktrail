@@ -51,7 +51,7 @@ missing_source = "warn"
 include_raw_json = false
 
 [imports.sources]
-opencode = "{_toml_path_value(tmp_path / 'missing-opencode.db')}"
+opencode = "{_toml_path_value(tmp_path / "missing-opencode.db")}"
 """.strip(),
         encoding="utf-8",
     )
@@ -2619,7 +2619,7 @@ missing_source = "warn"
 include_raw_json = false
 
 [imports.sources]
-opencode = "{_toml_path_value(tmp_path / 'missing-opencode.db')}"
+opencode = "{_toml_path_value(tmp_path / "missing-opencode.db")}"
 """.strip(),
         encoding="utf-8",
     )

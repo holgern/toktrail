@@ -3334,7 +3334,7 @@ def _copilot_env_vars(path: Path) -> tuple[CopilotEnvVar, ...]:
 
 
 def _quote_fish(value: str) -> str:
-    return "'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'"
+    return "'" + value.replace("'", "\\'") + "'"
 
 
 def _quote_powershell(value: str) -> str:
