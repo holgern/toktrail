@@ -12,6 +12,7 @@ from toktrail.api.config import (
 )
 from toktrail.api.analysis import session_cache_analysis
 from toktrail.api.environment import prepare_environment
+from toktrail.api.events import record_usage_event, record_usage_events
 from toktrail.api.harnesses import (
     get_harness_definition,
     is_supported_harness,
@@ -168,6 +169,8 @@ __all__ = [
     "normalize_harness_name",
     "prepare_environment",
     "prepare_manual_run",
+    "record_usage_event",
+    "record_usage_events",
     "render_config_template",
     "require_active_run",
     "resolve_provider_prices_path",

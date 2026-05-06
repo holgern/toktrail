@@ -1,5 +1,13 @@
-Public Python API
-=================
+API reference
+=============
+
+This page is the reference for the stable Python API. For task-oriented usage,
+see :doc:`api_usage`. For source-specific details, see :doc:`harnesses`.
+
+The public import boundary is ``toktrail.api`` and ``toktrail.errors``.
+Everything under ``toktrail.db``, ``toktrail.adapters.*``, ``toktrail.cli``,
+``toktrail.config``, ``toktrail.paths``, and ``toktrail.reporting`` is
+internal.
 
 The stable API is under ``toktrail.api.*`` and canonical errors are in
 ``toktrail.errors``. Downstream tools should not import from ``toktrail.db``,
@@ -31,6 +39,9 @@ Runnable manual-run examples for the stable API are documented in
    :members:
 
 .. automodule:: toktrail.api.imports
+   :members:
+
+.. automodule:: toktrail.api.events
    :members:
 
 .. automodule:: toktrail.api.sync

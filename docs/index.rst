@@ -5,6 +5,8 @@ toktrail
    :maxdepth: 2
 
    usage
+   api_usage
+   harnesses
    api
    config
 

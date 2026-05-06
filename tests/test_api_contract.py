@@ -31,6 +31,7 @@ def test_public_modules_import_successfully() -> None:
         "toktrail.api.sessions",
         "toktrail.api.sources",
         "toktrail.api.imports",
+        "toktrail.api.events",
         "toktrail.api.sync",
         "toktrail.api.reports",
         "toktrail.api.environment",
@@ -109,6 +110,8 @@ def test_root_api_exports_documented_models_and_functions() -> None:
         "normalize_harness_name",
         "prepare_environment",
         "prepare_manual_run",
+        "record_usage_event",
+        "record_usage_events",
         "render_config_template",
         "require_active_run",
         "resolve_source_path",
@@ -144,8 +147,8 @@ def test_solvecost_style_imports_use_only_public_modules() -> None:
                 (
                     "from toktrail.api import capture_source_snapshot, "
                     "finalize_manual_run, import_usage, init_state, "
-                    "prepare_environment, prepare_manual_run, session_report, "
-                    "TokenBreakdown, UsageEvent"
+                    "prepare_environment, prepare_manual_run, record_usage_event, "
+                    "record_usage_events, session_report, TokenBreakdown, UsageEvent"
                 ),
                 "assert ToktrailError.__name__ == 'ToktrailError'",
                 "assert callable(finalize_manual_run)",
@@ -155,6 +158,8 @@ def test_solvecost_style_imports_use_only_public_modules() -> None:
                 "assert callable(capture_source_snapshot)",
                 "assert callable(init_state)",
                 "assert callable(prepare_environment)",
+                "assert callable(record_usage_event)",
+                "assert callable(record_usage_events)",
                 "assert TokenBreakdown.__name__ == 'TokenBreakdown'",
                 "assert UsageEvent.__name__ == 'UsageEvent'",
                 "path = Path('.')",

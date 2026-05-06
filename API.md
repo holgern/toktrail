@@ -83,6 +83,7 @@ from toktrail.api.sources import (
     scan_usage,
 )
 from toktrail.api.imports import import_configured_usage, import_usage
+from toktrail.api.events import record_usage_event, record_usage_events
 from toktrail.api.sync import default_archive_name, export_state_archive, import_state_archive
 from toktrail.api.reports import session_report, subscription_usage_report, usage_report
 from toktrail.api.environment import prepare_environment
@@ -103,6 +104,7 @@ valid for callers that want narrower imports.
 - `toktrail.api.sessions`
 - `toktrail.api.sources`
 - `toktrail.api.imports`
+- `toktrail.api.events`
 - `toktrail.api.sync`
 - `toktrail.api.reports`
 - `toktrail.api.environment`
@@ -121,6 +123,8 @@ Supported harness names across the public API are `opencode`, `pi`, `copilot`,
 Runnable examples for manually measuring OpenCode, Pi, Copilot, Codex, Goose,
 Droid, Amp, Claude, and Vibe runs are documented in
 [`docs/stable_api_examples.md`](docs/stable_api_examples.md).
+Task-oriented usage examples are documented in
+[`docs/api_usage.rst`](docs/api_usage.rst).
 
 ## Models
 
@@ -241,6 +245,41 @@ before import with the same public API used for OpenCode, Pi, and Copilot.
 
 `usage_report()` no longer requires `session_id`. When used for canonical
 period/time-range reporting, it returns `RunReport(session=None, ...)`.
+
+## Direct event ingest API
+
+Use `record_usage_event()` and `record_usage_events()` when your program
+already has token/cost counters and wants to store them directly in toktrail's
+canonical usage ledger.
+
+```python
+from decimal import Decimal
+from pathlib import Path
+
+from toktrail.api import TokenBreakdown, init_state, record_usage_event, usage_report
+
+db_path = Path(".toktrail/toktrail.db")
+init_state(db_path)
+
+record_usage_event(
+    db_path,
+    harness="my-app",
+    source_session_id="daily-batch-2026-05-06",
+    source_message_id="req_123",
+    provider_id="openai",
+    model_id="gpt-5.5",
+    tokens=TokenBreakdown(
+        input=12_000,
+        output=800,
+        reasoning=120,
+        cache_read=50_000,
+    ),
+    source_cost_usd=Decimal("0.0123"),
+)
+
+report = usage_report(db_path, period="today", timezone="Europe/Berlin")
+print(report.totals.tokens.total)
+```
 
 ### Subscription usage report
 

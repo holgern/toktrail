@@ -93,9 +93,10 @@ subscription_usage = subscription_usage_report(db_path, provider_id="opencode-go
 ```
 
 See [`API.md`](API.md) for the stable import boundary, public models, workflow
-API, canonical errors, and privacy defaults. Runnable manual-run examples for
-OpenCode, Pi, Copilot, Codex, Goose, Droid, Amp, and Vibe are documented in
-[`docs/stable_api_examples.md`](docs/stable_api_examples.md).
+API, canonical errors, and privacy defaults. Task-oriented Python usage is in
+[`docs/api_usage.rst`](docs/api_usage.rst). Runnable manual-run examples for
+OpenCode, Pi, Copilot, Codex, Goose, Droid, Amp, Claude, and Vibe are
+documented in [`docs/stable_api_examples.md`](docs/stable_api_examples.md).
 
 ## Quickstart
 
@@ -245,6 +246,7 @@ goose = "~/.local/share/goose/sessions/sessions.db"
 droid = "~/.factory/sessions"
 amp = "~/.local/share/amp/threads"
 claude = "~/.claude/projects"
+vibe = "~/.vibe/logs/session"
 ```
 
 `[[subscriptions]]` rows live in `subscriptions.toml`.

@@ -14,6 +14,8 @@ DOC_FILES = [
     Path("README.md"),
     Path("API.md"),
     Path("docs/usage.rst"),
+    Path("docs/api_usage.rst"),
+    Path("docs/harnesses.rst"),
 ]
 GLOBAL_OPTIONS_WITH_VALUE = {
     "--db",
@@ -133,3 +135,14 @@ def test_docs_have_no_stale_root_start_stop_status_examples() -> None:
 )
 def test_stale_command_examples_are_invalid(line: str) -> None:
     assert _extract_command_path(line) == []
+
+
+def test_docs_list_all_supported_harnesses() -> None:
+    from toktrail.api.harnesses import supported_harnesses
+
+    expected = {h.name for h in supported_harnesses()}
+    paths = [Path("README.md"), Path("docs/usage.rst"), Path("docs/harnesses.rst")]
+    for path in paths:
+        text = path.read_text(encoding="utf-8")
+        missing = sorted(name for name in expected if name not in text)
+        assert not missing, f"{path} missing supported harnesses: {missing}"

@@ -67,6 +67,8 @@ harnesses and source paths from ``config.toml``:
    goose = "~/.local/share/goose/sessions/sessions.db"
    droid = "~/.factory/sessions"
    amp = "~/.local/share/amp/threads"
+   claude = "~/.claude/projects"
+   vibe = "~/.vibe/logs/session"
 
 ``imports.sources.<harness>`` accepts either a single path string or a list of
 paths. Use ``toktrail refresh --harness <name> --source <path>`` for one-off

@@ -69,6 +69,10 @@ dev = [
 rich = [
     "rich",
 ]
+docs = [
+    "sphinx",
+    "sphinx-rtd-theme",
+]
 
 [tool.setuptools_scm]
 write_to = "toktrail/_version.py"
