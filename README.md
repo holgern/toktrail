@@ -1,3 +1,8 @@
+[![PyPI - Version](https://img.shields.io/pypi/v/toktrail)](https://pypi.org/project/toktrail/)
+![PyPI - Python Version](https://img.shields.io/pypi/pyversions/toktrail)
+![PyPI - Downloads](https://img.shields.io/pypi/dm/toktrail)
+[![codecov](https://codecov.io/gh/holgern/toktrail/graph/badge.svg?token=3b1K0FOPiY)](https://codecov.io/gh/holgern/toktrail)
+
 # toktrail
 
 `toktrail` is a Python CLI for tracking OpenCode, Pi, Codex, Goose, Droid, Amp, Vibe,
