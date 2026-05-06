@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 from copy import deepcopy
+from pathlib import Path
 
 import pytest
 
@@ -22,6 +23,10 @@ from toktrail.errors import (
     InvalidAPIUsageError,
     RunNotFoundError,
 )
+
+
+def _toml_path_value(path: Path) -> str:
+    return str(path).replace("\\", "/")
 
 
 @pytest.fixture(autouse=True)
@@ -131,7 +136,7 @@ harnesses = ["opencode"]
 missing_source = "error"
 
 [imports.sources]
-opencode = "{source_db}"
+opencode = "{_toml_path_value(source_db)}"
 """.strip(),
         encoding="utf-8",
     )
@@ -374,12 +379,12 @@ missing_source = "warn"
 include_raw_json = false
 
 [imports.sources]
-opencode = "{source_db}"
-pi = "{tmp_path / "missing-pi"}"
-codex = "{codex_file}"
-goose = "{goose_db}"
-droid = "{droid_source}"
-amp = "{amp_source}"
+opencode = "{_toml_path_value(source_db)}"
+pi = "{_toml_path_value(tmp_path / 'missing-pi')}"
+codex = "{_toml_path_value(codex_file)}"
+goose = "{_toml_path_value(goose_db)}"
+droid = "{_toml_path_value(droid_source)}"
+amp = "{_toml_path_value(amp_source)}"
 """.strip(),
         encoding="utf-8",
     )
@@ -440,8 +445,8 @@ harnesses = ["opencode", "codex"]
 missing_source = "error"
 
 [imports.sources]
-opencode = "{source_db}"
-codex = "{codex_file}"
+opencode = "{_toml_path_value(source_db)}"
+codex = "{_toml_path_value(codex_file)}"
 """.strip(),
         encoding="utf-8",
     )

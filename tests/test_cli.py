@@ -33,6 +33,10 @@ from toktrail.models import TokenBreakdown, UsageEvent
 ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 
+def _toml_path_value(path: Path) -> str:
+    return str(path).replace("\\", "/")
+
+
 @pytest.fixture(autouse=True)
 def isolate_default_config(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
@@ -47,7 +51,7 @@ missing_source = "warn"
 include_raw_json = false
 
 [imports.sources]
-opencode = "{tmp_path / "missing-opencode.db"}"
+opencode = "{_toml_path_value(tmp_path / 'missing-opencode.db')}"
 """.strip(),
         encoding="utf-8",
     )
@@ -611,8 +615,8 @@ harnesses = ["opencode", "codex"]
 missing_source = "error"
 
 [imports.sources]
-opencode = "{opencode_db}"
-codex = "{codex_file}"
+opencode = "{_toml_path_value(opencode_db)}"
+codex = "{_toml_path_value(codex_file)}"
 """.strip(),
         encoding="utf-8",
     )
@@ -736,7 +740,7 @@ config_version = 1
 harnesses = ["opencode"]
 
 [imports.sources]
-opencode = "{missing_db}"
+opencode = "{_toml_path_value(missing_db)}"
 """.strip(),
         encoding="utf-8",
     )
@@ -1042,7 +1046,7 @@ missing_source = "warn"
 include_raw_json = false
 
 [imports.sources]
-opencode = "{source_db}"
+opencode = "{_toml_path_value(source_db)}"
 """.strip(),
         encoding="utf-8",
     )
@@ -1085,7 +1089,7 @@ missing_source = "warn"
 include_raw_json = false
 
 [imports.sources]
-opencode = "{source_db}"
+opencode = "{_toml_path_value(source_db)}"
 """.strip(),
         encoding="utf-8",
     )
@@ -1121,7 +1125,7 @@ missing_source = "warn"
 include_raw_json = false
 
 [imports.sources]
-opencode = "{source_db}"
+opencode = "{_toml_path_value(source_db)}"
 """.strip(),
         encoding="utf-8",
     )
@@ -1157,7 +1161,7 @@ missing_source = "warn"
 include_raw_json = false
 
 [imports.sources]
-opencode = "{source_db}"
+opencode = "{_toml_path_value(source_db)}"
 """.strip(),
         encoding="utf-8",
     )
@@ -1206,7 +1210,7 @@ missing_source = "warn"
 include_raw_json = false
 
 [imports.sources]
-opencode = "{source_db}"
+opencode = "{_toml_path_value(source_db)}"
 """.strip(),
         encoding="utf-8",
     )
@@ -1290,7 +1294,7 @@ missing_source = "warn"
 include_raw_json = false
 
 [imports.sources]
-opencode = "{source_db}"
+opencode = "{_toml_path_value(source_db)}"
 """.strip(),
         encoding="utf-8",
     )
@@ -1331,7 +1335,7 @@ missing_source = "warn"
 include_raw_json = false
 
 [imports.sources]
-opencode = "{source_db}"
+opencode = "{_toml_path_value(source_db)}"
 """.strip(),
         encoding="utf-8",
     )
@@ -1374,7 +1378,7 @@ missing_source = "warn"
 include_raw_json = false
 
 [imports.sources]
-opencode = "{source_db}"
+opencode = "{_toml_path_value(source_db)}"
 """.strip(),
         encoding="utf-8",
     )
@@ -1905,7 +1909,7 @@ missing_source = "warn"
 include_raw_json = false
 
 [imports.sources]
-opencode = "{source_db}"
+opencode = "{_toml_path_value(source_db)}"
 """.strip(),
         encoding="utf-8",
     )
@@ -1947,7 +1951,7 @@ missing_source = "warn"
 include_raw_json = false
 
 [imports.sources]
-opencode = "{source_db}"
+opencode = "{_toml_path_value(source_db)}"
 """.strip(),
         encoding="utf-8",
     )
@@ -1998,7 +2002,7 @@ missing_source = "warn"
 include_raw_json = false
 
 [imports.sources]
-opencode = "{source_db}"
+opencode = "{_toml_path_value(source_db)}"
 """.strip(),
         encoding="utf-8",
     )
@@ -2615,7 +2619,7 @@ missing_source = "warn"
 include_raw_json = false
 
 [imports.sources]
-opencode = "{tmp_path / "missing-opencode.db"}"
+opencode = "{_toml_path_value(tmp_path / 'missing-opencode.db')}"
 """.strip(),
         encoding="utf-8",
     )
@@ -2999,7 +3003,7 @@ missing_source = "warn"
 include_raw_json = false
 
 [imports.sources]
-opencode = "{source_db}"
+opencode = "{_toml_path_value(source_db)}"
 """.strip(),
         encoding="utf-8",
     )
@@ -3661,8 +3665,8 @@ missing_source = "error"
 include_raw_json = false
 
 [imports.sources]
-opencode = "{opencode_db}"
-pi = "{pi_file}"
+opencode = "{_toml_path_value(opencode_db)}"
+pi = "{_toml_path_value(pi_file)}"
 """.strip(),
         encoding="utf-8",
     )
@@ -3726,7 +3730,7 @@ missing_source = "error"
 include_raw_json = false
 
 [imports.sources]
-opencode = "{opencode_db}"
+opencode = "{_toml_path_value(opencode_db)}"
 """.strip(),
         encoding="utf-8",
     )
@@ -3790,7 +3794,7 @@ missing_source = "error"
 include_raw_json = false
 
 [imports.sources]
-opencode = "{opencode_db}"
+opencode = "{_toml_path_value(opencode_db)}"
 """.strip(),
         encoding="utf-8",
     )
@@ -3866,7 +3870,7 @@ missing_source = "error"
 include_raw_json = false
 
 [imports.sources]
-opencode = "{opencode_db}"
+opencode = "{_toml_path_value(opencode_db)}"
 """.strip(),
         encoding="utf-8",
     )
@@ -4164,7 +4168,7 @@ missing_source = "warn"
 include_raw_json = false
 
 [imports.sources]
-opencode = "{source_db}"
+opencode = "{_toml_path_value(source_db)}"
 
 [[subscriptions]]
 id = "opencode-go"
@@ -4523,7 +4527,7 @@ missing_source = "warn"
 include_raw_json = false
 
 [imports.sources]
-opencode = "{source_db}"
+opencode = "{_toml_path_value(source_db)}"
 
 [pricing]
 [[pricing.virtual]]
@@ -4586,7 +4590,7 @@ missing_source = "warn"
 include_raw_json = false
 
 [imports.sources]
-opencode = "{source_db}"
+opencode = "{_toml_path_value(source_db)}"
 
 [[subscriptions]]
 id = "zai-coding-plan"

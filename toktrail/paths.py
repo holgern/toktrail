@@ -26,11 +26,18 @@ _INVALID_IDENTITY_CHARS_RE = re.compile(r"[^a-z0-9.-]+")
 _DASH_RE = re.compile(r"-+")
 
 
+def _home_dir() -> Path:
+    home = os.environ.get("HOME")
+    if home:
+        return Path(home).expanduser()
+    return Path.home()
+
+
 def default_toktrail_db_path() -> Path:
     xdg_state_home = os.environ.get("XDG_STATE_HOME")
     if xdg_state_home:
         return Path(xdg_state_home).expanduser() / "toktrail" / "toktrail.db"
-    return Path.home() / ".local" / "state" / "toktrail" / "toktrail.db"
+    return _home_dir() / ".local" / "state" / "toktrail" / "toktrail.db"
 
 
 def resolve_toktrail_db_path(cli_value: Path | None = None) -> Path:
@@ -48,7 +55,7 @@ def default_toktrail_config_dir() -> Path:
     xdg_config_home = os.environ.get("XDG_CONFIG_HOME")
     if xdg_config_home:
         return Path(xdg_config_home).expanduser() / "toktrail"
-    return Path.home() / ".config" / "toktrail"
+    return _home_dir() / ".config" / "toktrail"
 
 
 def default_toktrail_config_path() -> Path:
@@ -117,7 +124,7 @@ def resolve_toktrail_subscriptions_path(cli_value: Path | None = None) -> Path:
 
 
 def default_opencode_db_path() -> Path:
-    return Path.home() / ".local" / "share" / "opencode" / "opencode.db"
+    return _home_dir() / ".local" / "share" / "opencode" / "opencode.db"
 
 
 def resolve_opencode_db_path(cli_value: Path | None = None) -> Path:
@@ -132,7 +139,7 @@ def resolve_opencode_db_path(cli_value: Path | None = None) -> Path:
 
 
 def default_copilot_otel_dir() -> Path:
-    return Path.home() / ".copilot" / "otel"
+    return _home_dir() / ".copilot" / "otel"
 
 
 def new_copilot_otel_file_path(now: datetime | None = None) -> Path:
@@ -177,7 +184,7 @@ def resolve_copilot_file_path(cli_value: Path | None = None) -> Path | None:
 
 
 def default_pi_sessions_path() -> Path:
-    return Path.home() / ".pi" / "agent" / "sessions"
+    return _home_dir() / ".pi" / "agent" / "sessions"
 
 
 def resolve_pi_sessions_path(cli_value: Path | None = None) -> Path:
@@ -190,7 +197,7 @@ def resolve_pi_sessions_path(cli_value: Path | None = None) -> Path:
 
 
 def default_amp_threads_path() -> Path:
-    return Path.home() / ".local" / "share" / "amp" / "threads"
+    return _home_dir() / ".local" / "share" / "amp" / "threads"
 
 
 def resolve_amp_threads_path(cli_value: Path | None = None) -> Path:
@@ -203,7 +210,7 @@ def resolve_amp_threads_path(cli_value: Path | None = None) -> Path:
 
 
 def default_codex_sessions_path() -> Path:
-    return Path.home() / ".codex" / "sessions"
+    return _home_dir() / ".codex" / "sessions"
 
 
 def resolve_codex_sessions_path(cli_value: Path | None = None) -> Path:
@@ -216,7 +223,7 @@ def resolve_codex_sessions_path(cli_value: Path | None = None) -> Path:
 
 
 def default_goose_sessions_db_path() -> Path:
-    return Path.home() / ".local" / "share" / "goose" / "sessions" / "sessions.db"
+    return _home_dir() / ".local" / "share" / "goose" / "sessions" / "sessions.db"
 
 
 def goose_sessions_db_candidates() -> tuple[Path, ...]:
@@ -230,13 +237,13 @@ def goose_sessions_db_candidates() -> tuple[Path, ...]:
     candidates.extend(
         [
             default_goose_sessions_db_path(),
-            Path.home()
+            _home_dir()
             / "Library"
             / "Application Support"
             / "goose"
             / "sessions"
             / "sessions.db",
-            Path.home()
+            _home_dir()
             / ".local"
             / "share"
             / "Block"
@@ -261,7 +268,7 @@ def resolve_goose_sessions_path(cli_value: Path | None = None) -> Path:
 
 
 def default_droid_sessions_path() -> Path:
-    return Path.home() / ".factory" / "sessions"
+    return _home_dir() / ".factory" / "sessions"
 
 
 def resolve_droid_sessions_path(cli_value: Path | None = None) -> Path:
@@ -274,7 +281,7 @@ def resolve_droid_sessions_path(cli_value: Path | None = None) -> Path:
 
 
 def default_claude_projects_path() -> Path:
-    return Path.home() / ".claude" / "projects"
+    return _home_dir() / ".claude" / "projects"
 
 
 def resolve_claude_projects_path(cli_value: Path | None = None) -> Path:
@@ -287,7 +294,7 @@ def resolve_claude_projects_path(cli_value: Path | None = None) -> Path:
 
 
 def default_vibe_logs_path() -> Path:
-    return Path.home() / ".vibe" / "logs" / "session"
+    return _home_dir() / ".vibe" / "logs" / "session"
 
 
 def resolve_vibe_logs_path(cli_value: Path | None = None) -> Path:
