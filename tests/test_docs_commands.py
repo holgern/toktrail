@@ -17,6 +17,7 @@ DOC_FILES = [
     Path("docs/api_usage.rst"),
     Path("docs/harnesses.rst"),
 ]
+ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
 GLOBAL_OPTIONS_WITH_VALUE = {
     "--db",
     "--config",
@@ -24,6 +25,10 @@ GLOBAL_OPTIONS_WITH_VALUE = {
     "--prices-dir",
     "--subscriptions",
 }
+
+
+def _strip_ansi(text: str) -> str:
+    return ANSI_ESCAPE_RE.sub("", text)
 
 
 def _iter_toktrail_commands(text: str) -> list[str]:
@@ -61,7 +66,7 @@ def _is_placeholder_or_path(token: str) -> bool:
 def _help_output_for(path: tuple[str, ...]) -> tuple[int, str]:
     runner = CliRunner()
     result = runner.invoke(app, [*path, "--help"])
-    return result.exit_code, result.output
+    return result.exit_code, _strip_ansi(result.output)
 
 
 def _path_exists(path: tuple[str, ...]) -> bool:
@@ -91,8 +96,11 @@ def _extract_command_path(command_line: str) -> list[str]:
 
 
 def _known_root_commands(runner: CliRunner) -> set[str]:
-    help_text = runner.invoke(app, ["--help"]).output
-    return set(re.findall(r"(?m)^\s*│\s*([a-z][a-z0-9-]*)\b", help_text))
+    help_text = _strip_ansi(runner.invoke(app, ["--help"]).output)
+    roots = set(re.findall(r"(?m)^\s*│\s*([a-z][a-z0-9-]*)\b", help_text))
+    if roots:
+        return roots
+    return set(re.findall(r"(?m)^\s{2,}([a-z][a-z0-9-]*)\s{2,}", help_text))
 
 
 def test_docs_command_roots_exist() -> None:

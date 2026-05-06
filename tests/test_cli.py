@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shlex
 import sqlite3
 import subprocess
@@ -28,6 +29,8 @@ from toktrail.db import (
     migrate,
 )
 from toktrail.models import TokenBreakdown, UsageEvent
+
+ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 
 @pytest.fixture(autouse=True)
@@ -112,6 +115,10 @@ def _rich_is_available() -> bool:
     except ImportError:
         return False
     return True
+
+
+def _strip_ansi(text: str) -> str:
+    return ANSI_ESCAPE_RE.sub("", text)
 
 
 def _assert_rich_result_or_missing_dependency(result) -> None:
@@ -5442,4 +5449,4 @@ def test_cli_usage_project_rejected(tmp_path) -> None:
         ["--db", str(state_db), "usage", "daily", "--project", "myproj"],
     )
     assert result.exit_code != 0
-    assert "No such option: --project" in result.output
+    assert "No such option: --project" in _strip_ansi(result.output)
