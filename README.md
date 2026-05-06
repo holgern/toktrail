@@ -151,11 +151,15 @@ tracking session:
 
 ```bash
 toktrail usage today
+toktrail usage today --rich
 toktrail usage last-week --utc --json
 toktrail usage summary --since 2026-05-01 --until 2026-06-01 --timezone Europe/Berlin
 toktrail usage summary --price-state priced --sort provider --limit 10 --json
 toktrail usage today --no-refresh
 toktrail usage today --refresh-details
+toktrail usage runs --rich
+toktrail usage sessions --rich
+toktrail usage daily --rich
 toktrail usage sessions --last
 toktrail usage sessions --order asc --limit 10
 toktrail usage runs --last --limit 5
@@ -201,6 +205,13 @@ Report commands (`toktrail usage`, `toktrail run status`, and
 `toktrail subscriptions status`) refresh configured sources first by default. Use
 `--no-refresh` for stale local-state reads, and `--refresh-details` to print a
 compact refresh summary.
+
+`--rich` renders report tables with Rich formatting; default output stays
+borderless/plain. Install the optional extra to enable it:
+
+```bash
+pip install "toktrail[rich]"
+```
 
 For subscriptions, `subscriptions.timezone` controls quota/billing window
 calculation. Human output timestamps are rendered in local timezone by default;

@@ -235,7 +235,13 @@ UtcOption = Annotated[bool, typer.Option("--utc")]
 LimitOption = Annotated[int | None, typer.Option("--limit", min=1)]
 SortOption = Annotated[str, typer.Option("--sort")]
 ColumnsOption = Annotated[str | None, typer.Option("--columns")]
-RichOption = Annotated[bool, typer.Option("--rich")]
+RichOption = Annotated[
+    bool,
+    typer.Option(
+        "--rich",
+        help="Render tables with Rich formatting. Default output stays borderless.",
+    ),
+]
 SplitThinkingOption = Annotated[bool, typer.Option("--split-thinking")]
 TimeBoundaryOption = Annotated[str | None, typer.Option("--since")]
 UntilBoundaryOption = Annotated[str | None, typer.Option("--until")]
@@ -675,6 +681,9 @@ def list_command(
             "ended": "Ended",
         },
         rich_output=rich_output,
+        numeric_columns={"id"},
+        wrap_columns={"scope", "name"},
+        max_widths={"scope": 40, "name": 24},
     )
 
 
@@ -1011,6 +1020,7 @@ def usage(
             min_tokens=min_tokens,
             sort=sort,
             limit=limit,
+            rich_output=rich_output,
         )
         if json_output:
             if payload is None:
@@ -1089,6 +1099,7 @@ def usage(
             order=order,
             limit=limit,
             last=last,
+            rich_output=rich_output,
         )
         if json_output:
             if payload is None:
@@ -1128,6 +1139,7 @@ def usage(
             last=last,
             include_archived=all_runs,
             archived_only=archived,
+            rich_output=rich_output,
         )
         if json_output:
             if payload is None:
@@ -1180,6 +1192,7 @@ def _usage_series(
     min_tokens: int | None,
     sort: str,
     limit: int | None,
+    rich_output: bool,
 ) -> dict[str, object] | None:
     from toktrail.db import summarize_usage_series
     from toktrail.periods import _resolve_timezone, parse_cli_boundary
@@ -1233,6 +1246,7 @@ def _usage_series(
         min_tokens=min_tokens,
         sort=sort,
         limit=limit,
+        rich_output=rich_output,
     )
     return None
 
@@ -1248,6 +1262,7 @@ def _print_usage_series(
     min_tokens: int | None,
     sort: str,
     limit: int | None,
+    rich_output: bool,
 ) -> None:
     from toktrail.reporting import UsageSeriesReport
 
@@ -1272,6 +1287,7 @@ def _print_usage_series(
                 tuple(filtered),
                 compact=compact,
                 breakdown=breakdown,
+                rich_output=rich_output,
             )
         return
     filtered = _filter_series_buckets(
@@ -1287,6 +1303,7 @@ def _print_usage_series(
         tuple(filtered),
         compact=compact,
         breakdown=breakdown,
+        rich_output=rich_output,
     )
 
 
@@ -1295,65 +1312,180 @@ def _print_usage_series_bucket_table(
     *,
     compact: bool,
     breakdown: bool,
+    rich_output: bool,
 ) -> None:
     if compact:
-        typer.echo("period  msgs  total  actual  virtual  savings  models")
-    elif breakdown:
-        header = (
-            "period  provider/model  msgs  input  output  reasoning  cache_r  "
-            "cache_w  cache_o  total  actual  virtual"
+        rows = [
+            {
+                "period": bucket.label,
+                "msgs": _format_int(bucket.message_count),
+                "total": _format_int(bucket.tokens.total),
+                "actual": _format_cost(bucket.costs.actual_cost_usd),
+                "virtual": _format_cost(bucket.costs.virtual_cost_usd),
+                "savings": _format_cost(bucket.costs.savings_usd),
+                "models": _format_model_list(bucket.models, rich_output=rich_output),
+            }
+            for bucket in buckets
+        ]
+        _print_table(
+            rows,
+            ["period", "msgs", "total", "actual", "virtual", "savings", "models"],
+            {
+                "period": "period",
+                "msgs": "msgs",
+                "total": "total",
+                "actual": "actual",
+                "virtual": "virtual",
+                "savings": "savings",
+                "models": "models",
+            },
+            rich_output=rich_output,
+            numeric_columns={"msgs", "total", "actual", "virtual", "savings"},
+            wrap_columns={"models"},
+            max_widths={"models": 48},
         )
-        typer.echo(header)
     else:
-        header = (
-            "period  msgs  models  input  output  reasoning  cache_r  cache_w  "
-            "cache_o  total  source  actual  virtual  savings  unpriced"
+        rows = [
+            {
+                "period": bucket.label,
+                "msgs": _format_int(bucket.message_count),
+                "models": _format_model_list(bucket.models, rich_output=rich_output),
+                "input": _format_int(bucket.tokens.input),
+                "output": _format_int(bucket.tokens.output),
+                "reasoning": _format_int(bucket.tokens.reasoning),
+                "cache_r": _format_int(bucket.tokens.cache_read),
+                "cache_w": _format_int(bucket.tokens.cache_write),
+                "cache_o": _format_int(bucket.tokens.cache_output),
+                "total": _format_int(bucket.tokens.total),
+                "source": _format_cost(bucket.costs.source_cost_usd),
+                "actual": _format_cost(bucket.costs.actual_cost_usd),
+                "virtual": _format_cost(bucket.costs.virtual_cost_usd),
+                "savings": _format_cost(bucket.costs.savings_usd),
+                "unpriced": _format_int(bucket.costs.unpriced_count),
+            }
+            for bucket in buckets
+        ]
+        _print_table(
+            rows,
+            [
+                "period",
+                "msgs",
+                "models",
+                "input",
+                "output",
+                "reasoning",
+                "cache_r",
+                "cache_w",
+                "cache_o",
+                "total",
+                "source",
+                "actual",
+                "virtual",
+                "savings",
+                "unpriced",
+            ],
+            {
+                "period": "period",
+                "msgs": "msgs",
+                "models": "models",
+                "input": "input",
+                "output": "output",
+                "reasoning": "reasoning",
+                "cache_r": "cache_r",
+                "cache_w": "cache_w",
+                "cache_o": "cache_o",
+                "total": "total",
+                "source": "source",
+                "actual": "actual",
+                "virtual": "virtual",
+                "savings": "savings",
+                "unpriced": "unpriced",
+            },
+            rich_output=rich_output,
+            numeric_columns={
+                "msgs",
+                "input",
+                "output",
+                "reasoning",
+                "cache_r",
+                "cache_w",
+                "cache_o",
+                "total",
+                "source",
+                "actual",
+                "virtual",
+                "savings",
+                "unpriced",
+            },
+            wrap_columns={"models"},
+            max_widths={"models": 48},
         )
-        typer.echo(header)
-    for bucket in buckets:
-        tokens = bucket.tokens
-        costs = bucket.costs
-        models = ", ".join(bucket.models)
-        if compact:
-            line = (
-                f"{bucket.label}  {bucket.message_count}  "
-                f"{_format_int(tokens.total)}  "
-                f"{_format_cost(costs.actual_cost_usd)}  "
-                f"{_format_cost(costs.virtual_cost_usd)}  "
-                f"{_format_cost(costs.savings_usd)}  {models}"
+    if breakdown:
+        breakdown_rows = [
+            {
+                "period": bucket.label,
+                "provider_model": f"{row.provider_id}/{row.model_id}",
+                "msgs": _format_int(row.message_count),
+                "input": _format_int(row.tokens.input),
+                "output": _format_int(row.tokens.output),
+                "reasoning": _format_int(row.tokens.reasoning),
+                "cache_r": _format_int(row.tokens.cache_read),
+                "cache_w": _format_int(row.tokens.cache_write),
+                "cache_o": _format_int(row.tokens.cache_output),
+                "total": _format_int(row.tokens.total),
+                "actual": _format_cost(row.costs.actual_cost_usd),
+                "virtual": _format_cost(row.costs.virtual_cost_usd),
+            }
+            for bucket in buckets
+            for row in bucket.by_model
+        ]
+        if breakdown_rows:
+            typer.echo("")
+            typer.echo("Breakdown by provider/model")
+            _print_table(
+                breakdown_rows,
+                [
+                    "period",
+                    "provider_model",
+                    "msgs",
+                    "input",
+                    "output",
+                    "reasoning",
+                    "cache_r",
+                    "cache_w",
+                    "cache_o",
+                    "total",
+                    "actual",
+                    "virtual",
+                ],
+                {
+                    "period": "period",
+                    "provider_model": "provider/model",
+                    "msgs": "msgs",
+                    "input": "input",
+                    "output": "output",
+                    "reasoning": "reasoning",
+                    "cache_r": "cache_r",
+                    "cache_w": "cache_w",
+                    "cache_o": "cache_o",
+                    "total": "total",
+                    "actual": "actual",
+                    "virtual": "virtual",
+                },
+                rich_output=rich_output,
+                numeric_columns={
+                    "msgs",
+                    "input",
+                    "output",
+                    "reasoning",
+                    "cache_r",
+                    "cache_w",
+                    "cache_o",
+                    "total",
+                    "actual",
+                    "virtual",
+                },
             )
-            typer.echo(line)
-        else:
-            line = (
-                f"{bucket.label}  {bucket.message_count}  {models}  "
-                f"{_format_int(tokens.input)}  {_format_int(tokens.output)}  "
-                f"{_format_int(tokens.reasoning)}  "
-                f"{_format_int(tokens.cache_read)}  "
-                f"{_format_int(tokens.cache_write)}  "
-                f"{_format_int(tokens.cache_output)}  "
-                f"{_format_int(tokens.total)}  "
-                f"{_format_cost(costs.source_cost_usd)}  "
-                f"{_format_cost(costs.actual_cost_usd)}  "
-                f"{_format_cost(costs.virtual_cost_usd)}  "
-                f"{_format_cost(costs.savings_usd)}  {costs.unpriced_count}"
-            )
-            typer.echo(line)
-        if breakdown:
-            for row in bucket.by_model:
-                label = f"{row.provider_id}/{row.model_id}"
-                line = (
-                    f"  └─  {label}  {row.message_count}  "
-                    f"{_format_int(row.tokens.input)}  "
-                    f"{_format_int(row.tokens.output)}  "
-                    f"{_format_int(row.tokens.reasoning)}  "
-                    f"{_format_int(row.tokens.cache_read)}  "
-                    f"{_format_int(row.tokens.cache_write)}  "
-                    f"{_format_int(row.tokens.cache_output)}  "
-                    f"{_format_int(row.tokens.total)}  "
-                    f"{_format_cost(row.costs.actual_cost_usd)}  "
-                    f"{_format_cost(row.costs.virtual_cost_usd)}"
-                )
-                typer.echo(line)
 
 
 def _usage_sessions(
@@ -1376,6 +1508,7 @@ def _usage_sessions(
     order: str,
     limit: int | None,
     last: bool,
+    rich_output: bool,
 ) -> dict[str, object] | None:
     from toktrail.db import summarize_usage_sessions
     from toktrail.periods import _resolve_timezone, parse_cli_boundary
@@ -1423,6 +1556,7 @@ def _usage_sessions(
         compact=compact,
         breakdown=breakdown,
         utc=utc,
+        rich_output=rich_output,
     )
     return None
 
@@ -1433,6 +1567,7 @@ def _print_usage_sessions(
     compact: bool,
     breakdown: bool,
     utc: bool,
+    rich_output: bool,
 ) -> None:
     from toktrail.formatting import format_epoch_ms_compact
     from toktrail.reporting import UsageSessionsReport
@@ -1448,70 +1583,192 @@ def _print_usage_sessions(
         return
 
     if compact:
-        header = "session  last  msgs  total  actual  virtual  savings  models"
-    elif breakdown:
-        header = (
-            "session  last  provider/model  msgs  input  output  reasoning  "
-            "cache_r  cache_w  cache_o  total  actual  virtual"
+        rows = [
+            {
+                "session": session.key,
+                "last": format_epoch_ms_compact(session.last_ms, utc=utc),
+                "msgs": _format_int(session.message_count),
+                "total": _format_int(session.tokens.total),
+                "actual": _format_cost(session.costs.actual_cost_usd),
+                "virtual": _format_cost(session.costs.virtual_cost_usd),
+                "savings": _format_cost(session.costs.savings_usd),
+                "models": _format_model_list(session.models, rich_output=rich_output),
+            }
+            for session in report.sessions
+        ]
+        _print_table(
+            rows,
+            [
+                "session",
+                "last",
+                "msgs",
+                "total",
+                "actual",
+                "virtual",
+                "savings",
+                "models",
+            ],
+            {
+                "session": "session",
+                "last": "last",
+                "msgs": "msgs",
+                "total": "total",
+                "actual": "actual",
+                "virtual": "virtual",
+                "savings": "savings",
+                "models": "models",
+            },
+            rich_output=rich_output,
+            numeric_columns={"msgs", "total", "actual", "virtual", "savings"},
+            wrap_columns={"models"},
+            max_widths={"models": 48},
         )
     else:
-        header = (
-            "session  last  msgs  models  input  output  reasoning  "
-            "cache_r  cache_w  cache_o  total  source  actual  virtual  "
-            "savings  unpriced"
+        rows = [
+            {
+                "session": session.key,
+                "last": format_epoch_ms_compact(session.last_ms, utc=utc),
+                "msgs": _format_int(session.message_count),
+                "models": _format_model_list(session.models, rich_output=rich_output),
+                "input": _format_int(session.tokens.input),
+                "output": _format_int(session.tokens.output),
+                "reasoning": _format_int(session.tokens.reasoning),
+                "cache_r": _format_int(session.tokens.cache_read),
+                "cache_w": _format_int(session.tokens.cache_write),
+                "cache_o": _format_int(session.tokens.cache_output),
+                "total": _format_int(session.tokens.total),
+                "source": _format_cost(session.costs.source_cost_usd),
+                "actual": _format_cost(session.costs.actual_cost_usd),
+                "virtual": _format_cost(session.costs.virtual_cost_usd),
+                "savings": _format_cost(session.costs.savings_usd),
+                "unpriced": _format_int(session.costs.unpriced_count),
+            }
+            for session in report.sessions
+        ]
+        _print_table(
+            rows,
+            [
+                "session",
+                "last",
+                "msgs",
+                "models",
+                "input",
+                "output",
+                "reasoning",
+                "cache_r",
+                "cache_w",
+                "cache_o",
+                "total",
+                "source",
+                "actual",
+                "virtual",
+                "savings",
+                "unpriced",
+            ],
+            {
+                "session": "session",
+                "last": "last",
+                "msgs": "msgs",
+                "models": "models",
+                "input": "input",
+                "output": "output",
+                "reasoning": "reasoning",
+                "cache_r": "cache_r",
+                "cache_w": "cache_w",
+                "cache_o": "cache_o",
+                "total": "total",
+                "source": "source",
+                "actual": "actual",
+                "virtual": "virtual",
+                "savings": "savings",
+                "unpriced": "unpriced",
+            },
+            rich_output=rich_output,
+            numeric_columns={
+                "msgs",
+                "input",
+                "output",
+                "reasoning",
+                "cache_r",
+                "cache_w",
+                "cache_o",
+                "total",
+                "source",
+                "actual",
+                "virtual",
+                "savings",
+                "unpriced",
+            },
+            wrap_columns={"models"},
+            max_widths={"models": 48},
         )
-    typer.echo(header)
 
-    for session in report.sessions:
-        tokens = session.tokens
-        costs = session.costs
-        models = ", ".join(session.models)
-        last_str = format_epoch_ms_compact(session.last_ms, utc=utc)
-
-        if compact:
-            line = (
-                f"{session.key}  {last_str}  {session.message_count}  "
-                f"{_format_int(tokens.total)}  "
-                f"{_format_cost(costs.actual_cost_usd)}  "
-                f"{_format_cost(costs.virtual_cost_usd)}  "
-                f"{_format_cost(costs.savings_usd)}  {models}"
+    if breakdown:
+        breakdown_rows = [
+            {
+                "session": session.key,
+                "provider_model": f"{row.provider_id}/{row.model_id}",
+                "msgs": _format_int(row.message_count),
+                "input": _format_int(row.tokens.input),
+                "output": _format_int(row.tokens.output),
+                "reasoning": _format_int(row.tokens.reasoning),
+                "cache_r": _format_int(row.tokens.cache_read),
+                "cache_w": _format_int(row.tokens.cache_write),
+                "cache_o": _format_int(row.tokens.cache_output),
+                "total": _format_int(row.tokens.total),
+                "actual": _format_cost(row.costs.actual_cost_usd),
+                "virtual": _format_cost(row.costs.virtual_cost_usd),
+            }
+            for session in report.sessions
+            for row in session.by_model
+        ]
+        if breakdown_rows:
+            typer.echo("")
+            typer.echo("Breakdown by provider/model")
+            _print_table(
+                breakdown_rows,
+                [
+                    "session",
+                    "provider_model",
+                    "msgs",
+                    "input",
+                    "output",
+                    "reasoning",
+                    "cache_r",
+                    "cache_w",
+                    "cache_o",
+                    "total",
+                    "actual",
+                    "virtual",
+                ],
+                {
+                    "session": "session",
+                    "provider_model": "provider/model",
+                    "msgs": "msgs",
+                    "input": "input",
+                    "output": "output",
+                    "reasoning": "reasoning",
+                    "cache_r": "cache_r",
+                    "cache_w": "cache_w",
+                    "cache_o": "cache_o",
+                    "total": "total",
+                    "actual": "actual",
+                    "virtual": "virtual",
+                },
+                rich_output=rich_output,
+                numeric_columns={
+                    "msgs",
+                    "input",
+                    "output",
+                    "reasoning",
+                    "cache_r",
+                    "cache_w",
+                    "cache_o",
+                    "total",
+                    "actual",
+                    "virtual",
+                },
             )
-            typer.echo(line)
-        else:
-            line = (
-                f"{session.key}  {last_str}  {session.message_count}  "
-                f"{models}  "
-                f"{_format_int(tokens.input)}  "
-                f"{_format_int(tokens.output)}  "
-                f"{_format_int(tokens.reasoning)}  "
-                f"{_format_int(tokens.cache_read)}  "
-                f"{_format_int(tokens.cache_write)}  "
-                f"{_format_int(tokens.cache_output)}  "
-                f"{_format_int(tokens.total)}  "
-                f"{_format_cost(costs.source_cost_usd)}  "
-                f"{_format_cost(costs.actual_cost_usd)}  "
-                f"{_format_cost(costs.virtual_cost_usd)}  "
-                f"{_format_cost(costs.savings_usd)}  "
-                f"{costs.unpriced_count}"
-            )
-            typer.echo(line)
-
-        if breakdown:
-            for row in session.by_model:
-                label = f"{row.provider_id}/{row.model_id}"
-                bline = (
-                    f"  └─  {label}  {row.message_count}  "
-                    f"{_format_int(row.tokens.input)}  "
-                    f"{_format_int(row.tokens.output)}  "
-                    f"{_format_int(row.tokens.reasoning)}  "
-                    f"{_format_int(row.tokens.cache_read)}  "
-                    f"{_format_int(row.tokens.cache_write)}  "
-                    f"{_format_int(row.tokens.cache_output)}  "
-                    f"{_format_int(row.tokens.total)}  "
-                    f"{_format_cost(row.costs.actual_cost_usd)}  "
-                    f"{_format_cost(row.costs.virtual_cost_usd)}"
-                )
-                typer.echo(bline)
 
 
 def _usage_runs(
@@ -1532,6 +1789,7 @@ def _usage_runs(
     last: bool,
     include_archived: bool,
     archived_only: bool,
+    rich_output: bool,
 ) -> dict[str, object] | None:
     from toktrail.db import summarize_usage_runs
     from toktrail.periods import _resolve_timezone, parse_cli_boundary
@@ -1568,7 +1826,7 @@ def _usage_runs(
     if json_output:
         return runs_report.as_dict()
 
-    _print_usage_runs(runs_report, utc=utc)
+    _print_usage_runs(runs_report, utc=utc, rich_output=rich_output)
     return None
 
 
@@ -1576,6 +1834,7 @@ def _print_usage_runs(
     report: object,
     *,
     utc: bool,
+    rich_output: bool,
 ) -> None:
     from toktrail.formatting import format_epoch_ms_compact
     from toktrail.reporting import UsageRunsReport
@@ -1590,40 +1849,93 @@ def _print_usage_runs(
         typer.echo("No usage data.")
         return
 
-    header = (
-        "run  name  started  ended  msgs  models  "
-        "input  output  reasoning  cache_r  cache_w  cache_o  "
-        "total  source  actual  virtual  savings  unpriced"
-    )
-    typer.echo(header)
-
-    for run in report.runs:
-        tokens = run.tokens
-        costs = run.costs
-        models = ", ".join(run.models)
-        started_str = format_epoch_ms_compact(run.started_at_ms, utc=utc)
-        ended_str = (
-            format_epoch_ms_compact(run.ended_at_ms, utc=utc)
+    rows = [
+        {
+            "run": _format_int(run.run_id),
+            "name": run.name or "-",
+            "started": format_epoch_ms_compact(run.started_at_ms, utc=utc),
+            "ended": format_epoch_ms_compact(run.ended_at_ms, utc=utc)
             if run.ended_at_ms is not None
-            else "-"
-        )
-        name_str = run.name or "-"
-        line = (
-            f"{run.run_id}  {name_str}  {started_str}  {ended_str}  "
-            f"{run.message_count}  {models}  "
-            f"{_format_int(tokens.input)}  {_format_int(tokens.output)}  "
-            f"{_format_int(tokens.reasoning)}  "
-            f"{_format_int(tokens.cache_read)}  "
-            f"{_format_int(tokens.cache_write)}  "
-            f"{_format_int(tokens.cache_output)}  "
-            f"{_format_int(tokens.total)}  "
-            f"{_format_cost(costs.source_cost_usd)}  "
-            f"{_format_cost(costs.actual_cost_usd)}  "
-            f"{_format_cost(costs.virtual_cost_usd)}  "
-            f"{_format_cost(costs.savings_usd)}  "
-            f"{costs.unpriced_count}"
-        )
-        typer.echo(line)
+            else "-",
+            "msgs": _format_int(run.message_count),
+            "models": _format_model_list(run.models, rich_output=rich_output),
+            "input": _format_int(run.tokens.input),
+            "output": _format_int(run.tokens.output),
+            "reasoning": _format_int(run.tokens.reasoning),
+            "cache_r": _format_int(run.tokens.cache_read),
+            "cache_w": _format_int(run.tokens.cache_write),
+            "cache_o": _format_int(run.tokens.cache_output),
+            "total": _format_int(run.tokens.total),
+            "source": _format_cost(run.costs.source_cost_usd),
+            "actual": _format_cost(run.costs.actual_cost_usd),
+            "virtual": _format_cost(run.costs.virtual_cost_usd),
+            "savings": _format_cost(run.costs.savings_usd),
+            "unpriced": _format_int(run.costs.unpriced_count),
+        }
+        for run in report.runs
+    ]
+    _print_table(
+        rows,
+        [
+            "run",
+            "name",
+            "started",
+            "ended",
+            "msgs",
+            "models",
+            "input",
+            "output",
+            "reasoning",
+            "cache_r",
+            "cache_w",
+            "cache_o",
+            "total",
+            "source",
+            "actual",
+            "virtual",
+            "savings",
+            "unpriced",
+        ],
+        {
+            "run": "run",
+            "name": "name",
+            "started": "started",
+            "ended": "ended",
+            "msgs": "msgs",
+            "models": "models",
+            "input": "input",
+            "output": "output",
+            "reasoning": "reasoning",
+            "cache_r": "cache_r",
+            "cache_w": "cache_w",
+            "cache_o": "cache_o",
+            "total": "total",
+            "source": "source",
+            "actual": "actual",
+            "virtual": "virtual",
+            "savings": "savings",
+            "unpriced": "unpriced",
+        },
+        rich_output=rich_output,
+        numeric_columns={
+            "run",
+            "msgs",
+            "input",
+            "output",
+            "reasoning",
+            "cache_r",
+            "cache_w",
+            "cache_o",
+            "total",
+            "source",
+            "actual",
+            "virtual",
+            "savings",
+            "unpriced",
+        },
+        wrap_columns={"name", "models"},
+        max_widths={"name": 24, "models": 48},
+    )
 
 
 def _usage_aggregate(
@@ -1769,6 +2081,15 @@ def _format_token_usage_line(tokens: TokenBreakdown) -> str:
     )
 
 
+def _format_model_list(models: tuple[str, ...], *, rich_output: bool) -> str:
+    if not models:
+        return "-"
+    if rich_output or len(models) <= 3:
+        return ", ".join(models)
+    shown = ", ".join(models[:2])
+    return f"{len(models)} models ({shown}, ...)"
+
+
 def _print_usage_summary(
     report: InternalRunReport,
     *,
@@ -1807,41 +2128,83 @@ def _print_usage_summary(
     typer.echo("By provider")
     by_provider: list[ProviderSummaryRow] = report.by_provider
     if by_provider:
-        for provider_row in by_provider:
-            cache_info = ""
-            if provider_row.tokens.cache_read:
-                cache_info = (
-                    f"   cached input {_format_int(provider_row.tokens.cache_read)}"
-                )
-            typer.echo(
-                f"  {provider_row.provider_id:<12}"
-                f"{_format_int(provider_row.total_tokens):>12} tokens"
-                f"{cache_info}   "
-                f"source {_format_cost(provider_row.source_cost_usd)}   "
-                f"actual {_format_cost(provider_row.actual_cost_usd)}   "
-                f"virtual {_format_cost(provider_row.virtual_cost_usd)}   "
-                f"savings {_format_cost(provider_row.savings_usd)}"
-            )
+        _print_table(
+            [
+                {
+                    "provider": provider_row.provider_id,
+                    "tokens": _format_int(provider_row.total_tokens),
+                    "cached_input": _format_int(provider_row.tokens.cache_read)
+                    if provider_row.tokens.cache_read
+                    else "",
+                    "source": _format_cost(provider_row.source_cost_usd),
+                    "actual": _format_cost(provider_row.actual_cost_usd),
+                    "virtual": _format_cost(provider_row.virtual_cost_usd),
+                    "savings": _format_cost(provider_row.savings_usd),
+                }
+                for provider_row in by_provider
+            ],
+            [
+                "provider",
+                "tokens",
+                "cached_input",
+                "source",
+                "actual",
+                "virtual",
+                "savings",
+            ],
+            {
+                "provider": "provider",
+                "tokens": "tokens",
+                "cached_input": "cached_input",
+                "source": "source",
+                "actual": "actual",
+                "virtual": "virtual",
+                "savings": "savings",
+            },
+            rich_output=rich_output,
+            numeric_columns={
+                "tokens",
+                "cached_input",
+                "source",
+                "actual",
+                "virtual",
+                "savings",
+            },
+        )
+    else:
         typer.echo("  (none)")
 
     typer.echo("")
     typer.echo("By harness")
     by_harness = report.by_harness
     if by_harness:
-        for harness_row in by_harness:
-            cache_info = ""
-            if harness_row.tokens.cache_read:
-                cache_info = (
-                    f"   cached input {_format_int(harness_row.tokens.cache_read)}"
-                )
-            typer.echo(
-                f"  {harness_row.harness:<12}"
-                f"{_format_int(harness_row.total_tokens):>12} tokens"
-                f"{cache_info}   "
-                f"actual {_format_cost(harness_row.actual_cost_usd)}   "
-                f"virtual {_format_cost(harness_row.virtual_cost_usd)}   "
-                f"savings {_format_cost(harness_row.savings_usd)}"
-            )
+        _print_table(
+            [
+                {
+                    "harness": harness_row.harness,
+                    "tokens": _format_int(harness_row.total_tokens),
+                    "cached_input": _format_int(harness_row.tokens.cache_read)
+                    if harness_row.tokens.cache_read
+                    else "",
+                    "actual": _format_cost(harness_row.actual_cost_usd),
+                    "virtual": _format_cost(harness_row.virtual_cost_usd),
+                    "savings": _format_cost(harness_row.savings_usd),
+                }
+                for harness_row in by_harness
+            ],
+            ["harness", "tokens", "cached_input", "actual", "virtual", "savings"],
+            {
+                "harness": "harness",
+                "tokens": "tokens",
+                "cached_input": "cached_input",
+                "actual": "actual",
+                "virtual": "virtual",
+                "savings": "savings",
+            },
+            rich_output=rich_output,
+            numeric_columns={"tokens", "cached_input", "actual", "virtual", "savings"},
+        )
+    else:
         typer.echo("  (none)")
 
     typer.echo("")
@@ -1856,20 +2219,32 @@ def _print_usage_summary(
     typer.echo("By activity")
     by_activity = report.by_activity
     if by_activity:
-        for agent_row in by_activity:
-            cache_info = ""
-            if agent_row.tokens.cache_read:
-                cache_info = (
-                    f"   cached input {_format_int(agent_row.tokens.cache_read)}"
-                )
-            typer.echo(
-                f"  {agent_row.agent:<12}"
-                f"{_format_int(agent_row.total_tokens):>12} tokens"
-                f"{cache_info}   "
-                f"actual {_format_cost(agent_row.actual_cost_usd)}   "
-                f"virtual {_format_cost(agent_row.virtual_cost_usd)}   "
-                f"savings {_format_cost(agent_row.savings_usd)}"
-            )
+        _print_table(
+            [
+                {
+                    "activity": agent_row.agent or "-",
+                    "tokens": _format_int(agent_row.total_tokens),
+                    "cached_input": _format_int(agent_row.tokens.cache_read)
+                    if agent_row.tokens.cache_read
+                    else "",
+                    "actual": _format_cost(agent_row.actual_cost_usd),
+                    "virtual": _format_cost(agent_row.virtual_cost_usd),
+                    "savings": _format_cost(agent_row.savings_usd),
+                }
+                for agent_row in by_activity
+            ],
+            ["activity", "tokens", "cached_input", "actual", "virtual", "savings"],
+            {
+                "activity": "activity",
+                "tokens": "tokens",
+                "cached_input": "cached_input",
+                "actual": "actual",
+                "virtual": "virtual",
+                "savings": "savings",
+            },
+            rich_output=rich_output,
+            numeric_columns={"tokens", "cached_input", "actual", "virtual", "savings"},
+        )
     else:
         typer.echo("  (none)")
 
@@ -1962,6 +2337,9 @@ def _print_subscription_usage_report(
                     "break_even": "break-even",
                 },
                 rich_output=rich_output,
+                numeric_columns={"fixed", "value", "net_savings"},
+                wrap_columns={"window"},
+                max_widths={"window": 40},
             )
             typer.echo("")
             typer.echo("Quota windows")
@@ -2033,6 +2411,9 @@ def _print_subscription_usage_report(
                 "used_pct": "used%",
             },
             rich_output=rich_output,
+            numeric_columns={"limit", "used", "left", "used_pct"},
+            wrap_columns={"resets", "window"},
+            max_widths={"resets": 24, "window": 40},
         )
         if deduped_warnings:
             typer.echo("")
@@ -3638,7 +4019,27 @@ def _print_source_session_list(
         }
         for summary in summaries
     ]
-    _print_table(rows, selected_columns, headers, rich_output=rich_output)
+    _print_table(
+        rows,
+        selected_columns,
+        headers,
+        rich_output=rich_output,
+        numeric_columns={
+            "msgs",
+            "input",
+            "output",
+            "reasoning",
+            "cache_r",
+            "cache_w",
+            "total",
+            "source_cost",
+            "actual",
+            "virtual",
+            "savings",
+        },
+        wrap_columns={"providers", "models", "source_paths"},
+        max_widths={"providers": 24, "models": 32, "source_paths": 48},
+    )
 
 
 def _print_source_session_detail(
@@ -3832,15 +4233,25 @@ def _render_table(
     rows: list[dict[str, str]],
     columns: list[str],
     headers: dict[str, str],
+    *,
+    numeric_columns: set[str] | None = None,
 ) -> str:
+    numeric = numeric_columns or set()
     widths = {
         column: max([len(headers[column]), *(len(row.get(column, "")) for row in rows)])
         for column in columns
     }
-    lines = ["  ".join(headers[column].ljust(widths[column]) for column in columns)]
+
+    def _cell(column: str, value: str) -> str:
+        width = widths[column]
+        if column in numeric:
+            return value.rjust(width)
+        return value.ljust(width)
+
+    lines = ["  ".join(_cell(column, headers[column]) for column in columns)]
     for row in rows:
         lines.append(
-            "  ".join(row.get(column, "").ljust(widths[column]) for column in columns)
+            "  ".join(_cell(column, row.get(column, "")) for column in columns)
         )
     return "\n".join(lines)
 
@@ -3851,20 +4262,39 @@ def _print_table(
     headers: dict[str, str],
     *,
     rich_output: bool,
+    numeric_columns: set[str] | None = None,
+    wrap_columns: set[str] | None = None,
+    max_widths: dict[str, int] | None = None,
 ) -> None:
+    numeric = numeric_columns or set()
+    wrap = wrap_columns or set()
+    widths = max_widths or {}
     if not rich_output:
-        typer.echo(_render_table(rows, columns, headers))
+        typer.echo(_render_table(rows, columns, headers, numeric_columns=numeric))
         return
 
     try:
+        from rich import box
         from rich.console import Console
         from rich.table import Table
     except ImportError:
         _exit_with_error("Rich output requires installing toktrail[rich].")
 
-    table = Table(show_header=True, header_style="bold")
+    table = Table(
+        show_header=True,
+        header_style="bold",
+        box=box.ROUNDED,
+        show_lines=False,
+        expand=False,
+    )
     for column in columns:
-        table.add_column(headers[column])
+        table.add_column(
+            headers[column],
+            justify="right" if column in numeric else "left",
+            no_wrap=column not in wrap,
+            overflow="fold" if column in wrap else "ellipsis",
+            max_width=widths.get(column),
+        )
     for row in rows:
         table.add_row(*(row.get(column, "") for column in columns))
     Console().print(table)
@@ -3932,6 +4362,19 @@ def _print_model_table(
         columns,
         headers,
         rich_output=rich_output,
+        numeric_columns={
+            "msgs",
+            "input",
+            "output",
+            "reasoning",
+            "cache_r",
+            "cache_w",
+            "cache_o",
+            "total",
+            "actual",
+            "virtual",
+            "savings",
+        },
     )
 
 
@@ -3987,7 +4430,22 @@ def _print_unconfigured_model_table(
             "total",
         ]
     )
-    _print_table(payload_rows, columns, headers, rich_output=rich_output)
+    _print_table(
+        payload_rows,
+        columns,
+        headers,
+        rich_output=rich_output,
+        numeric_columns={
+            "msgs",
+            "input",
+            "output",
+            "reasoning",
+            "cache_r",
+            "cache_w",
+            "cache_o",
+            "total",
+        },
+    )
 
 
 def _normalize_report_display_filter(
@@ -4571,7 +5029,21 @@ def _print_price_table(
             "release",
         ]
     )
-    _print_table(payload_rows, columns, headers, rich_output=rich_output)
+    _print_table(
+        payload_rows,
+        columns,
+        headers,
+        rich_output=rich_output,
+        numeric_columns={
+            "input",
+            "cached_input",
+            "cache_write",
+            "output",
+            "reasoning",
+        },
+        wrap_columns={"aliases"},
+        max_widths={"aliases": 32},
+    )
 
 
 def _format_price_context(row: dict[str, object]) -> str:
@@ -4720,6 +5192,20 @@ def _print_session_cache_analysis_report(
                 "flags": "flags",
             },
             rich_output=rich_output,
+            numeric_columns={
+                "n",
+                "context",
+                "prompt",
+                "cache_r",
+                "out",
+                "source",
+                "virtual",
+                "uncached",
+                "save",
+                "src_1m_prompt",
+            },
+            wrap_columns={"model", "flags"},
+            max_widths={"model": 28, "flags": 24},
         )
 
     if report.clusters:
@@ -4770,6 +5256,16 @@ def _print_session_cache_analysis_report(
                 "ordinals": "call #",
             },
             rich_output=rich_output,
+            numeric_columns={
+                "calls",
+                "hits",
+                "misses",
+                "hit_median",
+                "miss_median",
+                "loss",
+            },
+            wrap_columns={"ordinals"},
+            max_widths={"ordinals": 28},
         )
 
 
@@ -4892,6 +5388,7 @@ def _print_configured_refresh_results(results: tuple[ImportUsageResult, ...]) ->
             "status": "status",
         },
         rich_output=False,
+        numeric_columns={"inserted", "linked", "scope_excluded", "skipped"},
     )
 
 

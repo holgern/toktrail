@@ -1160,9 +1160,7 @@ def insert_usage_events(
             if usage_event_matches_run_scope(event, effective_scope)
         ]
     )
-    link_event_keys = {
-        (event.harness, event.global_dedup_key) for event in link_events
-    }
+    link_event_keys = {(event.harness, event.global_dedup_key) for event in link_events}
     harness_session_ids: dict[tuple[str, str], int] = {}
     imported_at_ms = _now_ms()
     rows_inserted = 0

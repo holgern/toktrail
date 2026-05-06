@@ -216,6 +216,7 @@ __marimo__/
 
 .codex
 .pi-lens/
+.commandcode/
 
 # Streamlit
 .streamlit/secrets.toml

@@ -106,6 +106,23 @@ def create_source_db(path: Path) -> None:
     conn.close()
 
 
+def _rich_is_available() -> bool:
+    try:
+        import rich  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+def _assert_rich_result_or_missing_dependency(result) -> None:
+    if _rich_is_available():
+        assert result.exit_code == 0, result.output
+        assert any(ch in result.output for ch in "┏┌╭"), result.output
+    else:
+        assert result.exit_code != 0
+        assert "Rich output requires installing toktrail[rich]." in result.output
+
+
 def make_cli_usage_event(
     dedup_suffix: str,
     *,
@@ -4230,6 +4247,78 @@ def test_cli_usage_summary_human_output_contains_by_provider(tmp_path) -> None:
 
     assert result.exit_code == 0, result.output
     assert "By provider" in result.output
+    assert "By harness" in result.output
+
+    provider_section = result.output.split("By provider", 1)[1].split("By harness", 1)[
+        0
+    ]
+    harness_section = result.output.split("By harness", 1)[1].split("By model", 1)[0]
+    assert "(none)" not in provider_section
+    assert "(none)" not in harness_section
+
+
+def test_cli_usage_today_plain_default_is_borderless(tmp_path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    source_db = tmp_path / "opencode.db"
+    create_source_db(source_db)
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "refresh",
+            "--harness",
+            "opencode",
+            "--source",
+            str(source_db),
+        ],
+    )
+
+    result = runner.invoke(
+        app,
+        ["--db", str(state_db), "usage", "today", "--no-refresh"],
+    )
+    assert result.exit_code == 0, result.output
+    assert "By provider" in result.output
+    assert "By harness" in result.output
+    assert "By model" in result.output
+    assert "By activity" in result.output
+    assert not any(ch in result.output for ch in "┏┌╭┳┬╮")
+
+
+def test_cli_usage_today_rich_applies_to_table_sections(tmp_path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    source_db = tmp_path / "opencode.db"
+    create_source_db(source_db)
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "refresh",
+            "--harness",
+            "opencode",
+            "--source",
+            str(source_db),
+        ],
+    )
+
+    result = runner.invoke(
+        app,
+        ["--db", str(state_db), "usage", "today", "--rich", "--no-refresh"],
+    )
+    _assert_rich_result_or_missing_dependency(result)
+    if result.exit_code == 0:
+        assert "By provider" in result.output
+        assert "By harness" in result.output
+        assert "By model" in result.output
+        assert "By activity" in result.output
 
 
 def test_cli_usage_summary_json_contains_by_provider(tmp_path) -> None:
@@ -5093,7 +5182,8 @@ def test_cli_usage_sessions_breakdown(tmp_path) -> None:
         ],
     )
     assert result.exit_code == 0, result.output
-    assert "└─" in result.output
+    assert "Breakdown by provider/model" in result.output
+    assert "provider/model" in result.output
 
 
 def test_cli_usage_sessions_filters_harness_and_source_session(
@@ -5200,6 +5290,115 @@ def test_cli_usage_runs_human_output(tmp_path) -> None:
     )
     assert result.exit_code == 0, result.output
     assert "toktrail usage runs" in result.output
+
+
+def test_cli_usage_runs_rich_output(tmp_path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    source_db = tmp_path / "opencode.db"
+    create_source_db(source_db)
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    runner.invoke(app, ["--db", str(state_db), "run", "start", "--name", "usage-runs"])
+    runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "refresh",
+            "--harness",
+            "opencode",
+            "--source",
+            str(source_db),
+        ],
+    )
+
+    plain = runner.invoke(
+        app,
+        ["--db", str(state_db), "usage", "runs", "--no-refresh"],
+    )
+    assert plain.exit_code == 0, plain.output
+    assert not any(ch in plain.output for ch in "┏┌╭")
+
+    rich = runner.invoke(
+        app,
+        ["--db", str(state_db), "usage", "runs", "--rich", "--no-refresh"],
+    )
+    _assert_rich_result_or_missing_dependency(rich)
+    if rich.exit_code == 0:
+        assert "toktrail usage runs" in rich.output
+
+
+def test_cli_usage_sessions_rich_output(tmp_path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    source_db = tmp_path / "opencode.db"
+    create_source_db(source_db)
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "refresh",
+            "--harness",
+            "opencode",
+            "--source",
+            str(source_db),
+        ],
+    )
+
+    plain = runner.invoke(
+        app,
+        ["--db", str(state_db), "usage", "sessions", "--no-refresh"],
+    )
+    assert plain.exit_code == 0, plain.output
+    assert not any(ch in plain.output for ch in "┏┌╭")
+
+    rich = runner.invoke(
+        app,
+        ["--db", str(state_db), "usage", "sessions", "--rich", "--no-refresh"],
+    )
+    _assert_rich_result_or_missing_dependency(rich)
+    if rich.exit_code == 0:
+        assert "toktrail usage sessions" in rich.output
+
+
+def test_cli_usage_daily_rich_output(tmp_path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    source_db = tmp_path / "opencode.db"
+    create_source_db(source_db)
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "refresh",
+            "--harness",
+            "opencode",
+            "--source",
+            str(source_db),
+        ],
+    )
+
+    plain = runner.invoke(
+        app,
+        ["--db", str(state_db), "usage", "daily", "--no-refresh"],
+    )
+    assert plain.exit_code == 0, plain.output
+    assert not any(ch in plain.output for ch in "┏┌╭")
+
+    rich = runner.invoke(
+        app,
+        ["--db", str(state_db), "usage", "daily", "--rich", "--no-refresh"],
+    )
+    _assert_rich_result_or_missing_dependency(rich)
+    if rich.exit_code == 0:
+        assert "toktrail usage daily" in rich.output
 
 
 def test_cli_usage_runs_json_shape(tmp_path) -> None:
