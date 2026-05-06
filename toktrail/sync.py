@@ -356,7 +356,11 @@ def _safe_extract_archive(archive_path: Path, temp_dir: Path) -> None:
             if not member.isfile():
                 msg = f"Unsupported archive member: {member.name}"
                 raise ValueError(msg)
-        tar.extractall(temp_dir, filter="data")
+        try:
+            tar.extractall(temp_dir, filter="data")
+        except TypeError:
+            # Python versions before tarfile's extraction filter support.
+            tar.extractall(temp_dir)
 
 
 def _find_manifest(temp_dir: Path) -> Path:

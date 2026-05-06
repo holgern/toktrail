@@ -256,9 +256,7 @@ def record_usage_event(
     event_created_ms = created_ms if created_ms is not None else _now_ms()
     event_completed_ms = completed_ms
     normalized_cost = _normalize_decimal(source_cost_usd)
-    serialized_raw_json = (
-        _serialize_raw_json(raw_json) if include_raw_json else None
-    )
+    serialized_raw_json = _serialize_raw_json(raw_json) if include_raw_json else None
 
     dedup_key = source_dedup_key
     if dedup_key is not None:
