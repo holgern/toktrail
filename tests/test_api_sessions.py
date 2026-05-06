@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import pytest
 
+from toktrail.api.models import RunScope
 from toktrail.api.sessions import (
+    archive_run,
     get_active_run,
     get_run,
     init_state,
@@ -10,6 +12,7 @@ from toktrail.api.sessions import (
     require_active_run,
     start_run,
     stop_run,
+    unarchive_run,
 )
 from toktrail.errors import (
     ActiveRunExistsError,
@@ -86,3 +89,59 @@ def test_api_explicit_db_path_overrides_environment(monkeypatch, tmp_path) -> No
     assert explicit_db.exists()
     assert env_db.exists() is False
     assert session.id == sessions[0].id
+
+
+def test_api_start_run_accepts_scope(tmp_path) -> None:
+    db_path = tmp_path / "toktrail.db"
+    init_state(db_path)
+
+    run = start_run(
+        db_path,
+        name="scoped",
+        scope=RunScope(harnesses=("codex",), provider_ids=("openai",)),
+    )
+
+    assert run.scope.harnesses == ("codex",)
+    assert run.scope.provider_ids == ("openai",)
+
+
+def test_api_archive_and_unarchive_run(tmp_path) -> None:
+    db_path = tmp_path / "toktrail.db"
+    init_state(db_path)
+    run = start_run(db_path, name="archive")
+    stop_run(db_path, run.id)
+
+    archived = archive_run(db_path, run.id)
+    unarchived = unarchive_run(db_path, run.id)
+
+    assert archived.archived_at_ms is not None
+    assert unarchived.archived_at_ms is None
+
+
+def test_api_list_runs_excludes_archived_by_default(tmp_path) -> None:
+    db_path = tmp_path / "toktrail.db"
+    init_state(db_path)
+    run = start_run(db_path, name="archive")
+    stop_run(db_path, run.id)
+    archive_run(db_path, run.id)
+
+    default_runs = list_runs(db_path)
+    archived_runs = list_runs(db_path, include_archived=True)
+    archived_only = list_runs(db_path, archived_only=True)
+
+    assert all(item.id != run.id for item in default_runs)
+    assert any(item.id == run.id for item in archived_runs)
+    assert [item.id for item in archived_only] == [run.id]
+
+
+def test_public_run_json_includes_scope_and_archived_at_ms(tmp_path) -> None:
+    db_path = tmp_path / "toktrail.db"
+    init_state(db_path)
+    run = start_run(db_path, name="scoped", scope=RunScope(harnesses=("codex",)))
+    stop_run(db_path, run.id)
+    archived = archive_run(db_path, run.id)
+
+    payload = archived.as_dict()
+
+    assert payload["scope"]["harnesses"] == ["codex"]
+    assert payload["archived_at_ms"] is not None

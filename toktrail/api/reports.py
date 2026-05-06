@@ -313,6 +313,8 @@ def usage_runs_report(
     limit: int | None = 10,
     order: str = "desc",
     split_thinking: bool = False,
+    include_archived: bool = False,
+    archived_only: bool = False,
     config_path: Path | None = None,
 ) -> object:
     from toktrail.db import migrate, summarize_usage_runs
@@ -341,6 +343,8 @@ def usage_runs_report(
                 split_thinking=split_thinking,
                 limit=limit,
                 order=order,
+                include_archived=include_archived,
+                archived_only=archived_only,
             ),
             costing_config=costing_config,
         )

@@ -43,6 +43,10 @@ The reports module includes ``subscription_usage_report()`` for provider
 subscription quota windows and ``usage_report()``/``session_report()`` for
 run and period usage summaries with provider-level breakdowns.
 
+The sessions module includes scoped run lifecycle helpers
+(``start_run(..., scope=RunScope(...))``, ``archive_run()``,
+``unarchive_run()``, and archive-aware ``list_runs()`` filters).
+
 The sync module provides ``export_state_archive()`` and
 ``import_state_archive()`` for cross-machine state archive workflows.
 

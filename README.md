@@ -109,6 +109,8 @@ Start a tracking session:
 
 ```bash
 toktrail run start --name refactor-auth-flow
+toktrail run start --name codex-task --harness codex
+toktrail run start --name openai-gpt --provider openai --model gpt-5.5
 ```
 
 Refresh usage from config or a single harness:
@@ -157,6 +159,7 @@ toktrail usage today --refresh-details
 toktrail usage sessions --last
 toktrail usage sessions --order asc --limit 10
 toktrail usage runs --last --limit 5
+toktrail usage runs --archived
 toktrail subscriptions status
 toktrail subscriptions status --timezone Europe/Berlin
 toktrail subscriptions status --utc
@@ -170,6 +173,9 @@ Stop the active tracking session:
 
 ```bash
 toktrail run stop
+toktrail run archive 42
+toktrail run list --archived
+toktrail run unarchive 42
 ```
 
 ## Command model

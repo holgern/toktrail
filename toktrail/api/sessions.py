@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Sequence
 from pathlib import Path
 
 from toktrail import db as db_module
 from toktrail.api._common import _open_state_db
 from toktrail.api._conversions import _to_public_run
-from toktrail.api.models import Run
+from toktrail.api.harnesses import get_harness_definition
+from toktrail.api.models import Run, RunScope
 from toktrail.errors import (
     ActiveRunExistsError,
     NoActiveRunError,
@@ -27,13 +29,45 @@ def start_run(
     *,
     name: str | None = None,
     started_at_ms: int | None = None,
+    scope: RunScope | None = None,
+    harnesses: Sequence[str] = (),
+    provider_ids: Sequence[str] = (),
+    model_ids: Sequence[str] = (),
+    source_session_ids: Sequence[str] = (),
+    thinking_levels: Sequence[str] = (),
+    agents: Sequence[str] = (),
 ) -> Run:
+    provided_components = any(
+        (
+            harnesses,
+            provider_ids,
+            model_ids,
+            source_session_ids,
+            thinking_levels,
+            agents,
+        )
+    )
+    if scope is not None and provided_components:
+        msg = "Pass either scope or individual scope sequences, not both."
+        raise StateDatabaseError(msg)
+    selected_scope = scope
+    if selected_scope is None and provided_components:
+        selected_scope = RunScope(
+            harnesses=tuple(harnesses),
+            provider_ids=tuple(provider_ids),
+            model_ids=tuple(model_ids),
+            source_session_ids=tuple(source_session_ids),
+            thinking_levels=tuple(thinking_levels),
+            agents=tuple(agents),
+        )
+    internal_scope = _to_internal_scope(selected_scope)
     conn, _ = _open_state_db(db_path)
     try:
         run_id = db_module.create_tracking_session(
             conn,
             name,
             started_at_ms=started_at_ms,
+            scope=internal_scope,
         )
         run = db_module.get_tracking_session(conn, run_id)
     except ValueError as exc:
@@ -143,10 +177,19 @@ def list_runs(
     *,
     limit: int | None = None,
     include_ended: bool = True,
+    include_archived: bool = False,
+    archived_only: bool = False,
+    active_only: bool = False,
 ) -> tuple[Run, ...]:
     conn, _ = _open_state_db(db_path)
     try:
-        runs = db_module.list_tracking_sessions(conn)
+        runs = db_module.list_tracking_sessions(
+            conn,
+            include_archived=include_archived,
+            archived_only=archived_only,
+            active_only=active_only,
+            include_ended=include_ended,
+        )
     finally:
         conn.close()
     public_runs = tuple(
@@ -155,14 +198,86 @@ def list_runs(
         for public_run in (_to_public_run(run),)
         if public_run is not None
     )
-    if not include_ended:
-        public_runs = tuple(run for run in public_runs if run.active)
     if limit is not None:
         public_runs = public_runs[:limit]
     return public_runs
 
 
+def archive_run(
+    db_path: Path | None,
+    run_id: int,
+    *,
+    archived_at_ms: int | None = None,
+) -> Run:
+    conn, _ = _open_state_db(db_path)
+    try:
+        db_module.archive_tracking_session(
+            conn,
+            run_id,
+            archived_at_ms=archived_at_ms,
+        )
+        run = db_module.get_tracking_session(conn, run_id)
+    except ValueError as exc:
+        text = str(exc)
+        if "not found" in text:
+            raise RunNotFoundError(text) from exc
+        raise StateDatabaseError(text) from exc
+    except sqlite3.Error as exc:
+        raise StateDatabaseError(str(exc)) from exc
+    finally:
+        conn.close()
+    if run is None:
+        msg = f"Run not found after archive: {run_id}"
+        raise StateDatabaseError(msg)
+    public_run = _to_public_run(run)
+    if public_run is None:
+        msg = f"Run not found after archive: {run_id}"
+        raise StateDatabaseError(msg)
+    return public_run
+
+
+def unarchive_run(db_path: Path | None, run_id: int) -> Run:
+    conn, _ = _open_state_db(db_path)
+    try:
+        db_module.unarchive_tracking_session(conn, run_id)
+        run = db_module.get_tracking_session(conn, run_id)
+    except ValueError as exc:
+        text = str(exc)
+        if "not found" in text:
+            raise RunNotFoundError(text) from exc
+        raise StateDatabaseError(text) from exc
+    except sqlite3.Error as exc:
+        raise StateDatabaseError(str(exc)) from exc
+    finally:
+        conn.close()
+    if run is None:
+        msg = f"Run not found after unarchive: {run_id}"
+        raise StateDatabaseError(msg)
+    public_run = _to_public_run(run)
+    if public_run is None:
+        msg = f"Run not found after unarchive: {run_id}"
+        raise StateDatabaseError(msg)
+    return public_run
+
+
+def _to_internal_scope(scope: RunScope | None) -> db_module.RunScope | None:
+    if scope is None:
+        return None
+    normalized_harnesses: list[str] = []
+    for harness in scope.harnesses:
+        normalized_harnesses.append(get_harness_definition(harness).name)
+    return db_module.RunScope(
+        harnesses=tuple(normalized_harnesses),
+        provider_ids=tuple(scope.provider_ids),
+        model_ids=tuple(scope.model_ids),
+        source_session_ids=tuple(scope.source_session_ids),
+        thinking_levels=tuple(scope.thinking_levels),
+        agents=tuple(scope.agents),
+    )
+
+
 __all__ = [
+    "archive_run",
     "get_active_run",
     "get_run",
     "init_state",
@@ -170,4 +285,5 @@ __all__ = [
     "require_active_run",
     "start_run",
     "stop_run",
+    "unarchive_run",
 ]

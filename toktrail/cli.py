@@ -27,7 +27,13 @@ from toktrail.adapters.summary import (
 from toktrail.api.analysis import session_cache_analysis as session_cache_analysis_api
 from toktrail.api.environment import prepare_environment as prepare_api_environment
 from toktrail.api.imports import import_configured_usage as import_configured_usage_api
-from toktrail.api.models import ImportUsageResult, SessionCacheAnalysisReport
+from toktrail.api.models import (
+    ImportUsageResult,
+    SessionCacheAnalysisReport,
+)
+from toktrail.api.models import (
+    RunScope as PublicRunScope,
+)
 from toktrail.api.sessions import list_runs
 from toktrail.api.sources import capture_source_snapshot
 from toktrail.cli_sync import sync_app
@@ -47,6 +53,7 @@ from toktrail.config import (
 )
 from toktrail.db import (
     InsertUsageResult,
+    archive_tracking_session,
     connect,
     create_tracking_session,
     end_tracking_session,
@@ -56,10 +63,16 @@ from toktrail.db import (
     migrate,
     summarize_subscription_usage,
     summarize_usage,
+    unarchive_tracking_session,
 )
 from toktrail.errors import InvalidAPIUsageError, ToktrailError
 from toktrail.formatting import format_epoch_ms_compact
-from toktrail.models import TokenBreakdown, UsageEvent
+from toktrail.models import (
+    RunScope,
+    TokenBreakdown,
+    UsageEvent,
+    normalize_thinking_level,
+)
 from toktrail.paths import (
     new_copilot_otel_file_path,
     resolve_toktrail_config_path,
@@ -379,15 +392,46 @@ def init(ctx: typer.Context) -> None:
 def start(
     ctx: typer.Context,
     name: NameOption = None,
+    harnesses: Annotated[list[str] | None, typer.Option("--harness")] = None,
+    provider_ids: Annotated[list[str] | None, typer.Option("--provider")] = None,
+    model_ids: Annotated[list[str] | None, typer.Option("--model")] = None,
+    source_session_ids: Annotated[
+        list[str] | None,
+        typer.Option("--source-session"),
+    ] = None,
+    thinking_levels: Annotated[list[str] | None, typer.Option("--thinking")] = None,
+    agents: Annotated[list[str] | None, typer.Option("--agent")] = None,
+    json_output: JsonOption = False,
 ) -> None:
+    harnesses = harnesses or []
+    provider_ids = provider_ids or []
+    model_ids = model_ids or []
+    source_session_ids = source_session_ids or []
+    thinking_levels = thinking_levels or []
+    agents = agents or []
     conn = _open_toktrail_connection(ctx)
+    scope = _build_run_scope_or_exit(
+        harnesses=harnesses,
+        provider_ids=provider_ids,
+        model_ids=model_ids,
+        source_session_ids=source_session_ids,
+        thinking_levels=thinking_levels,
+        agents=agents,
+    )
     try:
-        session_id = create_tracking_session(conn, name)
+        session_id = create_tracking_session(conn, name, scope=scope)
+        run = get_tracking_session(conn, session_id)
     except ValueError as exc:
         _exit_with_error(str(exc))
     finally:
         conn.close()
+    if run is None:
+        _exit_with_error(f"Run not found after creation: {session_id}")
+    if json_output:
+        typer.echo(json.dumps(run.as_dict(), indent=2))
+        return
     typer.echo(f"Started run {session_id}: {name or '(unnamed)'}")
+    typer.echo(f"Scope: {_format_scope_summary(run.scope)}")
 
 
 @run_app.command()
@@ -412,7 +456,7 @@ def stop(
             _exit_with_error(f"Run not found: {selected_session_id}")
     finally:
         conn.close()
-    _refresh_before_report(
+    refresh_results = _refresh_before_report(
         ctx,
         enabled=refresh,
         details=refresh_details,
@@ -428,6 +472,9 @@ def stop(
     finally:
         conn.close()
     typer.echo(f"Stopped run {selected_session_id}: {session.name or '(unnamed)'}")
+    excluded_total = sum(result.rows_scope_excluded for result in refresh_results)
+    if excluded_total > 0:
+        typer.echo(f"Linked events excluded by scope: {excluded_total}")
 
 
 @run_app.command()
@@ -546,6 +593,9 @@ def status(
         msg = "Run report unexpectedly has no session."
         raise TypeError(msg)
     typer.echo(f"toktrail run {session.id}: {session.name or '(unnamed)'}")
+    typer.echo(f"Scope: {_format_scope_summary(session.scope)}")
+    if session.archived_at_ms is not None:
+        typer.echo(f"Archived: {format_epoch_ms_compact(session.archived_at_ms)}")
     _print_usage_summary(
         report,
         rich_output=rich_output,
@@ -558,14 +608,37 @@ def status(
 @run_app.command("list")
 def list_command(
     ctx: typer.Context,
+    active: Annotated[bool, typer.Option("--active")] = False,
+    ended: Annotated[bool, typer.Option("--ended")] = False,
+    archived: Annotated[bool, typer.Option("--archived")] = False,
+    all_runs: Annotated[bool, typer.Option("--all")] = False,
+    json_output: JsonOption = False,
     limit: ReportLimitOption = None,
     rich_output: RichOption = False,
 ) -> None:
     """List toktrail tracking runs."""
-    rows = list_runs(_resolve_state_db(ctx), limit=limit)
+    if archived and all_runs:
+        _exit_with_error("Use either --archived or --all, not both.")
+    if active and ended:
+        _exit_with_error("Use either --active or --ended, not both.")
+
+    rows = list_runs(
+        _resolve_state_db(ctx),
+        limit=limit,
+        include_ended=not active,
+        include_archived=all_runs,
+        archived_only=archived,
+        active_only=active,
+    )
+    if ended:
+        rows = tuple(run for run in rows if not run.active)
 
     if not rows:
         typer.echo("No toktrail runs found.")
+        return
+
+    if json_output:
+        typer.echo(json.dumps([run.as_dict() for run in rows], indent=2))
         return
 
     typer.echo(f"{len(rows)} toktrail run{'s' if len(rows) != 1 else ''}:\n")
@@ -573,7 +646,13 @@ def list_command(
     payload_rows = [
         {
             "id": str(run.id),
-            "active": "active" if run.active else "",
+            "state": "active"
+            if run.active
+            else ("archived" if run.archived_at_ms is not None else "ended"),
+            "archived": format_epoch_ms_compact(run.archived_at_ms)
+            if run.archived_at_ms
+            else "",
+            "scope": _format_scope_summary(run.scope),
             "name": run.name or "(unnamed)",
             "started": format_epoch_ms_compact(run.started_at_ms),
             "ended": format_epoch_ms_compact(run.ended_at_ms)
@@ -585,16 +664,120 @@ def list_command(
 
     _print_table(
         payload_rows,
-        ["id", "active", "name", "started", "ended"],
+        ["id", "state", "archived", "scope", "name", "started", "ended"],
         {
             "id": "ID",
-            "active": "Active",
+            "state": "State",
+            "archived": "Archived",
+            "scope": "Scope",
             "name": "Name",
             "started": "Started",
             "ended": "Ended",
         },
         rich_output=rich_output,
     )
+
+
+def _build_run_scope_or_exit(
+    *,
+    harnesses: list[str],
+    provider_ids: list[str],
+    model_ids: list[str],
+    source_session_ids: list[str],
+    thinking_levels: list[str],
+    agents: list[str],
+) -> RunScope:
+    normalized_harnesses: list[str] = []
+    for harness in harnesses:
+        normalized = normalize_identity(harness)
+        try:
+            definition = get_harness(normalized)
+        except ValueError:
+            _exit_with_error(f"Unsupported harness: {harness}")
+        normalized_harnesses.append(definition.name)
+
+    normalized_thinking: list[str] = []
+    for level in thinking_levels:
+        normalized_level = normalize_thinking_level(level)
+        if normalized_level is None:
+            _exit_with_error(f"Invalid thinking level: {level}")
+        normalized_thinking.append(normalized_level)
+
+    cleaned_source_sessions = [
+        value.strip() for value in source_session_ids if value.strip()
+    ]
+
+    return RunScope(
+        harnesses=tuple(normalized_harnesses),
+        provider_ids=tuple(provider_ids),
+        model_ids=tuple(model_ids),
+        source_session_ids=tuple(cleaned_source_sessions),
+        thinking_levels=tuple(normalized_thinking),
+        agents=tuple(agents),
+    )
+
+
+def _format_scope_summary(scope: RunScope | PublicRunScope) -> str:
+    if scope.empty:
+        return "all configured usage"
+    segments: list[str] = []
+    if scope.harnesses:
+        segments.append(f"harness={','.join(scope.harnesses)}")
+    if scope.provider_ids:
+        segments.append(f"provider={','.join(scope.provider_ids)}")
+    if scope.model_ids:
+        segments.append(f"model={','.join(scope.model_ids)}")
+    if scope.source_session_ids:
+        segments.append(f"source-session={','.join(scope.source_session_ids)}")
+    if scope.thinking_levels:
+        segments.append(f"thinking={','.join(scope.thinking_levels)}")
+    if scope.agents:
+        segments.append(f"agent={','.join(scope.agents)}")
+    return "; ".join(segments)
+
+
+@run_app.command("archive")
+def archive_command(
+    ctx: typer.Context,
+    run_id: Annotated[int, typer.Argument()],
+    json_output: JsonOption = False,
+) -> None:
+    conn = _open_toktrail_connection(ctx)
+    try:
+        archive_tracking_session(conn, run_id)
+        run = get_tracking_session(conn, run_id)
+    except ValueError as exc:
+        _exit_with_error(str(exc))
+    finally:
+        conn.close()
+    if run is None:
+        _exit_with_error(f"Run not found: {run_id}")
+    if json_output:
+        typer.echo(json.dumps(run.as_dict(), indent=2))
+        return
+    typer.echo(f"Archived run {run.id}: {run.name or '(unnamed)'}")
+
+
+@run_app.command("unarchive")
+def unarchive_command(
+    ctx: typer.Context,
+    run_id: Annotated[int, typer.Argument()],
+    json_output: JsonOption = False,
+) -> None:
+    conn = _open_toktrail_connection(ctx)
+    try:
+        unarchive_tracking_session(conn, run_id)
+        run = get_tracking_session(conn, run_id)
+    except ValueError as exc:
+        _exit_with_error(str(exc))
+    finally:
+        conn.close()
+    if run is None:
+        _exit_with_error(f"Run not found: {run_id}")
+    if json_output:
+        typer.echo(json.dumps(run.as_dict(), indent=2))
+        return
+    typer.echo(f"Unarchived run {run.id}: {run.name or '(unnamed)'}")
 
 
 @subscriptions_app.callback(invoke_without_command=True)
@@ -766,6 +949,8 @@ def usage(
     order: Annotated[str, typer.Option("--order")] = "desc",
     locale: Annotated[str | None, typer.Option("--locale")] = None,
     start_of_week: Annotated[str, typer.Option("--start-of-week")] = "monday",
+    archived: Annotated[bool, typer.Option("--archived")] = False,
+    all_runs: Annotated[bool, typer.Option("--all")] = False,
     refresh: RefreshOption = True,
     refresh_details: RefreshDetailsOption = False,
     raw: RawModeOption = None,
@@ -924,6 +1109,8 @@ def usage(
     if normalized_view in {"runs", "run"}:
         if instances:
             _exit_with_error("--instances is not supported for runs view.")
+        if archived and all_runs:
+            _exit_with_error("Use either --archived or --all, not both.")
         payload = _usage_runs(
             ctx=ctx,
             json_output=json_output,
@@ -939,6 +1126,8 @@ def usage(
             order=order,
             limit=limit,
             last=last,
+            include_archived=all_runs,
+            archived_only=archived,
         )
         if json_output:
             if payload is None:
@@ -1341,6 +1530,8 @@ def _usage_runs(
     order: str,
     limit: int | None,
     last: bool,
+    include_archived: bool,
+    archived_only: bool,
 ) -> dict[str, object] | None:
     from toktrail.db import summarize_usage_runs
     from toktrail.periods import _resolve_timezone, parse_cli_boundary
@@ -1366,6 +1557,8 @@ def _usage_runs(
                 order=order,
                 limit=limit,
                 last=last,
+                include_archived=include_archived,
+                archived_only=archived_only,
             ),
             costing_config=costing_config,
         )
@@ -2863,7 +3056,12 @@ def _run_harness_import(
             for event in scan.events
             if since_ms is None or event.created_ms >= since_ms
         ]
-        insert_result = insert_usage_events(conn, selected_session_id, filtered_events)
+        insert_result = insert_usage_events(
+            conn,
+            selected_session_id,
+            filtered_events,
+            link_scope=tracking_session.scope,
+        )
         rows_filtered = len(scan.events) - len(filtered_events)
     finally:
         conn.close()
@@ -2948,7 +3146,12 @@ def _run_harness_import_with_dry_run(
         # Works with or without a tracking session (selected_session_id can be None)
         if not dry_run:
             insert_result = insert_usage_events(
-                conn, selected_session_id, filtered_events
+                conn,
+                selected_session_id,
+                filtered_events,
+                link_scope=(
+                    tracking_session.scope if tracking_session is not None else None
+                ),
             )
         else:
             insert_result = InsertUsageResult(
@@ -4672,17 +4875,19 @@ def _print_configured_refresh_results(results: tuple[ImportUsageResult, ...]) ->
                 "harness": result.harness,
                 "inserted": _format_int(result.rows_imported),
                 "linked": _format_int(result.rows_linked),
+                "scope_excluded": _format_int(result.rows_scope_excluded),
                 "skipped": _format_int(result.rows_skipped),
                 "status": result.status,
             }
         )
     _print_table(
         rows,
-        ["harness", "inserted", "linked", "skipped", "status"],
+        ["harness", "inserted", "linked", "scope_excluded", "skipped", "status"],
         {
             "harness": "harness",
             "inserted": "inserted",
             "linked": "linked",
+            "scope_excluded": "scope excl",
             "skipped": "skipped",
             "status": "status",
         },

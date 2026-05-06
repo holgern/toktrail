@@ -10,15 +10,17 @@ from pathlib import Path
 import pytest
 
 from toktrail.db import (
+    archive_tracking_session,
     connect,
     create_tracking_session,
     end_tracking_session,
+    get_tracking_session,
     insert_usage_events,
     migrate,
     summarize_tracking_session,
     summarize_usage,
 )
-from toktrail.models import TokenBreakdown, UsageEvent
+from toktrail.models import RunScope, TokenBreakdown, UsageEvent
 from toktrail.reporting import UsageReportFilter
 from toktrail.sync import export_state_archive, import_state_archive
 
@@ -249,6 +251,47 @@ def test_sync_run_event_remapping_keeps_imported_run_reporting(tmp_path: Path) -
         conn.close()
 
     assert report.totals.tokens.total > 0
+
+
+def test_sync_preserves_run_scope_and_archived_metadata(tmp_path: Path) -> None:
+    db_a = tmp_path / "state-a.db"
+    db_b = tmp_path / "state-b.db"
+    archive = tmp_path / "a.tar.gz"
+
+    conn = connect(db_a)
+    try:
+        migrate(conn)
+        run_id = create_tracking_session(
+            conn,
+            "scoped",
+            scope=RunScope(
+                harnesses=("codex",),
+                provider_ids=("openai",),
+                model_ids=("gpt-5.5",),
+            ),
+        )
+        end_tracking_session(conn, run_id)
+        archive_tracking_session(conn, run_id, archived_at_ms=1234)
+    finally:
+        conn.close()
+
+    export_state_archive(db_a, archive)
+    import_state_archive(db_b, archive)
+
+    conn = connect(db_b)
+    try:
+        migrate(conn)
+        row = conn.execute("SELECT id FROM runs WHERE name = 'scoped'").fetchone()
+        assert row is not None
+        run = get_tracking_session(conn, int(row["id"]))
+    finally:
+        conn.close()
+
+    assert run is not None
+    assert run.scope.harnesses == ("codex",)
+    assert run.scope.provider_ids == ("openai",)
+    assert run.scope.model_ids == ("gpt-5.5",)
+    assert run.archived_at_ms == 1234
 
 
 def test_sync_export_redacts_raw_json(tmp_path: Path) -> None:

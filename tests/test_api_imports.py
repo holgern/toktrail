@@ -15,6 +15,7 @@ from tests.test_amp_parser import create_amp_source
 from tests.test_droid_parser import write_droid_settings
 from tests.test_goose_parser import create_goose_db, insert_session
 from toktrail.api.imports import import_configured_usage, import_usage
+from toktrail.api.models import RunScope
 from toktrail.api.reports import session_report
 from toktrail.api.sessions import init_state, start_run
 from toktrail.errors import (
@@ -421,6 +422,78 @@ def test_later_session_import_links_existing_unscoped_events_without_duplicates(
     assert second.rows_imported == 0
     assert second.rows_linked == 2
     assert report.totals.tokens.total == 3400
+
+
+def test_import_configured_usage_applies_active_run_harness_scope(tmp_path) -> None:
+    state_db = tmp_path / "toktrail.db"
+    source_db = tmp_path / "opencode.db"
+    codex_file = tmp_path / "codex" / "session-001.jsonl"
+    config_path = tmp_path / "toktrail.toml"
+    _create_opencode_messages(source_db)
+    create_codex_session_file(codex_file)
+    config_path.write_text(
+        f"""
+config_version = 1
+
+[imports]
+harnesses = ["opencode", "codex"]
+missing_source = "error"
+
+[imports.sources]
+opencode = "{source_db}"
+codex = "{codex_file}"
+""".strip(),
+        encoding="utf-8",
+    )
+    init_state(state_db)
+    start_run(
+        state_db,
+        name="codex-only",
+        scope=RunScope(harnesses=("codex",)),
+    )
+
+    results = import_configured_usage(state_db, config_path=config_path)
+
+    assert [result.harness for result in results] == ["codex"]
+
+
+def test_import_usage_links_only_provider_model_scope(tmp_path) -> None:
+    state_db = tmp_path / "toktrail.db"
+    source_db = tmp_path / "opencode.db"
+    conn = create_opencode_db(source_db)
+    first = deepcopy(VALID_ASSISTANT)
+    first["providerID"] = "openai"
+    first["modelID"] = "gpt-5.5"
+    insert_message(conn, row_id="row-1", session_id="ses-1", data=first)
+    second = deepcopy(VALID_ASSISTANT)
+    second["id"] = "msg-2"
+    second["providerID"] = "anthropic"
+    second["modelID"] = "claude-sonnet-4"
+    insert_message(conn, row_id="row-2", session_id="ses-1", data=second)
+    conn.commit()
+    conn.close()
+
+    init_state(state_db)
+    session = start_run(
+        state_db,
+        name="scoped-model",
+        scope=RunScope(provider_ids=("openai",), model_ids=("gpt-5.5",)),
+        started_at_ms=0,
+    )
+    result = import_usage(
+        state_db,
+        "opencode",
+        session_id=session.id,
+        source_path=source_db,
+    )
+    report = session_report(state_db, session.id)
+
+    assert result.rows_imported == 2
+    assert result.rows_linked == 1
+    assert result.rows_scope_excluded == 1
+    assert report.totals.tokens.total == (
+        first["tokens"]["input"] + first["tokens"]["output"]
+    )
 
 
 def _create_opencode_messages(path) -> None:

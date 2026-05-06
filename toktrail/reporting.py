@@ -366,15 +366,7 @@ class RunReport:
 
     def as_dict(self) -> dict[str, object]:
         return {
-            "session": None
-            if self.session is None
-            else {
-                "id": self.session.id,
-                "sync_id": self.session.sync_id,
-                "name": self.session.name,
-                "started_at_ms": self.session.started_at_ms,
-                "ended_at_ms": self.session.ended_at_ms,
-            },
+            "session": None if self.session is None else self.session.as_dict(),
             "filters": self.filters.as_dict(),
             "totals": self.totals.as_dict(),
             "by_provider": [row.as_dict() for row in self.by_provider],
@@ -719,6 +711,8 @@ class UsageRunsFilter:
     limit: int | None = 10
     order: str = "desc"
     last: bool = False
+    include_archived: bool = False
+    archived_only: bool = False
 
     def to_usage_report_filter(self) -> UsageReportFilter:
         return UsageReportFilter(

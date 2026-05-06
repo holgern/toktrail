@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal
 
 from toktrail.config import normalize_identity
@@ -90,12 +90,112 @@ class UsageEvent:
 
 
 @dataclass(frozen=True)
+class RunScope:
+    harnesses: tuple[str, ...] = ()
+    provider_ids: tuple[str, ...] = ()
+    model_ids: tuple[str, ...] = ()
+    source_session_ids: tuple[str, ...] = ()
+    thinking_levels: tuple[str, ...] = ()
+    agents: tuple[str, ...] = ()
+
+    @property
+    def empty(self) -> bool:
+        return not any(
+            (
+                self.harnesses,
+                self.provider_ids,
+                self.model_ids,
+                self.source_session_ids,
+                self.thinking_levels,
+                self.agents,
+            )
+        )
+
+    def as_dict(self) -> dict[str, list[str]]:
+        return {
+            "harnesses": list(self.harnesses),
+            "provider_ids": list(self.provider_ids),
+            "model_ids": list(self.model_ids),
+            "source_session_ids": list(self.source_session_ids),
+            "thinking_levels": list(self.thinking_levels),
+            "agents": list(self.agents),
+        }
+
+
+def _normalize_unique_identities(values: tuple[str, ...]) -> tuple[str, ...]:
+    seen: set[str] = set()
+    normalized_values: list[str] = []
+    for value in values:
+        normalized = normalize_identity(value)
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        normalized_values.append(normalized)
+    return tuple(normalized_values)
+
+
+def _normalize_unique_session_ids(values: tuple[str, ...]) -> tuple[str, ...]:
+    seen: set[str] = set()
+    normalized_values: list[str] = []
+    for value in values:
+        normalized = str(value).strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        normalized_values.append(normalized)
+    return tuple(normalized_values)
+
+
+def _normalize_unique_thinking_levels(values: tuple[str, ...]) -> tuple[str, ...]:
+    seen: set[str] = set()
+    normalized_values: list[str] = []
+    for value in values:
+        normalized = normalize_thinking_level(value)
+        if normalized is None or normalized in seen:
+            continue
+        seen.add(normalized)
+        normalized_values.append(normalized)
+    return tuple(normalized_values)
+
+
+def normalize_run_scope(scope: RunScope | None) -> RunScope:
+    if scope is None:
+        return RunScope()
+    return RunScope(
+        harnesses=_normalize_unique_identities(scope.harnesses),
+        provider_ids=_normalize_unique_identities(scope.provider_ids),
+        model_ids=_normalize_unique_identities(scope.model_ids),
+        source_session_ids=_normalize_unique_session_ids(scope.source_session_ids),
+        thinking_levels=_normalize_unique_thinking_levels(scope.thinking_levels),
+        agents=_normalize_unique_identities(scope.agents),
+    )
+
+
+@dataclass(frozen=True)
 class Run:
     id: int
     sync_id: str
     name: str | None
     started_at_ms: int
     ended_at_ms: int | None
+    scope: RunScope = field(default_factory=RunScope)
+    archived_at_ms: int | None = None
+
+    @property
+    def active(self) -> bool:
+        return self.ended_at_ms is None
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "id": self.id,
+            "sync_id": self.sync_id,
+            "name": self.name,
+            "started_at_ms": self.started_at_ms,
+            "ended_at_ms": self.ended_at_ms,
+            "active": self.active,
+            "archived_at_ms": self.archived_at_ms,
+            "scope": self.scope.as_dict(),
+        }
 
 
 @dataclass(frozen=True)

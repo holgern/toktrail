@@ -46,6 +46,7 @@ from toktrail.api.models import (
     SubscriptionUsageReport,
     SubscriptionUsageRow,
     TokenBreakdown,
+    RunScope,
     Run,
     RunReport,
     UnconfiguredModelRow,
@@ -80,6 +81,7 @@ from toktrail.api.reports import (
     usage_runs_report,
 )
 from toktrail.api.sessions import (
+    archive_run,
     get_active_run,
     get_run,
     init_state,
@@ -87,6 +89,7 @@ from toktrail.api.sessions import (
     require_active_run,
     start_run,
     stop_run,
+    unarchive_run,
 )
 from toktrail.api.sources import (
     capture_source_snapshot,
@@ -128,6 +131,7 @@ __all__ = [
     "SubscriptionUsageReport",
     "SubscriptionUsageRow",
     "TokenBreakdown",
+    "RunScope",
     "Run",
     "RunReport",
     "UnconfiguredModelRow",
@@ -137,6 +141,7 @@ __all__ = [
     "UsageSeriesReport",
     "UsageSessionRow",
     "UsageSessionsReport",
+    "archive_run",
     "capture_source_snapshot",
     "config_exists",
     "config_summary",
@@ -181,6 +186,7 @@ __all__ = [
     "subscription_usage_report",
     "start_run",
     "stop_run",
+    "unarchive_run",
     "supported_harnesses",
     "usage_report",
     "usage_series_report",

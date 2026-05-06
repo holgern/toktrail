@@ -108,12 +108,47 @@ class CostTotals:
 
 
 @dataclass(frozen=True)
+class RunScope:
+    harnesses: tuple[str, ...] = ()
+    provider_ids: tuple[str, ...] = ()
+    model_ids: tuple[str, ...] = ()
+    source_session_ids: tuple[str, ...] = ()
+    thinking_levels: tuple[str, ...] = ()
+    agents: tuple[str, ...] = ()
+
+    @property
+    def empty(self) -> bool:
+        return not any(
+            (
+                self.harnesses,
+                self.provider_ids,
+                self.model_ids,
+                self.source_session_ids,
+                self.thinking_levels,
+                self.agents,
+            )
+        )
+
+    def as_dict(self) -> dict[str, list[str]]:
+        return {
+            "harnesses": list(self.harnesses),
+            "provider_ids": list(self.provider_ids),
+            "model_ids": list(self.model_ids),
+            "source_session_ids": list(self.source_session_ids),
+            "thinking_levels": list(self.thinking_levels),
+            "agents": list(self.agents),
+        }
+
+
+@dataclass(frozen=True)
 class Run:
     id: int
     sync_id: str
     name: str | None
     started_at_ms: int
     ended_at_ms: int | None
+    scope: RunScope = field(default_factory=RunScope)
+    archived_at_ms: int | None = None
 
     @property
     def active(self) -> bool:
@@ -135,6 +170,8 @@ class Run:
             "started_at_ms": self.started_at_ms,
             "ended_at_ms": self.ended_at_ms,
             "active": self.active,
+            "archived_at_ms": self.archived_at_ms,
+            "scope": self.scope.as_dict(),
         }
 
 
@@ -331,6 +368,7 @@ class ImportUsageResult:
     first_event_ms: int | None = None
     last_event_ms: int | None = None
     rows_linked: int = 0
+    rows_scope_excluded: int = 0
     status: str = "ok"
     error_message: str | None = None
 
@@ -343,6 +381,7 @@ class ImportUsageResult:
             "rows_seen": self.rows_seen,
             "rows_imported": self.rows_imported,
             "rows_linked": self.rows_linked,
+            "rows_scope_excluded": self.rows_scope_excluded,
             "rows_skipped": self.rows_skipped,
             "events_seen": self.events_seen,
             "events_imported": self.events_imported,
@@ -1122,6 +1161,7 @@ __all__ = [
     "ModelSummaryRow",
     "PreparedManualRun",
     "ProviderSummaryRow",
+    "RunScope",
     "Run",
     "RunReport",
     "ScanUsageResult",

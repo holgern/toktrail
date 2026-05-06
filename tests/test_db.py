@@ -14,21 +14,31 @@ from toktrail.config import (
     SubscriptionWindowConfig,
 )
 from toktrail.db import (
+    archive_tracking_session,
     connect,
     create_tracking_session,
     end_tracking_session,
     get_active_tracking_session,
+    get_tracking_session,
     insert_usage_events,
+    list_tracking_sessions,
     migrate,
     summarize_subscription_usage,
     summarize_tracking_session,
     summarize_usage,
+    summarize_usage_runs,
     summarize_usage_series,
     summarize_usage_sessions,
+    unarchive_tracking_session,
 )
-from toktrail.models import TokenBreakdown, UsageEvent
+from toktrail.models import RunScope, TokenBreakdown, UsageEvent
 from toktrail.periods import resolve_fixed_subscription_window
-from toktrail.reporting import UsageReportFilter, UsageSeriesFilter, UsageSessionsFilter
+from toktrail.reporting import (
+    UsageReportFilter,
+    UsageRunsFilter,
+    UsageSeriesFilter,
+    UsageSessionsFilter,
+)
 
 
 def make_price(
@@ -126,7 +136,7 @@ def test_migrate_creates_tables_and_is_idempotent(tmp_path: Path) -> None:
         "state_metadata",
         "import_sources",
     } <= table_names
-    assert user_version == 6
+    assert user_version == 7
 
 
 def test_migrate_v3_to_v4_idempotent_with_existing_column(tmp_path: Path) -> None:
@@ -142,7 +152,7 @@ def test_migrate_v3_to_v4_idempotent_with_existing_column(tmp_path: Path) -> Non
     # Re-running migrate must not crash on duplicate column.
     migrate(conn)
 
-    assert int(conn.execute("PRAGMA user_version").fetchone()[0]) == 6
+    assert int(conn.execute("PRAGMA user_version").fetchone()[0]) == 7
 
 
 def test_source_costs_are_stored_and_aggregated_as_exact_decimals(
@@ -199,6 +209,134 @@ def test_tracking_session_has_sync_id_and_origin_machine_id(tmp_path: Path) -> N
     assert row is not None
     assert row["sync_id"]
     assert row["origin_machine_id"]
+
+
+def test_create_tracking_session_stores_scope(tmp_path: Path) -> None:
+    conn = connect(tmp_path / "toktrail.db")
+    migrate(conn)
+    session_id = create_tracking_session(
+        conn,
+        "scoped",
+        scope=RunScope(harnesses=("Codex",), provider_ids=("OpenAI",)),
+    )
+
+    session = get_tracking_session(conn, session_id)
+
+    assert session is not None
+    assert session.scope.harnesses == ("codex",)
+    assert session.scope.provider_ids == ("openai",)
+
+
+def test_insert_usage_events_links_only_matching_scoped_events(tmp_path: Path) -> None:
+    conn = connect(tmp_path / "toktrail.db")
+    migrate(conn)
+    session_id = create_tracking_session(conn, "scoped")
+
+    codex_event = make_usage_event(dedup_suffix="1", harness="codex")
+    pi_event = make_usage_event(dedup_suffix="2", harness="pi")
+    result = insert_usage_events(
+        conn,
+        session_id,
+        [codex_event, pi_event],
+        link_scope=RunScope(harnesses=("codex",)),
+    )
+
+    run_report = summarize_tracking_session(conn, session_id)
+    global_report = summarize_usage(conn, UsageReportFilter(tracking_session_id=None))
+
+    assert result.rows_inserted == 2
+    assert result.rows_linked == 1
+    assert result.rows_scope_excluded == 1
+    assert run_report.totals.tokens.total == codex_event.tokens.total
+    assert global_report.totals.tokens.total == (
+        codex_event.tokens.total + pi_event.tokens.total
+    )
+
+
+def test_insert_usage_events_scope_matches_provider_model_keys(
+    tmp_path: Path,
+) -> None:
+    conn = connect(tmp_path / "toktrail.db")
+    migrate(conn)
+    session_id = create_tracking_session(conn, "scoped")
+    event = make_usage_event(
+        dedup_suffix="3",
+        provider_id="openai",
+        model_id="gpt-5.5",
+    )
+
+    result = insert_usage_events(
+        conn,
+        session_id,
+        [event],
+        link_scope=RunScope(provider_ids=("OpenAI",), model_ids=("GPT-5.5",)),
+    )
+
+    assert result.rows_linked == 1
+
+
+def test_archive_tracking_session_hides_from_default_listing(tmp_path: Path) -> None:
+    conn = connect(tmp_path / "toktrail.db")
+    migrate(conn)
+    session_id = create_tracking_session(conn, "archive-me")
+    end_tracking_session(conn, session_id)
+    archive_tracking_session(conn, session_id)
+
+    default_rows = list_tracking_sessions(conn)
+    archived_rows = list_tracking_sessions(conn, include_archived=True)
+    archived_only = list_tracking_sessions(conn, archived_only=True)
+
+    assert all(row.id != session_id for row in default_rows)
+    assert any(row.id == session_id for row in archived_rows)
+    assert [row.id for row in archived_only] == [session_id]
+
+
+def test_archive_active_tracking_session_rejected(tmp_path: Path) -> None:
+    conn = connect(tmp_path / "toktrail.db")
+    migrate(conn)
+    session_id = create_tracking_session(conn, "active")
+
+    with pytest.raises(ValueError, match="Cannot archive active run"):
+        archive_tracking_session(conn, session_id)
+
+
+def test_unarchive_tracking_session_restores_default_listing(tmp_path: Path) -> None:
+    conn = connect(tmp_path / "toktrail.db")
+    migrate(conn)
+    session_id = create_tracking_session(conn, "archive-me")
+    end_tracking_session(conn, session_id)
+    archive_tracking_session(conn, session_id)
+    unarchive_tracking_session(conn, session_id)
+
+    rows = list_tracking_sessions(conn)
+    assert any(row.id == session_id for row in rows)
+
+
+def test_summarize_usage_runs_excludes_archived_by_default(tmp_path: Path) -> None:
+    conn = connect(tmp_path / "toktrail.db")
+    migrate(conn)
+    run_id = create_tracking_session(conn, "run-1", started_at_ms=1_000)
+    insert_usage_events(
+        conn,
+        run_id,
+        [make_usage_event(dedup_suffix="run1", created_ms=1_000)],
+    )
+    end_tracking_session(conn, run_id, ended_at_ms=1_100)
+    archive_tracking_session(conn, run_id)
+
+    default_report = summarize_usage_runs(conn, UsageRunsFilter(limit=None))
+    archived_report = summarize_usage_runs(
+        conn,
+        UsageRunsFilter(limit=None, include_archived=True),
+    )
+    archived_only_report = summarize_usage_runs(
+        conn,
+        UsageRunsFilter(limit=None, archived_only=True),
+    )
+
+    assert default_report.runs == ()
+    assert len(archived_report.runs) == 1
+    assert len(archived_only_report.runs) == 1
 
 
 def test_insert_usage_events_attaches_multiple_source_sessions(tmp_path: Path) -> None:

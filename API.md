@@ -34,6 +34,7 @@ from toktrail.api import (
     StateImportConflict,
     StateImportResult,
     TokenBreakdown,
+    RunScope,
     Run,
     RunReport,
     UnconfiguredModelRow,
@@ -65,6 +66,7 @@ from toktrail.api.paths import (
     resolve_toktrail_db_path,
 )
 from toktrail.api.sessions import (
+    archive_run,
     get_active_run,
     get_run,
     init_state,
@@ -72,6 +74,7 @@ from toktrail.api.sessions import (
     require_active_run,
     start_run,
     stop_run,
+    unarchive_run,
 )
 from toktrail.api.sources import (
     capture_source_snapshot,
@@ -127,8 +130,10 @@ Key public models:
   `cache_write`, `total`
 - `CostTotals`: `source_cost_usd`, `actual_cost_usd`, `virtual_cost_usd`,
   `savings_usd`, `unpriced_count`
-- `Run`: includes local integer `id`, durable cross-machine `sync_id`, and
-  `started_at_ms` / `ended_at_ms`
+- `Run`: includes local integer `id`, durable cross-machine `sync_id`,
+  `started_at_ms` / `ended_at_ms`, persisted `scope`, and `archived_at_ms`
+- `RunScope`: persisted run membership filters (`harnesses`, `provider_ids`,
+  `model_ids`, `source_session_ids`, `thinking_levels`, `agents`)
 - `SourceSessionSummary`, `SourceSessionSnapshot`, `SourceSessionDiff`
 - `ImportUsageResult`
 - `RunReport`
@@ -212,12 +217,18 @@ source_path = Path("~/.codex/sessions").expanduser()
 
 init_state(db_path)
 snapshot = capture_source_snapshot("codex", source_path=source_path)
-session = start_run(db_path, name="benchmark-1")
+session = start_run(
+    db_path,
+    name="benchmark-1",
+    scope=RunScope(harnesses=("codex",), provider_ids=("openai",)),
+)
 result = import_usage(db_path, "codex", session_id=session.id, source_path=source_path)
 source_sessions = list_source_sessions("codex", source_path=source_path, limit=5)
 report = session_report(db_path, session.id)
 window = usage_report(db_path, period="today", timezone="UTC")
 quotas = subscription_usage_report(db_path, provider_id="opencode-go")
+archived = archive_run(db_path, session.id)
+restored = unarchive_run(db_path, session.id)
 ```
 
 `import_usage()` can import canonical usage rows without an active session. A

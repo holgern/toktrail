@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 import uuid
 from dataclasses import dataclass, field, replace
@@ -27,7 +28,13 @@ from toktrail.costing import (
     simulate_cost,
 )
 from toktrail.models import Run as TrackingSession
-from toktrail.models import TokenBreakdown, UsageEvent
+from toktrail.models import (
+    RunScope,
+    TokenBreakdown,
+    UsageEvent,
+    normalize_run_scope,
+    normalize_thinking_level,
+)
 from toktrail.reporting import (
     ActivitySummaryRow,
     CostTotals,
@@ -55,7 +62,7 @@ from toktrail.reporting import (
     UsageSessionsReport,
 )
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 _PERIOD_SORT: dict[str, int] = {
     "5h": 0,
     "daily": 1,
@@ -72,6 +79,7 @@ class InsertUsageResult:
     rows_inserted: int
     rows_linked: int = 0
     rows_skipped: int = 0
+    rows_scope_excluded: int = 0
 
 
 @dataclass(frozen=True)
@@ -116,6 +124,20 @@ class _AggregateRow:
 
 def _now_ms() -> int:
     return int(time() * 1000)
+
+
+def _json_tuple(value: str | None) -> tuple[str, ...]:
+    if not value:
+        return ()
+    parsed = json.loads(value)
+    if not isinstance(parsed, list):
+        msg = "Run scope JSON must be a list."
+        raise ValueError(msg)
+    return tuple(str(item) for item in parsed)
+
+
+def _dump_json_tuple(values: tuple[str, ...]) -> str:
+    return json.dumps(list(values), separators=(",", ":"), sort_keys=False)
 
 
 def connect(path: Path) -> sqlite3.Connection:
@@ -164,6 +186,9 @@ def migrate(conn: sqlite3.Connection) -> None:
     if current_version == 5:
         _migrate_v5_to_v6(conn)
         current_version = 6
+    if current_version == 6:
+        _migrate_v6_to_v7(conn)
+        current_version = 7
 
     _ensure_machine_id(conn)
     conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
@@ -262,6 +287,13 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             name TEXT,
             started_at_ms INTEGER NOT NULL,
             ended_at_ms INTEGER,
+            scope_harnesses_json TEXT NOT NULL DEFAULT '[]',
+            scope_provider_ids_json TEXT NOT NULL DEFAULT '[]',
+            scope_model_ids_json TEXT NOT NULL DEFAULT '[]',
+            scope_source_session_ids_json TEXT NOT NULL DEFAULT '[]',
+            scope_thinking_levels_json TEXT NOT NULL DEFAULT '[]',
+            scope_agents_json TEXT NOT NULL DEFAULT '[]',
+            archived_at_ms INTEGER,
             created_at_ms INTEGER NOT NULL,
             updated_at_ms INTEGER NOT NULL,
             imported_at_ms INTEGER
@@ -272,6 +304,12 @@ def _create_schema(conn: sqlite3.Connection) -> None:
 
         CREATE UNIQUE INDEX IF NOT EXISTS idx_runs_sync_id
         ON runs(sync_id);
+
+        CREATE INDEX IF NOT EXISTS idx_runs_archived_started
+        ON runs(archived_at_ms, started_at_ms);
+
+        CREATE INDEX IF NOT EXISTS idx_runs_active_archived_started
+        ON runs(ended_at_ms, archived_at_ms, started_at_ms);
 
         CREATE TABLE IF NOT EXISTS source_sessions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -592,11 +630,64 @@ def _migrate_v5_to_v6(conn: sqlite3.Connection) -> None:
     )
 
 
+def _migrate_v6_to_v7(conn: sqlite3.Connection) -> None:
+    _add_column_if_missing(
+        conn,
+        "runs",
+        "scope_harnesses_json",
+        "TEXT NOT NULL DEFAULT '[]'",
+    )
+    _add_column_if_missing(
+        conn,
+        "runs",
+        "scope_provider_ids_json",
+        "TEXT NOT NULL DEFAULT '[]'",
+    )
+    _add_column_if_missing(
+        conn,
+        "runs",
+        "scope_model_ids_json",
+        "TEXT NOT NULL DEFAULT '[]'",
+    )
+    _add_column_if_missing(
+        conn,
+        "runs",
+        "scope_source_session_ids_json",
+        "TEXT NOT NULL DEFAULT '[]'",
+    )
+    _add_column_if_missing(
+        conn,
+        "runs",
+        "scope_thinking_levels_json",
+        "TEXT NOT NULL DEFAULT '[]'",
+    )
+    _add_column_if_missing(
+        conn,
+        "runs",
+        "scope_agents_json",
+        "TEXT NOT NULL DEFAULT '[]'",
+    )
+    _add_column_if_missing(conn, "runs", "archived_at_ms", "INTEGER")
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_runs_archived_started
+        ON runs(archived_at_ms, started_at_ms)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_runs_active_archived_started
+        ON runs(ended_at_ms, archived_at_ms, started_at_ms)
+        """
+    )
+
+
 def create_tracking_session(
     conn: sqlite3.Connection,
     name: str | None,
     *,
     started_at_ms: int | None = None,
+    scope: RunScope | None = None,
 ) -> int:
     active_session_id = get_active_tracking_session(conn)
     if active_session_id is not None:
@@ -605,6 +696,7 @@ def create_tracking_session(
     now_ms = started_at_ms if started_at_ms is not None else _now_ms()
     sync_id = uuid.uuid4().hex
     origin_machine_id = _ensure_machine_id(conn)
+    normalized_scope = normalize_run_scope(scope)
     cursor = conn.execute(
         """
         INSERT INTO runs (
@@ -612,12 +704,33 @@ def create_tracking_session(
             origin_machine_id,
             name,
             started_at_ms,
+            scope_harnesses_json,
+            scope_provider_ids_json,
+            scope_model_ids_json,
+            scope_source_session_ids_json,
+            scope_thinking_levels_json,
+            scope_agents_json,
+            archived_at_ms,
             created_at_ms,
             updated_at_ms
         )
-        VALUES (?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (sync_id, origin_machine_id, name, now_ms, now_ms, now_ms),
+        (
+            sync_id,
+            origin_machine_id,
+            name,
+            now_ms,
+            _dump_json_tuple(normalized_scope.harnesses),
+            _dump_json_tuple(normalized_scope.provider_ids),
+            _dump_json_tuple(normalized_scope.model_ids),
+            _dump_json_tuple(normalized_scope.source_session_ids),
+            _dump_json_tuple(normalized_scope.thinking_levels),
+            _dump_json_tuple(normalized_scope.agents),
+            None,
+            now_ms,
+            now_ms,
+        ),
     )
     conn.commit()
     return _required_lastrowid(cursor.lastrowid)
@@ -664,7 +777,19 @@ def get_tracking_session(
 ) -> TrackingSession | None:
     row = conn.execute(
         """
-        SELECT id, sync_id, name, started_at_ms, ended_at_ms
+        SELECT
+            id,
+            sync_id,
+            name,
+            started_at_ms,
+            ended_at_ms,
+            scope_harnesses_json,
+            scope_provider_ids_json,
+            scope_model_ids_json,
+            scope_source_session_ids_json,
+            scope_thinking_levels_json,
+            scope_agents_json,
+            archived_at_ms
         FROM runs
         WHERE id = ?
         """,
@@ -675,15 +800,90 @@ def get_tracking_session(
     return _tracking_session_from_row(row)
 
 
-def list_tracking_sessions(conn: sqlite3.Connection) -> list[TrackingSession]:
+def list_tracking_sessions(
+    conn: sqlite3.Connection,
+    *,
+    include_archived: bool = False,
+    archived_only: bool = False,
+    active_only: bool = False,
+    include_ended: bool = True,
+) -> list[TrackingSession]:
+    where_clauses: list[str] = []
+    params: list[object] = []
+    if archived_only:
+        where_clauses.append("archived_at_ms IS NOT NULL")
+    elif not include_archived:
+        where_clauses.append("archived_at_ms IS NULL")
+    if active_only:
+        where_clauses.append("ended_at_ms IS NULL")
+    elif not include_ended:
+        where_clauses.append("ended_at_ms IS NULL")
+    where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
     rows = conn.execute(
         """
-        SELECT id, sync_id, name, started_at_ms, ended_at_ms
+        SELECT
+            id,
+            sync_id,
+            name,
+            started_at_ms,
+            ended_at_ms,
+            scope_harnesses_json,
+            scope_provider_ids_json,
+            scope_model_ids_json,
+            scope_source_session_ids_json,
+            scope_thinking_levels_json,
+            scope_agents_json,
+            archived_at_ms
         FROM runs
-        ORDER BY started_at_ms DESC, id DESC
         """
+        + where_sql
+        + """
+        ORDER BY started_at_ms DESC, id DESC
+        """,
+        params,
     ).fetchall()
     return [_tracking_session_from_row(row) for row in rows]
+
+
+def archive_tracking_session(
+    conn: sqlite3.Connection,
+    session_id: int,
+    *,
+    archived_at_ms: int | None = None,
+) -> None:
+    session = get_tracking_session(conn, session_id)
+    if session is None:
+        msg = f"Tracking session not found: {session_id}"
+        raise ValueError(msg)
+    if session.ended_at_ms is None:
+        msg = f"Cannot archive active run {session_id}. Stop it first."
+        raise ValueError(msg)
+    now_ms = archived_at_ms if archived_at_ms is not None else _now_ms()
+    conn.execute(
+        """
+        UPDATE runs
+        SET archived_at_ms = ?, updated_at_ms = ?
+        WHERE id = ?
+        """,
+        (now_ms, now_ms, session_id),
+    )
+    conn.commit()
+
+
+def unarchive_tracking_session(conn: sqlite3.Connection, session_id: int) -> None:
+    now_ms = _now_ms()
+    cursor = conn.execute(
+        """
+        UPDATE runs
+        SET archived_at_ms = NULL, updated_at_ms = ?
+        WHERE id = ?
+        """,
+        (now_ms, session_id),
+    )
+    if cursor.rowcount == 0:
+        msg = f"Tracking session not found: {session_id}"
+        raise ValueError(msg)
+    conn.commit()
 
 
 def get_machine_id(conn: sqlite3.Connection) -> str:
@@ -903,24 +1103,75 @@ def _get_run_sync_id(conn: sqlite3.Connection, tracking_session_id: int) -> str:
     return str(row["sync_id"])
 
 
+def usage_event_matches_run_scope(event: UsageEvent, scope: RunScope) -> bool:
+    normalized_scope = normalize_run_scope(scope)
+    if normalized_scope.empty:
+        return True
+    if (
+        normalized_scope.harnesses
+        and normalize_identity(event.harness) not in normalized_scope.harnesses
+    ):
+        return False
+    if (
+        normalized_scope.source_session_ids
+        and event.source_session_id not in normalized_scope.source_session_ids
+    ):
+        return False
+    if (
+        normalized_scope.provider_ids
+        and normalize_identity(event.provider_id) not in normalized_scope.provider_ids
+    ):
+        return False
+    if (
+        normalized_scope.model_ids
+        and normalize_identity(event.model_id) not in normalized_scope.model_ids
+    ):
+        return False
+    if normalized_scope.thinking_levels:
+        level = normalize_thinking_level(event.thinking_level)
+        if level is None or level not in normalized_scope.thinking_levels:
+            return False
+    if normalized_scope.agents:
+        if event.agent is None:
+            return False
+        if normalize_identity(event.agent) not in normalized_scope.agents:
+            return False
+    return True
+
+
 def insert_usage_events(
     conn: sqlite3.Connection,
     tracking_session_id: int | None,
     events: list[UsageEvent],
     *,
     since_ms: int | None = None,
+    link_scope: RunScope | None = None,
 ) -> InsertUsageResult:
     filtered_events = [
         event for event in events if since_ms is None or event.created_ms >= since_ms
     ]
+    effective_scope = normalize_run_scope(link_scope)
+    link_events = (
+        filtered_events
+        if tracking_session_id is None or effective_scope.empty
+        else [
+            event
+            for event in filtered_events
+            if usage_event_matches_run_scope(event, effective_scope)
+        ]
+    )
+    link_event_keys = {
+        (event.harness, event.global_dedup_key) for event in link_events
+    }
     harness_session_ids: dict[tuple[str, str], int] = {}
     imported_at_ms = _now_ms()
     rows_inserted = 0
     rows_linked = 0
+    rows_scope_excluded = max(len(filtered_events) - len(link_events), 0)
 
     with conn:
         if tracking_session_id is not None:
-            grouped_ranges = _group_event_ranges(filtered_events)
+            grouped_ranges = _group_event_ranges(link_events)
             for (
                 harness,
                 source_session_id,
@@ -976,15 +1227,21 @@ def insert_usage_events(
 
         temp_rows: list[tuple[object, ...]] = []
         for event in filtered_events:
-            harness_session_id = harness_session_ids.get(
-                (event.harness, event.source_session_id)
+            should_link = (
+                tracking_session_id is not None
+                and (event.harness, event.global_dedup_key) in link_event_keys
             )
+            harness_session_id = None
+            if should_link:
+                harness_session_id = harness_session_ids.get(
+                    (event.harness, event.source_session_id)
+                )
             provider_key = normalize_identity(event.provider_id)
             model_key = normalize_identity(event.model_id)
             agent_key = normalize_identity(event.agent) if event.agent else None
             temp_rows.append(
                 (
-                    tracking_session_id,
+                    tracking_session_id if should_link else None,
                     harness_session_id,
                     event.harness,
                     event.source_session_id,
@@ -1150,6 +1407,7 @@ def insert_usage_events(
                 JOIN tmp_usage_import AS tmp
                   ON tmp.harness = ue.harness
                  AND tmp.global_dedup_key = ue.global_dedup_key
+                WHERE tmp.tracking_session_id IS NOT NULL
                 """,
                 (tracking_session_id, imported_at_ms),
             )
@@ -1171,6 +1429,7 @@ def insert_usage_events(
         rows_inserted=rows_inserted,
         rows_linked=rows_linked,
         rows_skipped=len(filtered_events) - rows_inserted,
+        rows_scope_excluded=rows_scope_excluded,
     )
 
 
@@ -2652,6 +2911,41 @@ def _tracking_session_from_row(row: sqlite3.Row) -> TrackingSession:
         name=str(row["name"]) if row["name"] is not None else None,
         started_at_ms=_required_int(row["started_at_ms"]),
         ended_at_ms=_optional_int(row["ended_at_ms"]),
+        scope=normalize_run_scope(
+            RunScope(
+                harnesses=_json_tuple(
+                    row["scope_harnesses_json"]
+                    if row["scope_harnesses_json"] is not None
+                    else None
+                ),
+                provider_ids=_json_tuple(
+                    row["scope_provider_ids_json"]
+                    if row["scope_provider_ids_json"] is not None
+                    else None
+                ),
+                model_ids=_json_tuple(
+                    row["scope_model_ids_json"]
+                    if row["scope_model_ids_json"] is not None
+                    else None
+                ),
+                source_session_ids=_json_tuple(
+                    row["scope_source_session_ids_json"]
+                    if row["scope_source_session_ids_json"] is not None
+                    else None
+                ),
+                thinking_levels=_json_tuple(
+                    row["scope_thinking_levels_json"]
+                    if row["scope_thinking_levels_json"] is not None
+                    else None
+                ),
+                agents=_json_tuple(
+                    row["scope_agents_json"]
+                    if row["scope_agents_json"] is not None
+                    else None
+                ),
+            )
+        ),
+        archived_at_ms=_optional_int(row["archived_at_ms"]),
     )
 
 
@@ -3016,6 +3310,19 @@ class _WindowUsageSummary:
     )
 
 
+def _run_archive_filter_sql(filters: UsageRunsFilter, where_clause: str) -> str:
+    run_filter_clauses: list[str] = []
+    if filters.archived_only:
+        run_filter_clauses.append("r.archived_at_ms IS NOT NULL")
+    elif not filters.include_archived:
+        run_filter_clauses.append("r.archived_at_ms IS NULL")
+    if not run_filter_clauses:
+        return ""
+    if where_clause:
+        return " AND " + " AND ".join(run_filter_clauses)
+    return " WHERE " + " AND ".join(run_filter_clauses)
+
+
 def summarize_usage_runs(
     conn: sqlite3.Connection,
     filters: UsageRunsFilter,
@@ -3069,6 +3376,7 @@ def summarize_usage_runs(
         f" WHERE {' AND '.join(base_where_clauses)}" if base_where_clauses else ""
     )
     params = base_params
+    run_filter_sql = _run_archive_filter_sql(filters, where_clause)
 
     thinking_select = (
         "ue.thinking_level AS thinking_level"
@@ -3105,6 +3413,7 @@ def summarize_usage_runs(
         JOIN runs AS r ON r.id = re.tracking_session_id
         """
         + where_clause
+        + run_filter_sql
         + """
         ORDER BY r.started_at_ms DESC, r.id DESC, ue.created_ms ASC, ue.id ASC
         """,
@@ -3217,6 +3526,8 @@ def summarize_usage_runs(
         "split_thinking": filters.split_thinking,
         "limit": filters.limit,
         "order": filters.order,
+        "include_archived": filters.include_archived,
+        "archived_only": filters.archived_only,
     }
 
     return UsageRunsReport(

@@ -12,19 +12,25 @@ The preferred CLI workflow is:
    toktrail config init
    toktrail sources
    toktrail run start --name <name>
+   toktrail run start --name codex-task --harness codex
+   toktrail run start --name openai-gpt --provider openai --model gpt-5.5
    toktrail refresh
    toktrail run status
    toktrail usage today
    toktrail subscriptions status
    toktrail sync export --out toktrail-state.tar.gz
    toktrail run list
+   toktrail run list --archived
    toktrail run stop
+   toktrail run archive 42
+   toktrail run unarchive 42
 
 Report commands refresh configured sources first by default:
 
 .. code-block:: bash
 
    toktrail usage today
+   toktrail usage runs --archived
    toktrail run status
    toktrail subscriptions status
    toktrail prices list --used-only

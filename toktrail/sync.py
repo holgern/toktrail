@@ -418,7 +418,10 @@ def _merge_runs(
     imported_rows = imported.execute(
         """
         SELECT id, sync_id, origin_machine_id, name, started_at_ms, ended_at_ms,
-               created_at_ms, updated_at_ms, imported_at_ms
+               scope_harnesses_json, scope_provider_ids_json,
+               scope_model_ids_json, scope_source_session_ids_json,
+               scope_thinking_levels_json, scope_agents_json,
+               archived_at_ms, created_at_ms, updated_at_ms, imported_at_ms
         FROM runs
         ORDER BY id
         """
@@ -460,6 +463,13 @@ def _merge_runs(
                 name,
                 started_at_ms,
                 ended_at_ms,
+                scope_harnesses_json,
+                scope_provider_ids_json,
+                scope_model_ids_json,
+                scope_source_session_ids_json,
+                scope_thinking_levels_json,
+                scope_agents_json,
+                archived_at_ms,
                 updated_at_ms,
                 imported_at_ms
             FROM runs
@@ -476,11 +486,18 @@ def _merge_runs(
                     name,
                     started_at_ms,
                     ended_at_ms,
+                    scope_harnesses_json,
+                    scope_provider_ids_json,
+                    scope_model_ids_json,
+                    scope_source_session_ids_json,
+                    scope_thinking_levels_json,
+                    scope_agents_json,
+                    archived_at_ms,
                     created_at_ms,
                     updated_at_ms,
                     imported_at_ms
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     imported_sync_id,
@@ -491,6 +508,16 @@ def _merge_runs(
                     imported_row["name"],
                     int(imported_row["started_at_ms"]),
                     imported_ended,
+                    _coalesce_text(imported_row["scope_harnesses_json"], "[]"),
+                    _coalesce_text(imported_row["scope_provider_ids_json"], "[]"),
+                    _coalesce_text(imported_row["scope_model_ids_json"], "[]"),
+                    _coalesce_text(
+                        imported_row["scope_source_session_ids_json"],
+                        "[]",
+                    ),
+                    _coalesce_text(imported_row["scope_thinking_levels_json"], "[]"),
+                    _coalesce_text(imported_row["scope_agents_json"], "[]"),
+                    _optional_int_value(imported_row["archived_at_ms"]),
                     int(imported_row["created_at_ms"]),
                     int(imported_row["updated_at_ms"]),
                     imported_at_ms,
@@ -522,6 +549,34 @@ def _merge_runs(
             local_row["origin_machine_id"],
             _coalesce_text(imported_row["origin_machine_id"], imported_machine_id),
         )
+        merged_scope_harnesses_json = _merge_scope_json(
+            local_row["scope_harnesses_json"],
+            imported_row["scope_harnesses_json"],
+        )
+        merged_scope_provider_json = _merge_scope_json(
+            local_row["scope_provider_ids_json"],
+            imported_row["scope_provider_ids_json"],
+        )
+        merged_scope_model_json = _merge_scope_json(
+            local_row["scope_model_ids_json"],
+            imported_row["scope_model_ids_json"],
+        )
+        merged_scope_source_session_json = _merge_scope_json(
+            local_row["scope_source_session_ids_json"],
+            imported_row["scope_source_session_ids_json"],
+        )
+        merged_scope_thinking_json = _merge_scope_json(
+            local_row["scope_thinking_levels_json"],
+            imported_row["scope_thinking_levels_json"],
+        )
+        merged_scope_agents_json = _merge_scope_json(
+            local_row["scope_agents_json"],
+            imported_row["scope_agents_json"],
+        )
+        merged_archived_at = _max_optional_int_value(
+            _optional_int_value(local_row["archived_at_ms"]),
+            _optional_int_value(imported_row["archived_at_ms"]),
+        )
         merged_imported_at = _max_optional_int_value(
             _optional_int_value(local_row["imported_at_ms"]),
             imported_at_ms,
@@ -533,6 +588,13 @@ def _merge_runs(
                 name = ?,
                 started_at_ms = ?,
                 ended_at_ms = ?,
+                scope_harnesses_json = ?,
+                scope_provider_ids_json = ?,
+                scope_model_ids_json = ?,
+                scope_source_session_ids_json = ?,
+                scope_thinking_levels_json = ?,
+                scope_agents_json = ?,
+                archived_at_ms = ?,
                 updated_at_ms = ?,
                 imported_at_ms = ?
             WHERE id = ?
@@ -542,6 +604,13 @@ def _merge_runs(
                 merged_name,
                 merged_started,
                 merged_ended,
+                merged_scope_harnesses_json,
+                merged_scope_provider_json,
+                merged_scope_model_json,
+                merged_scope_source_session_json,
+                merged_scope_thinking_json,
+                merged_scope_agents_json,
+                merged_archived_at,
                 merged_updated,
                 merged_imported_at,
                 int(local_row["id"]),
@@ -842,6 +911,24 @@ def _optional_int_value(value: object) -> int | None:
         msg = f"Expected nullable integer value, got {value!r}"
         raise ValueError(msg)
     return value
+
+
+def _scope_json_has_values(value: object) -> bool:
+    if value is None:
+        return False
+    try:
+        parsed = json.loads(str(value))
+    except (TypeError, ValueError):
+        return False
+    return isinstance(parsed, list) and len(parsed) > 0
+
+
+def _merge_scope_json(local_value: object, imported_value: object) -> str:
+    local_text = _coalesce_text(local_value, "[]") or "[]"
+    imported_text = _coalesce_text(imported_value, "[]") or "[]"
+    if _scope_json_has_values(local_text):
+        return local_text
+    return imported_text
 
 
 def _min_optional_int_value(left: int | None, right: int | None) -> int | None:

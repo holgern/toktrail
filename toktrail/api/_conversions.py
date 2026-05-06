@@ -9,6 +9,7 @@ from toktrail.api.models import (
     ProviderSummaryRow,
     Run,
     RunReport,
+    RunScope,
     SessionTotals,
     SourceSessionSummary,
     StateExportResult,
@@ -29,6 +30,9 @@ from toktrail.api.models import (
 )
 from toktrail.models import (
     Run as InternalTrackingSession,
+)
+from toktrail.models import (
+    RunScope as InternalRunScope,
 )
 from toktrail.models import (
     TokenBreakdown as InternalTokenBreakdown,
@@ -114,12 +118,26 @@ def _to_public_run(
 ) -> Run | None:
     if value is None:
         return None
+    scope = _to_public_run_scope(value.scope)
     return Run(
         id=value.id,
         sync_id=value.sync_id,
         name=value.name,
         started_at_ms=value.started_at_ms,
         ended_at_ms=value.ended_at_ms,
+        scope=scope,
+        archived_at_ms=value.archived_at_ms,
+    )
+
+
+def _to_public_run_scope(value: InternalRunScope) -> RunScope:
+    return RunScope(
+        harnesses=value.harnesses,
+        provider_ids=value.provider_ids,
+        model_ids=value.model_ids,
+        source_session_ids=value.source_session_ids,
+        thinking_levels=value.thinking_levels,
+        agents=value.agents,
     )
 
 

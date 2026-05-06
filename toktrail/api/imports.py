@@ -125,6 +125,9 @@ def import_usage(
                 conn,
                 selected_session_id,
                 filtered_events,
+                link_scope=(
+                    tracking_session.scope if tracking_session is not None else None
+                ),
             )
         except (sqlite3.Error, ValueError) as exc:
             msg = (
@@ -179,6 +182,7 @@ def import_usage(
         rows_seen=scan.rows_seen,
         rows_imported=rows_imported,
         rows_linked=insert_result.rows_linked,
+        rows_scope_excluded=insert_result.rows_scope_excluded,
         rows_skipped=rows_skipped,
         events_seen=len(scan.events),
         events_imported=rows_imported,
@@ -212,6 +216,29 @@ def import_configured_usage(
         if harnesses is not None
         else import_config.harnesses
     )
+    if session_id is not None or use_active_session:
+        conn, _ = _open_state_db(db_path)
+        try:
+            selected_session_id = session_id
+            if selected_session_id is None and use_active_session:
+                selected_session_id = db_module.get_active_tracking_session(conn)
+            if selected_session_id is not None:
+                tracking_session = db_module.get_tracking_session(
+                    conn,
+                    selected_session_id,
+                )
+                if tracking_session is None:
+                    msg = f"Run not found: {selected_session_id}"
+                    raise RunNotFoundError(msg)
+                if tracking_session.scope.harnesses:
+                    allowed_harnesses = set(tracking_session.scope.harnesses)
+                    selected_harnesses = tuple(
+                        harness_name
+                        for harness_name in selected_harnesses
+                        if harness_name in allowed_harnesses
+                    )
+        finally:
+            conn.close()
     if source_path is not None and len(selected_harnesses) != 1:
         msg = "--source is only valid when importing exactly one harness."
         raise InvalidAPIUsageError(msg)
@@ -259,6 +286,8 @@ def import_configured_usage(
                         source_session_id=None,
                         rows_seen=0,
                         rows_imported=0,
+                        rows_linked=0,
+                        rows_scope_excluded=0,
                         rows_skipped=0,
                         events_seen=0,
                         events_imported=0,

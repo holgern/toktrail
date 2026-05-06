@@ -19,7 +19,14 @@ from tests.helpers import (
 )
 from toktrail.api.sessions import init_state, start_run
 from toktrail.cli import app
-from toktrail.db import connect, create_tracking_session, insert_usage_events, migrate
+from toktrail.db import (
+    archive_tracking_session,
+    connect,
+    create_tracking_session,
+    end_tracking_session,
+    insert_usage_events,
+    migrate,
+)
 from toktrail.models import TokenBreakdown, UsageEvent
 
 
@@ -492,6 +499,131 @@ def test_cli_run_list_lists_tracking_runs(tmp_path) -> None:
     assert result.exit_code == 0, result.output
     assert "test-session" in result.output
     assert "Started" in result.output
+
+
+def test_cli_run_start_accepts_harness_scope_and_status_json_includes_scope(
+    tmp_path,
+) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+
+    init_result = runner.invoke(app, ["--db", str(state_db), "init"])
+    assert init_result.exit_code == 0, init_result.output
+
+    start_result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "run",
+            "start",
+            "--name",
+            "codex-only",
+            "--harness",
+            "codex",
+        ],
+    )
+    assert start_result.exit_code == 0, start_result.output
+    assert "Scope: harness=codex" in start_result.output
+
+    status_result = runner.invoke(
+        app,
+        ["--db", str(state_db), "run", "status", "--json", "--no-refresh"],
+    )
+    assert status_result.exit_code == 0, status_result.output
+    payload = json.loads(status_result.output)
+    assert payload["session"]["scope"]["harnesses"] == ["codex"]
+
+
+def test_cli_run_archive_hides_default_list(tmp_path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    runner.invoke(app, ["--db", str(state_db), "run", "start", "--name", "archive-me"])
+    runner.invoke(app, ["--db", str(state_db), "run", "stop", "--no-refresh"])
+
+    archive_result = runner.invoke(app, ["--db", str(state_db), "run", "archive", "1"])
+    assert archive_result.exit_code == 0, archive_result.output
+
+    default_list = runner.invoke(app, ["--db", str(state_db), "run", "list"])
+    archived_list = runner.invoke(
+        app,
+        ["--db", str(state_db), "run", "list", "--archived"],
+    )
+
+    assert default_list.exit_code == 0, default_list.output
+    assert archived_list.exit_code == 0, archived_list.output
+    assert "archive-me" not in default_list.output
+    assert "archive-me" in archived_list.output
+
+
+def test_cli_run_archive_rejects_active_run(tmp_path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    runner.invoke(app, ["--db", str(state_db), "run", "start", "--name", "active"])
+
+    result = runner.invoke(app, ["--db", str(state_db), "run", "archive", "1"])
+
+    assert result.exit_code == 1
+    assert "Cannot archive active run 1" in result.output
+
+
+def test_cli_run_status_refresh_uses_stored_harness_scope(tmp_path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    opencode_db = tmp_path / "opencode.db"
+    codex_file = tmp_path / "codex" / "session-001.jsonl"
+    config_path = tmp_path / "toktrail.toml"
+    create_source_db(opencode_db)
+    create_codex_session_file(codex_file)
+    config_path.write_text(
+        f"""
+config_version = 1
+
+[imports]
+harnesses = ["opencode", "codex"]
+missing_source = "error"
+
+[imports.sources]
+opencode = "{opencode_db}"
+codex = "{codex_file}"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "run",
+            "start",
+            "--name",
+            "codex-only",
+            "--harness",
+            "codex",
+        ],
+    )
+
+    status_result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "--config",
+            str(config_path),
+            "run",
+            "status",
+            "--json",
+        ],
+    )
+
+    assert status_result.exit_code == 0, status_result.output
+    payload = json.loads(status_result.output)
+    assert [row["harness"] for row in payload["by_harness"]] == ["codex"]
 
 
 def test_cli_refresh_missing_opencode_db_fails(tmp_path) -> None:
@@ -1078,6 +1210,44 @@ opencode = "{source_db}"
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
     assert payload["totals"]["total"] == 0
+
+
+def test_cli_usage_runs_excludes_archived_by_default(tmp_path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    conn = connect(state_db)
+    try:
+        migrate(conn)
+        run_id = create_tracking_session(conn, "archived", started_at_ms=1_000)
+        insert_usage_events(
+            conn,
+            run_id,
+            [
+                make_cli_usage_event(
+                    "archived",
+                    created_ms=1_000,
+                    tokens=TokenBreakdown(input=10, output=5),
+                )
+            ],
+        )
+        end_tracking_session(conn, run_id, ended_at_ms=1_100)
+        archive_tracking_session(conn, run_id, archived_at_ms=1_200)
+    finally:
+        conn.close()
+
+    default_result = runner.invoke(
+        app,
+        ["--db", str(state_db), "usage", "runs", "--json", "--no-refresh"],
+    )
+    archived_result = runner.invoke(
+        app,
+        ["--db", str(state_db), "usage", "runs", "--json", "--all", "--no-refresh"],
+    )
+
+    assert default_result.exit_code == 0, default_result.output
+    assert archived_result.exit_code == 0, archived_result.output
+    assert json.loads(default_result.output)["runs"] == []
+    assert len(json.loads(archived_result.output)["runs"]) == 1
 
 
 def test_cli_usage_refresh_details_prints_compact_refresh_summary(tmp_path) -> None:
