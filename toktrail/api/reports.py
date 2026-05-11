@@ -248,6 +248,9 @@ def usage_sessions_report(
     db_path: Path | None = None,
     *,
     session_id: int | None = None,
+    period: str | None = None,
+    timezone: str | None = None,
+    utc: bool = False,
     since_ms: int | None = None,
     until_ms: int | None = None,
     harness: str | None = None,
@@ -264,6 +267,24 @@ def usage_sessions_report(
 ) -> UsageSessionsReport:
     from toktrail.db import migrate, summarize_usage_sessions
     from toktrail.reporting import UsageSessionsFilter
+
+    if period is not None and (since_ms is not None or until_ms is not None):
+        msg = (
+            "usage_sessions_report() accepts either period or since/until "
+            "filters, not both."
+        )
+        raise InvalidAPIUsageError(msg)
+
+    try:
+        resolved_range = resolve_time_range(
+            period=period,
+            timezone_name=timezone,
+            utc=utc,
+        )
+    except ValueError as exc:
+        raise InvalidAPIUsageError(str(exc)) from exc
+    effective_since_ms = resolved_range.since_ms if period is not None else since_ms
+    effective_until_ms = resolved_range.until_ms if period is not None else until_ms
 
     if order not in ("asc", "desc"):
         msg = f"Invalid order: {order!r}. Use asc or desc."
@@ -286,8 +307,8 @@ def usage_sessions_report(
                 model_id=model_id,
                 thinking_level=thinking_level,
                 agent=agent,
-                since_ms=since_ms,
-                until_ms=until_ms,
+                since_ms=effective_since_ms,
+                until_ms=effective_until_ms,
                 split_thinking=split_thinking,
                 limit=limit,
                 order=order,
@@ -298,7 +319,25 @@ def usage_sessions_report(
     finally:
         conn.close()
 
-    return _to_public_usage_sessions_report(report)
+    public_report = _to_public_usage_sessions_report(report)
+    filters = dict(public_report.filters)
+    if effective_since_ms is not None:
+        existing_since = filters.get("since_ms")
+        if isinstance(existing_since, int):
+            filters["since_ms"] = max(existing_since, effective_since_ms)
+        else:
+            filters["since_ms"] = effective_since_ms
+    if effective_until_ms is not None:
+        existing_until = filters.get("until_ms")
+        if isinstance(existing_until, int):
+            filters["until_ms"] = min(existing_until, effective_until_ms)
+        else:
+            filters["until_ms"] = effective_until_ms
+    if period is not None:
+        filters["period"] = resolved_range.period
+    if period is not None or timezone is not None or utc:
+        filters["timezone"] = resolved_range.timezone
+    return replace(public_report, filters=filters)
 
 
 def usage_runs_report(

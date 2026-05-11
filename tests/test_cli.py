@@ -139,10 +139,11 @@ def make_cli_usage_event(
     *,
     created_ms: int,
     tokens: TokenBreakdown,
+    source_session_id: str = "ses-1",
 ) -> UsageEvent:
     return UsageEvent(
         harness="opencode",
-        source_session_id="ses-1",
+        source_session_id=source_session_id,
         source_row_id=f"row-{dedup_suffix}",
         source_message_id=f"msg-{dedup_suffix}",
         source_dedup_key=f"dedup-{dedup_suffix}",
@@ -5082,7 +5083,8 @@ def test_cli_usage_sessions_human_output(tmp_path) -> None:
     )
     assert result.exit_code == 0, result.output
     assert "toktrail usage sessions" in result.output
-    assert "cache_r" in result.output or "total" in result.output
+    assert "Token usage:" in result.output
+    assert "Costs:" in result.output
 
 
 def test_cli_usage_sessions_last_human_output(tmp_path) -> None:
@@ -5110,15 +5112,7 @@ def test_cli_usage_sessions_last_human_output(tmp_path) -> None:
         ["--db", str(state_db), "usage", "sessions", "--last", "--no-refresh"],
     )
     assert result.exit_code == 0, result.output
-    # should print exactly one session row (header + one data row)
-    lines = [
-        line
-        for line in result.output.strip().split("\n")
-        if line.strip()
-        and "toktrail usage sessions" not in line
-        and not line.startswith("session ")
-    ]
-    assert len(lines) == 1
+    assert result.output.count("Token usage:") == 1
 
 
 def test_cli_usage_sessions_limit_json_shape(tmp_path) -> None:
@@ -5193,8 +5187,7 @@ def test_cli_usage_sessions_breakdown(tmp_path) -> None:
         ],
     )
     assert result.exit_code == 0, result.output
-    assert "Breakdown by provider/model" in result.output
-    assert "provider/model" in result.output
+    assert "Breakdown:" in result.output
 
 
 def test_cli_usage_sessions_filters_harness_and_source_session(
@@ -5273,6 +5266,212 @@ def test_cli_usage_sessions_no_refresh_uses_existing_state_only(
     )
     assert result.exit_code == 0, result.output
     assert "toktrail usage sessions" in result.output
+
+
+def test_cli_usage_sessions_today_filters_to_current_day(monkeypatch, tmp_path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    conn = connect(state_db)
+    try:
+        migrate(conn)
+        insert_usage_events(
+            conn,
+            None,
+            [
+                make_cli_usage_event(
+                    "today",
+                    source_session_id="ses-today",
+                    created_ms=int(
+                        datetime(2026, 5, 11, 10, 0, tzinfo=timezone.utc).timestamp()
+                        * 1000
+                    ),
+                    tokens=TokenBreakdown(input=10, output=2),
+                ),
+                make_cli_usage_event(
+                    "yesterday",
+                    source_session_id="ses-yesterday",
+                    created_ms=int(
+                        datetime(2026, 5, 10, 10, 0, tzinfo=timezone.utc).timestamp()
+                        * 1000
+                    ),
+                    tokens=TokenBreakdown(input=10, output=2),
+                ),
+            ],
+        )
+    finally:
+        conn.close()
+
+    monkeypatch.setattr(
+        "toktrail.periods.current_time_in_zone",
+        lambda tz: datetime(2026, 5, 11, 12, 0, tzinfo=tz),
+    )
+    result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "usage",
+            "sessions",
+            "--today",
+            "--timezone",
+            "UTC",
+            "--no-refresh",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "ses-today" in result.output
+    assert "ses-yesterday" not in result.output
+
+
+def test_cli_usage_sessions_yesterday_filters_to_previous_day(
+    monkeypatch, tmp_path
+) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    conn = connect(state_db)
+    try:
+        migrate(conn)
+        insert_usage_events(
+            conn,
+            None,
+            [
+                make_cli_usage_event(
+                    "today-2",
+                    source_session_id="ses-today-2",
+                    created_ms=int(
+                        datetime(2026, 5, 11, 10, 0, tzinfo=timezone.utc).timestamp()
+                        * 1000
+                    ),
+                    tokens=TokenBreakdown(input=10, output=2),
+                ),
+                make_cli_usage_event(
+                    "yesterday-2",
+                    source_session_id="ses-yesterday-2",
+                    created_ms=int(
+                        datetime(2026, 5, 10, 10, 0, tzinfo=timezone.utc).timestamp()
+                        * 1000
+                    ),
+                    tokens=TokenBreakdown(input=10, output=2),
+                ),
+            ],
+        )
+    finally:
+        conn.close()
+
+    monkeypatch.setattr(
+        "toktrail.periods.current_time_in_zone",
+        lambda tz: datetime(2026, 5, 11, 12, 0, tzinfo=tz),
+    )
+    result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "usage",
+            "sessions",
+            "--yesterday",
+            "--timezone",
+            "UTC",
+            "--no-refresh",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "ses-yesterday-2" in result.output
+    assert "ses-today-2" not in result.output
+
+
+def test_cli_usage_sessions_period_conflicts_with_since(tmp_path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "usage",
+            "sessions",
+            "--today",
+            "--since",
+            "2026-05-11",
+            "--no-refresh",
+        ],
+    )
+    assert result.exit_code != 0
+    assert "Use either a named period or --since/--until" in result.output
+
+
+def test_cli_usage_sessions_table_restores_legacy_columns(tmp_path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    source_db = tmp_path / "opencode.db"
+    create_source_db(source_db)
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "refresh",
+            "--harness",
+            "opencode",
+            "--source",
+            str(source_db),
+        ],
+    )
+
+    result = runner.invoke(
+        app,
+        ["--db", str(state_db), "usage", "sessions", "--table", "--no-refresh"],
+    )
+    assert result.exit_code == 0, result.output
+    assert "cache_r" in result.output
+    assert "unpriced" in result.output
+
+
+def test_cli_usage_sessions_period_default_limit_is_unbounded(
+    monkeypatch, tmp_path
+) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    conn = connect(state_db)
+    try:
+        migrate(conn)
+        events = [
+            make_cli_usage_event(
+                f"bulk-{idx}",
+                source_session_id=f"ses-{idx}",
+                created_ms=int(
+                    datetime(2026, 5, 11, 8, idx % 60, tzinfo=timezone.utc).timestamp()
+                    * 1000
+                ),
+                tokens=TokenBreakdown(input=1, output=1),
+            )
+            for idx in range(12)
+        ]
+        insert_usage_events(conn, None, events)
+    finally:
+        conn.close()
+
+    monkeypatch.setattr(
+        "toktrail.periods.current_time_in_zone",
+        lambda tz: datetime(2026, 5, 11, 12, 0, tzinfo=tz),
+    )
+    result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "usage",
+            "sessions",
+            "--today",
+            "--timezone",
+            "UTC",
+            "--no-refresh",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert result.output.count("Token usage:") == 12
 
 
 def test_cli_usage_runs_human_output(tmp_path) -> None:
@@ -5369,7 +5568,15 @@ def test_cli_usage_sessions_rich_output(tmp_path) -> None:
 
     rich = runner.invoke(
         app,
-        ["--db", str(state_db), "usage", "sessions", "--rich", "--no-refresh"],
+        [
+            "--db",
+            str(state_db),
+            "usage",
+            "sessions",
+            "--rich",
+            "--table",
+            "--no-refresh",
+        ],
     )
     _assert_rich_result_or_missing_dependency(rich)
     if rich.exit_code == 0:

@@ -541,3 +541,60 @@ def test_usage_sessions_report_session_id_bounds_to_run_lifetime(
     assert report.totals.tokens.total == 7
     assert report.filters["since_ms"] == 1_000
     assert report.filters["until_ms"] == 1_500
+
+
+def test_usage_sessions_report_supports_period(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state_db = tmp_path / "toktrail.db"
+    conn = connect(state_db)
+    try:
+        migrate(conn)
+        insert_usage_events(
+            conn,
+            None,
+            [
+                make_api_usage_event(
+                    "today",
+                    created_ms=int(
+                        datetime(2026, 5, 11, 10, 0, tzinfo=timezone.utc).timestamp()
+                        * 1000
+                    ),
+                    tokens=TokenBreakdown(input=10, output=2),
+                ),
+                make_api_usage_event(
+                    "yesterday",
+                    created_ms=int(
+                        datetime(2026, 5, 10, 10, 0, tzinfo=timezone.utc).timestamp()
+                        * 1000
+                    ),
+                    tokens=TokenBreakdown(input=10, output=2),
+                ),
+            ],
+        )
+    finally:
+        conn.close()
+
+    monkeypatch.setattr(
+        "toktrail.periods.current_time_in_zone",
+        lambda tz: datetime(2026, 5, 11, 12, 0, tzinfo=tz),
+    )
+    report = usage_sessions_report(
+        state_db,
+        period="today",
+        timezone="UTC",
+        limit=None,
+    )
+
+    assert len(report.sessions) == 1
+    assert report.filters["period"] == "today"
+    assert report.filters["timezone"] == "UTC"
+    assert report.filters["since_ms"] is not None
+    assert report.filters["until_ms"] is not None
+
+
+def test_usage_sessions_report_rejects_period_with_since_until(tmp_path: Path) -> None:
+    state_db = tmp_path / "toktrail.db"
+    init_state(state_db)
+    with pytest.raises(InvalidAPIUsageError):
+        usage_sessions_report(state_db, period="today", since_ms=1)

@@ -164,10 +164,12 @@ toktrail usage summary --price-state priced --sort provider --limit 10 --json
 toktrail usage today --no-refresh
 toktrail usage today --refresh-details
 toktrail usage runs --rich
-toktrail usage sessions --rich
+toktrail usage sessions --today
+toktrail usage sessions --today --table
+toktrail usage sessions --this-week --harness codex
 toktrail usage daily --rich
 toktrail usage sessions --last
-toktrail usage sessions --order asc --limit 10
+toktrail usage sessions --order asc --limit 10 --table
 toktrail usage runs --last --limit 5
 toktrail usage runs --archived
 toktrail subscriptions status
@@ -228,6 +230,8 @@ Session terminology:
 - `toktrail run list` lists tracking **runs** (start/stop windows).
 - `toktrail sources sessions <h>` lists raw **source sessions** from a specific harness.
 - `toktrail usage sessions` summarizes imported source-session **usage** (tokens, costs, models).
+- Use `toktrail usage sessions --today` or `--this-week` for bounded source-session lists.
+- Use `toktrail usage sessions --table` for the legacy wide table.
 - `toktrail usage runs` summarizes usage grouped by tracking **run**.
 
 `toktrail sync import` validates archive paths, manifest checksums, schema

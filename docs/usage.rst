@@ -103,6 +103,22 @@ Core commands
 For harness-session inspection, use ``toktrail sources sessions <harness>`` to inspect
 raw harness sessions without mutating toktrail state.
 
+Session usage by period
+-----------------------
+
+.. code-block:: bash
+
+   toktrail usage sessions --today
+   toktrail usage sessions --yesterday
+   toktrail usage sessions --this-week
+   toktrail usage sessions --last-week
+   toktrail usage sessions --this-month
+   toktrail usage sessions --last-month
+   toktrail usage sessions --today --table
+
+The default sessions output is line-based. Use ``--table`` for the wide tabular
+view.
+
 
 Provider subscription status
 ----------------------------

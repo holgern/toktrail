@@ -246,6 +246,16 @@ SplitThinkingOption = Annotated[bool, typer.Option("--split-thinking")]
 TimeBoundaryOption = Annotated[str | None, typer.Option("--since")]
 UntilBoundaryOption = Annotated[str | None, typer.Option("--until")]
 TimezoneOption = Annotated[str | None, typer.Option("--timezone")]
+UsagePeriodOption = Annotated[str | None, typer.Option("--period")]
+SessionTableOption = Annotated[
+    bool, typer.Option("--table", help="Render usage sessions as the legacy table.")
+]
+SessionTodayOption = Annotated[bool, typer.Option("--today")]
+SessionYesterdayOption = Annotated[bool, typer.Option("--yesterday")]
+SessionThisWeekOption = Annotated[bool, typer.Option("--this-week")]
+SessionLastWeekOption = Annotated[bool, typer.Option("--last-week")]
+SessionThisMonthOption = Annotated[bool, typer.Option("--this-month")]
+SessionLastMonthOption = Annotated[bool, typer.Option("--last-month")]
 PriceStateOption = Annotated[str, typer.Option("--price-state")]
 MinMessagesOption = Annotated[int | None, typer.Option("--min-messages")]
 MinTokensOption = Annotated[int | None, typer.Option("--min-tokens")]
@@ -943,6 +953,13 @@ def usage(
     agent: AgentOption = None,
     since: TimeBoundaryOption = None,
     until: UntilBoundaryOption = None,
+    session_period: UsagePeriodOption = None,
+    session_today: SessionTodayOption = False,
+    session_yesterday: SessionYesterdayOption = False,
+    session_this_week: SessionThisWeekOption = False,
+    session_last_week: SessionLastWeekOption = False,
+    session_this_month: SessionThisMonthOption = False,
+    session_last_month: SessionLastMonthOption = False,
     timezone_name: TimezoneOption = None,
     utc: UtcOption = False,
     rich_output: RichOption = False,
@@ -954,6 +971,7 @@ def usage(
     limit: ReportLimitOption = None,
     breakdown: BreakdownOption = False,
     compact: Annotated[bool, typer.Option("--compact")] = False,
+    table: SessionTableOption = False,
     instances: Annotated[bool, typer.Option("--instances")] = False,
     order: Annotated[str, typer.Option("--order")] = "desc",
     locale: Annotated[str | None, typer.Option("--locale")] = None,
@@ -1080,6 +1098,15 @@ def usage(
     if normalized_view in {"sessions", "session"}:
         if instances:
             _exit_with_error("--instances is not supported for sessions view.")
+        session_period_value = _resolve_usage_session_period_or_exit(
+            period=session_period,
+            today=session_today,
+            yesterday=session_yesterday,
+            this_week=session_this_week,
+            last_week=session_last_week,
+            this_month=session_this_month,
+            last_month=session_last_month,
+        )
         payload = _usage_sessions(
             ctx=ctx,
             json_output=json_output,
@@ -1091,11 +1118,13 @@ def usage(
             agent=agent,
             since=since,
             until=until,
+            period=session_period_value,
             timezone_name=timezone_name,
             utc=utc,
             split_thinking=split_thinking,
             breakdown=breakdown,
             compact=compact,
+            table=table or compact,
             order=order,
             limit=limit,
             last=last,
@@ -1162,6 +1191,57 @@ def usage(
         "summary, today, yesterday, this-week, last-week, this-month, or "
         "last-month."
     )
+
+
+def _resolve_usage_session_period_or_exit(
+    *,
+    period: str | None,
+    today: bool,
+    yesterday: bool,
+    this_week: bool,
+    last_week: bool,
+    this_month: bool,
+    last_month: bool,
+) -> str | None:
+    requested: list[str] = []
+    if period is not None:
+        requested.append(period.strip().lower())
+    if today:
+        requested.append("today")
+    if yesterday:
+        requested.append("yesterday")
+    if this_week:
+        requested.append("this-week")
+    if last_week:
+        requested.append("last-week")
+    if this_month:
+        requested.append("this-month")
+    if last_month:
+        requested.append("last-month")
+
+    if len(requested) > 1:
+        _exit_with_error(
+            "Use only one session period: --period, --today, --yesterday, "
+            "--this-week, --last-week, --this-month, or --last-month."
+        )
+    if not requested:
+        return None
+
+    value = requested[0]
+    allowed = {
+        "today",
+        "yesterday",
+        "this-week",
+        "last-week",
+        "this-month",
+        "last-month",
+    }
+    if value not in allowed:
+        _exit_with_error(
+            "Unsupported session period. Use today, yesterday, this-week, "
+            "last-week, this-month, or last-month."
+        )
+    return value
 
 
 def _usage_series(
@@ -1500,29 +1580,44 @@ def _usage_sessions(
     agent: str | None,
     since: str | None,
     until: str | None,
+    period: str | None,
     timezone_name: str | None,
     utc: bool,
     split_thinking: bool,
     breakdown: bool,
     compact: bool,
+    table: bool,
     order: str,
     limit: int | None,
     last: bool,
     rich_output: bool,
 ) -> dict[str, object] | None:
     from toktrail.db import summarize_usage_sessions
-    from toktrail.periods import _resolve_timezone, parse_cli_boundary
     from toktrail.reporting import UsageSessionsFilter
 
     if last and limit is not None and limit != 1:
         _exit_with_error("Use either --last or --limit, not both.")
-    effective_limit = 1 if last else (10 if limit is None else limit)
+    if last:
+        effective_limit = 1
+    elif limit is not None:
+        effective_limit = limit
+    elif period is not None:
+        effective_limit = None
+    else:
+        effective_limit = 10
     if effective_limit is not None and effective_limit < 0:
         _exit_with_error("--limit must be non-negative.")
 
-    tz = _resolve_timezone(timezone_name=timezone_name, utc=utc)
-    since_ms = parse_cli_boundary(since, tz=tz, is_until=False)
-    until_ms = parse_cli_boundary(until, tz=tz, is_until=True)
+    try:
+        resolved_range = resolve_time_range(
+            period=period,
+            timezone_name=timezone_name,
+            utc=utc,
+            since_text=since,
+            until_text=until,
+        )
+    except ValueError as exc:
+        _exit_with_error(str(exc))
 
     costing_config = _load_costing_config_or_exit(ctx)
     conn = _open_toktrail_connection(ctx)
@@ -1536,8 +1631,8 @@ def _usage_sessions(
                 model_id=model_id,
                 thinking_level=thinking_level,
                 agent=agent,
-                since_ms=since_ms,
-                until_ms=until_ms,
+                since_ms=resolved_range.since_ms,
+                until_ms=resolved_range.until_ms,
                 split_thinking=split_thinking,
                 limit=effective_limit,
                 order=order,
@@ -1549,7 +1644,22 @@ def _usage_sessions(
         conn.close()
 
     if json_output:
-        return report.as_dict()
+        payload = report.as_dict()
+        filters = payload.get("filters")
+        if not isinstance(filters, dict):
+            msg = "Usage sessions payload unexpectedly missing filters."
+            raise TypeError(msg)
+        if resolved_range.period is not None:
+            filters["period"] = resolved_range.period
+        if (
+            resolved_range.period is not None
+            or timezone_name is not None
+            or utc
+            or since is not None
+            or until is not None
+        ):
+            filters["timezone"] = resolved_range.timezone
+        return payload
 
     _print_usage_sessions(
         report,
@@ -1557,6 +1667,8 @@ def _usage_sessions(
         breakdown=breakdown,
         utc=utc,
         rich_output=rich_output,
+        table=table,
+        period=resolved_range.period,
     )
     return None
 
@@ -1568,6 +1680,8 @@ def _print_usage_sessions(
     breakdown: bool,
     utc: bool,
     rich_output: bool,
+    table: bool,
+    period: str | None,
 ) -> None:
     from toktrail.formatting import format_epoch_ms_compact
     from toktrail.reporting import UsageSessionsReport
@@ -1576,10 +1690,44 @@ def _print_usage_sessions(
         msg = "Expected UsageSessionsReport."
         raise TypeError(msg)
 
-    typer.echo("toktrail usage sessions")
+    title = "toktrail usage sessions"
+    if period is not None:
+        title += f" ({period})"
+    typer.echo(title)
 
     if not report.sessions:
         typer.echo("No usage data.")
+        return
+
+    if not table:
+        for idx, session in enumerate(report.sessions):
+            if idx:
+                typer.echo("")
+            session_time = format_epoch_ms_compact(session.last_ms, utc=utc)
+            typer.echo(f"{session_time}  {session.key}")
+            model_line = _format_session_model_line(session, rich_output=rich_output)
+            typer.echo(f"   {model_line}")
+            token_line = _format_token_usage_line(
+                session.tokens,
+                label="Token usage",
+            )
+            typer.echo(f"   {token_line}")
+            typer.echo(f"   {_format_session_cost_line(session.costs)}")
+            if breakdown and session.by_model:
+                typer.echo("   Breakdown:")
+                for row in session.by_model:
+                    typer.echo(
+                        "     "
+                        f"{row.provider_id}/{row.model_id} "
+                        f"msgs={_format_int(row.message_count)} "
+                        f"total={_format_int(row.tokens.total)} "
+                        f"input={_format_int(row.tokens.input)} "
+                        f"output={_format_int(row.tokens.output)} "
+                        f"reasoning={_format_int(row.tokens.reasoning)} "
+                        f"cache_read={_format_int(row.tokens.cache_read)} "
+                        f"actual={_format_cost(row.costs.actual_cost_usd)} "
+                        f"virtual={_format_cost(row.costs.virtual_cost_usd)}"
+                    )
         return
 
     if compact:
@@ -2053,7 +2201,31 @@ def _usage_aggregate(
     return None
 
 
-def _format_token_usage_line(tokens: TokenBreakdown) -> str:
+def _format_session_model_line(session: object, *, rich_output: bool) -> str:
+    from toktrail.reporting import UsageSessionRow
+
+    if not isinstance(session, UsageSessionRow):
+        msg = "Expected UsageSessionRow."
+        raise TypeError(msg)
+    label = "Model" if len(session.models) == 1 else "Models"
+    models = _format_model_list(session.models, rich_output=rich_output)
+    return f"{label}: {models} with {_format_int(session.message_count)} msgs"
+
+
+def _format_session_cost_line(costs: CostTotals) -> str:
+    return (
+        "Costs: "
+        f"source={_format_cost(costs.source_cost_usd)} "
+        f"actual={_format_cost(costs.actual_cost_usd)} "
+        f"virtual={_format_cost(costs.virtual_cost_usd)} "
+        f"savings={_format_cost(costs.savings_usd)} "
+        f"unpriced={_format_int(costs.unpriced_count)}"
+    )
+
+
+def _format_token_usage_line(
+    tokens: TokenBreakdown, *, label: str = "token usage"
+) -> str:
     input_suffixes: list[str] = []
     if tokens.cache_read:
         input_suffixes.append(f"+{_format_int(tokens.cache_read)} cached")
@@ -2076,7 +2248,7 @@ def _format_token_usage_line(tokens: TokenBreakdown) -> str:
         f" (reasoning {_format_int(tokens.reasoning)})" if tokens.reasoning else ""
     )
     return (
-        f"token usage: total={_format_int(tokens.total)}"
+        f"{label}: total={_format_int(tokens.total)}"
         f" {input_part} {output_part}{reasoning_part}"
     )
 
