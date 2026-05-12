@@ -35,6 +35,8 @@ _HARNESSES: tuple[HarnessDefinition, ...] = (
         default_source_path=default_amp_threads_path(),
         source_path_env_vars=(TOKTRAIL_AMP_THREADS_ENV,),
         source_path_kind="path",
+        config_key="amp_threads",
+        id_prefix="amp",
     ),
     HarnessDefinition(
         name="opencode",
@@ -44,6 +46,8 @@ _HARNESSES: tuple[HarnessDefinition, ...] = (
         default_source_path=default_opencode_db_path(),
         source_path_env_vars=("XDG_DATA_HOME",),
         source_path_kind="file",
+        config_key="opencode_db",
+        id_prefix="opencode",
     ),
     HarnessDefinition(
         name="pi",
@@ -53,6 +57,9 @@ _HARNESSES: tuple[HarnessDefinition, ...] = (
         default_source_path=default_pi_sessions_path(),
         source_path_env_vars=(TOKTRAIL_PI_SESSIONS_ENV,),
         source_path_kind="path",
+        config_key="pi_sessions",
+        id_prefix="pi",
+        watch_subdirs=(".",),
     ),
     HarnessDefinition(
         name="copilot",
@@ -66,6 +73,8 @@ _HARNESSES: tuple[HarnessDefinition, ...] = (
             COPILOT_OTEL_DIR_ENV,
         ),
         source_path_kind="path",
+        config_key="copilot_otel",
+        id_prefix="copilot",
     ),
     HarnessDefinition(
         name="codex",
@@ -75,6 +84,9 @@ _HARNESSES: tuple[HarnessDefinition, ...] = (
         default_source_path=default_codex_sessions_path(),
         source_path_env_vars=(TOKTRAIL_CODEX_SESSIONS_ENV,),
         source_path_kind="path",
+        config_key="codex_sessions",
+        id_prefix="codex",
+        watch_subdirs=(".", "archived_sessions"),
     ),
     HarnessDefinition(
         name="goose",
@@ -84,6 +96,9 @@ _HARNESSES: tuple[HarnessDefinition, ...] = (
         default_source_path=default_goose_sessions_db_path(),
         source_path_env_vars=(TOKTRAIL_GOOSE_SESSIONS_ENV, GOOSE_PATH_ROOT_ENV),
         source_path_kind="file",
+        config_key="goose_sessions",
+        id_prefix="goose",
+        platform_notes="Linux, macOS, and Block legacy paths are supported.",
     ),
     HarnessDefinition(
         name="droid",
@@ -93,6 +108,8 @@ _HARNESSES: tuple[HarnessDefinition, ...] = (
         default_source_path=default_droid_sessions_path(),
         source_path_env_vars=(TOKTRAIL_DROID_SESSIONS_ENV,),
         source_path_kind="path",
+        config_key="droid_sessions",
+        id_prefix="droid",
     ),
     HarnessDefinition(
         name="claude",
@@ -102,6 +119,9 @@ _HARNESSES: tuple[HarnessDefinition, ...] = (
         default_source_path=default_claude_projects_path(),
         source_path_env_vars=(TOKTRAIL_CLAUDE_PROJECTS_ENV,),
         source_path_kind="path",
+        config_key="claude_projects",
+        id_prefix="claude",
+        watch_subdirs=(".",),
     ),
     HarnessDefinition(
         name="vibe",
@@ -111,6 +131,8 @@ _HARNESSES: tuple[HarnessDefinition, ...] = (
         default_source_path=default_vibe_logs_path(),
         source_path_env_vars=(TOKTRAIL_VIBE_LOGS_ENV,),
         source_path_kind="path",
+        config_key="vibe_logs",
+        id_prefix="vibe",
     ),
 )
 

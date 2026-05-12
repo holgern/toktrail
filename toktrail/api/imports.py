@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+import time
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -194,7 +195,7 @@ def import_usage(
     )
 
 
-def import_configured_usage(
+def import_configured_usage(  # noqa: C901
     db_path: Path | None,
     *,
     harnesses: Sequence[str] | None = None,
@@ -205,6 +206,8 @@ def import_configured_usage(
     config_path: Path | None = None,
     since_start: bool = False,
     since_ms: int | None = None,
+    refresh_mode: str = "full",
+    quick_sync_margin_seconds: int = 10,
 ) -> tuple[ImportUsageResult, ...]:
     if since_start and since_ms is not None:
         msg = "since_start=True and since_ms cannot be used together."
@@ -243,6 +246,28 @@ def import_configured_usage(
         msg = "--source is only valid when importing exactly one harness."
         raise InvalidAPIUsageError(msg)
 
+    if refresh_mode not in {"full", "quick", "none"}:
+        msg = "refresh_mode must be one of: full, quick, none."
+        raise InvalidAPIUsageError(msg)
+    if refresh_mode == "none":
+        return ()
+
+    refresh_started_ms = int(time.time() * 1000)
+    quick_cutoff_ms: int | None = None
+    if refresh_mode == "quick":
+        conn, _ = _open_state_db(db_path)
+        try:
+            last_started = db_module.get_state_metadata(
+                conn,
+                "last_refresh_started_ms",
+            )
+        finally:
+            conn.close()
+        if last_started is not None:
+            quick_cutoff_ms = max(
+                0,
+                int(last_started) - quick_sync_margin_seconds * 1000,
+            )
     results: list[ImportUsageResult] = []
     for harness_name in selected_harnesses:
         sources = import_config.sources or {}
@@ -259,6 +284,15 @@ def import_configured_usage(
             source_candidates = [raw_source]
 
         for configured_source in source_candidates:
+            if refresh_mode == "quick" and quick_cutoff_ms is not None:
+                quick_resolved = resolve_source_path(harness_name, configured_source)
+                if quick_resolved is not None and quick_resolved.is_file():
+                    try:
+                        mtime_ms = int(quick_resolved.stat().st_mtime_ns // 1_000_000)
+                    except OSError:
+                        mtime_ms = quick_cutoff_ms
+                    if mtime_ms < quick_cutoff_ms:
+                        continue
             resolved = resolve_source_path(harness_name, configured_source)
             if resolved is None or not resolved.exists():
                 if source_path is not None or import_config.missing_source == "error":
@@ -317,6 +351,21 @@ def import_configured_usage(
                     since_ms=since_ms,
                 )
             )
+    conn, _ = _open_state_db(db_path)
+    try:
+        db_module.set_state_metadata(
+            conn,
+            "last_refresh_started_ms",
+            str(refresh_started_ms),
+        )
+        db_module.set_state_metadata(
+            conn,
+            "last_refresh_completed_ms",
+            str(int(time.time() * 1000)),
+        )
+        conn.commit()
+    finally:
+        conn.close()
     return tuple(results)
 
 

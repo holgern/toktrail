@@ -13,6 +13,7 @@ from toktrail.api._conversions import (
 )
 from toktrail.api.models import (
     RunReport,
+    StatsReport,
     SubscriptionUsageReport,
     UsageSeriesReport,
     UsageSessionsReport,
@@ -154,6 +155,62 @@ def usage_report(
     if period is not None or timezone is not None or utc:
         filters["timezone"] = resolved_range.timezone
     return replace(public_report, filters=filters)
+
+
+def stats_report(
+    db_path: Path | None = None,
+    *,
+    period: str | None = None,
+    timezone: str | None = None,
+    utc: bool = False,
+    since_ms: int | None = None,
+    until_ms: int | None = None,
+    config_path: Path | None = None,
+) -> StatsReport:
+    report = usage_report(
+        db_path,
+        period=period,
+        timezone=timezone,
+        utc=utc,
+        since_ms=since_ms,
+        until_ms=until_ms,
+        config_path=config_path,
+    )
+    tokens = report.totals.tokens
+    costs = report.totals.costs
+    prompt_like = tokens.input + tokens.cache_read + tokens.cache_write
+    output_like = tokens.output + tokens.cache_output + tokens.reasoning
+    cache_denominator = max(prompt_like, 1)
+    filters = dict(report.filters)
+    return StatsReport(
+        schema_version=1,
+        range={
+            "since_ms": filters.get("since_ms"),
+            "until_ms": filters.get("until_ms"),
+            "timezone": filters.get("timezone"),
+        },
+        totals={
+            "messages": report.totals.message_count,
+            "tokens": tokens.as_dict(),
+            "prompt_like_tokens": prompt_like,
+            "output_like_tokens": output_like,
+            "source_usd": format(costs.source_cost_usd, "f"),
+            "actual_usd": format(costs.actual_cost_usd, "f"),
+            "virtual_usd": format(costs.virtual_cost_usd, "f"),
+            "savings_usd": format(costs.savings_usd, "f"),
+            "unpriced_count": costs.unpriced_count,
+        },
+        sessions={
+            "message_count": report.totals.message_count,
+        },
+        cache={
+            "cache_read_ratio": tokens.cache_read / cache_denominator,
+            "cache_write_ratio": tokens.cache_write / cache_denominator,
+        },
+        models=tuple(row.as_dict() for row in report.by_model),
+        providers=tuple(row.as_dict() for row in report.by_provider),
+        harnesses=tuple(row.as_dict() for row in report.by_harness),
+    )
 
 
 def usage_series_report(
@@ -396,6 +453,7 @@ def usage_runs_report(
 __all__ = [
     "session_report",
     "usage_report",
+    "stats_report",
     "usage_series_report",
     "usage_sessions_report",
     "subscription_usage_report",

@@ -41,6 +41,14 @@ Use ``--no-refresh`` to read stale local state without touching source logs:
 .. code-block:: bash
 
    toktrail usage today --no-refresh
+   toktrail usage statusline
+   toktrail usage statusline --provider openai --basis virtual
+   toktrail usage statusline --json
+   toktrail stats --format json
+   toktrail refresh --full
+   toktrail sources skipped
+
+   toktrail usage today --no-refresh
    toktrail run status --no-refresh
    toktrail subscriptions status --no-refresh
 

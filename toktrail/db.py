@@ -62,7 +62,7 @@ from toktrail.reporting import (
     UsageSessionsReport,
 )
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 _PERIOD_SORT: dict[str, int] = {
     "5h": 0,
     "daily": 1,
@@ -189,6 +189,9 @@ def migrate(conn: sqlite3.Connection) -> None:
     if current_version == 6:
         _migrate_v6_to_v7(conn)
         current_version = 7
+    if current_version == 7:
+        _migrate_v7_to_v8(conn)
+        current_version = 8
 
     _ensure_machine_id(conn)
     conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
@@ -246,6 +249,73 @@ def _write_state_metadata(conn: sqlite3.Connection, key: str, value: str) -> Non
         """,
         (key, value),
     )
+
+
+def get_state_metadata(conn: sqlite3.Connection, key: str) -> str | None:
+    return _read_state_metadata(conn, key)
+
+
+def set_state_metadata(conn: sqlite3.Connection, key: str, value: str) -> None:
+    _write_state_metadata(conn, key, value)
+
+
+def upsert_skipped_source(
+    conn: sqlite3.Connection,
+    *,
+    harness: str,
+    source_path: str,
+    reason: str,
+    source_session_key: str = "",
+    fingerprint_size: int | None = None,
+    fingerprint_mtime_ns: int | None = None,
+    updated_at_ms: int | None = None,
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO skipped_sources (
+            harness, source_path, source_session_key, reason,
+            fingerprint_size, fingerprint_mtime_ns, updated_at_ms
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(harness, source_path, source_session_key) DO UPDATE SET
+            reason = excluded.reason,
+            fingerprint_size = excluded.fingerprint_size,
+            fingerprint_mtime_ns = excluded.fingerprint_mtime_ns,
+            updated_at_ms = excluded.updated_at_ms
+        """,
+        (
+            harness,
+            source_path,
+            source_session_key,
+            reason,
+            fingerprint_size,
+            fingerprint_mtime_ns,
+            updated_at_ms if updated_at_ms is not None else _now_ms(),
+        ),
+    )
+
+
+def list_skipped_sources(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    return list(
+        conn.execute(
+            """
+            SELECT harness, source_path, source_session_key, reason,
+                   fingerprint_size, fingerprint_mtime_ns, updated_at_ms
+            FROM skipped_sources
+            ORDER BY updated_at_ms DESC, harness, source_path
+            """
+        )
+    )
+
+
+def clear_skipped_sources(conn: sqlite3.Connection, harness: str | None = None) -> int:
+    if harness is None:
+        cursor = conn.execute("DELETE FROM skipped_sources")
+    else:
+        cursor = conn.execute(
+            "DELETE FROM skipped_sources WHERE harness = ?",
+            (harness,),
+        )
+    return int(cursor.rowcount)
 
 
 def _ensure_machine_id(conn: sqlite3.Connection) -> str:
@@ -435,6 +505,18 @@ def _create_schema(conn: sqlite3.Connection) -> None:
 
         CREATE INDEX IF NOT EXISTS idx_import_sources_lookup
         ON import_sources(harness, source_path, source_session_key);
+
+
+        CREATE TABLE IF NOT EXISTS skipped_sources (
+            harness TEXT NOT NULL,
+            source_path TEXT NOT NULL,
+            source_session_key TEXT NOT NULL DEFAULT '',
+            reason TEXT NOT NULL,
+            fingerprint_size INTEGER,
+            fingerprint_mtime_ns INTEGER,
+            updated_at_ms INTEGER NOT NULL,
+            PRIMARY KEY (harness, source_path, source_session_key)
+        );
         """
     )
 
@@ -628,6 +710,27 @@ def _migrate_v5_to_v6(conn: sqlite3.Connection) -> None:
         ON import_sources(harness, source_path, source_session_key)
         """
     )
+
+
+def _create_skipped_sources_table(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS skipped_sources (
+            harness TEXT NOT NULL,
+            source_path TEXT NOT NULL,
+            source_session_key TEXT NOT NULL DEFAULT '',
+            reason TEXT NOT NULL,
+            fingerprint_size INTEGER,
+            fingerprint_mtime_ns INTEGER,
+            updated_at_ms INTEGER NOT NULL,
+            PRIMARY KEY (harness, source_path, source_session_key)
+        )
+        """
+    )
+
+
+def _migrate_v7_to_v8(conn: sqlite3.Connection) -> None:
+    _create_skipped_sources_table(conn)
 
 
 def _migrate_v6_to_v7(conn: sqlite3.Connection) -> None:

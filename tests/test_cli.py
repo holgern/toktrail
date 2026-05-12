@@ -725,6 +725,11 @@ def test_cli_sources_lists_filtered_source(tmp_path) -> None:
             "messages": 1,
             "tokens": 1500,
             "warning": "",
+            "config_key": "opencode_db",
+            "id_prefix": "opencode",
+            "watch_subdirs": [],
+            "file_based": True,
+            "effective_roots": [str(source_db)],
         }
     ]
 

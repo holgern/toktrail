@@ -34,6 +34,8 @@ from toktrail.api.models import (
 from toktrail.api.models import (
     RunScope as PublicRunScope,
 )
+from toktrail.api.reports import stats_report as stats_report_api
+from toktrail.api.reports import usage_report as usage_report_api
 from toktrail.api.sessions import list_runs
 from toktrail.api.sources import capture_source_snapshot
 from toktrail.cli_sync import sync_app
@@ -54,12 +56,14 @@ from toktrail.config import (
 from toktrail.db import (
     InsertUsageResult,
     archive_tracking_session,
+    clear_skipped_sources,
     connect,
     create_tracking_session,
     end_tracking_session,
     get_active_tracking_session,
     get_tracking_session,
     insert_usage_events,
+    list_skipped_sources,
     migrate,
     summarize_subscription_usage,
     summarize_usage,
@@ -113,6 +117,7 @@ config_app = typer.Typer(help="Inspect toktrail configuration files.")
 prices_app = typer.Typer(help="Inspect configured and used model pricing.")
 subscriptions_app = typer.Typer(help="Inspect provider subscription limits.")
 analyze_app = typer.Typer(help="Analyze per-call cache and cost behavior.")
+stats_app = typer.Typer(help="Report aggregate usage and session statistics.")
 
 app.add_typer(run_app, name="run")
 app.add_typer(sources_app, name="sources")
@@ -122,6 +127,7 @@ app.add_typer(config_app, name="config")
 app.add_typer(prices_app, name="prices")
 app.add_typer(subscriptions_app, name="subscriptions")
 app.add_typer(analyze_app, name="analyze")
+app.add_typer(stats_app, name="stats")
 app.add_typer(sync_app, name="sync")
 
 _VALID_REPORT_PRICE_STATES = {"all", "priced", "unpriced"}
@@ -928,6 +934,125 @@ def _subscriptions_status_impl(
         display_timezone_name=timezone_name,
         display_utc=utc,
     )
+
+@usage_app.command("statusline")
+def usage_statusline(
+    ctx: typer.Context,
+    json_output: JsonOption = False,
+    provider_id: ProviderOption = None,
+    harness: HarnessOption = None,
+    basis: Annotated[
+        str,
+        typer.Option("--basis", help="Cost basis: source, actual, or virtual."),
+    ] = "virtual",
+    refresh: RefreshOption = True,
+    refresh_details: RefreshDetailsOption = False,
+    raw: RawModeOption = None,
+    timezone_name: TimezoneOption = None,
+    utc: UtcOption = False,
+) -> None:
+    if basis not in {"source", "actual", "virtual"}:
+        _exit_with_error("--basis must be one of: source, actual, virtual.")
+    refresh_results = _refresh_before_report(
+        ctx,
+        enabled=refresh,
+        details=refresh_details,
+        json_output=json_output,
+        harness=harness,
+        include_raw_json=raw,
+    )
+    report = usage_report_api(
+        _resolve_state_db(ctx),
+        period="today",
+        timezone=timezone_name,
+        utc=utc,
+        harness=harness,
+        provider_id=provider_id,
+        config_path=_resolve_config_path(ctx),
+    )
+    costs = report.totals.costs
+    cost = {
+        "source": costs.source_cost_usd,
+        "actual": costs.actual_cost_usd,
+        "virtual": costs.virtual_cost_usd,
+    }[basis]
+    payload = {
+        "period": "today",
+        "tokens_total": report.totals.tokens.total,
+        "source_usd": format(costs.source_cost_usd, "f"),
+        "actual_usd": format(costs.actual_cost_usd, "f"),
+        "virtual_usd": format(costs.virtual_cost_usd, "f"),
+        "savings_usd": format(costs.savings_usd, "f"),
+        "unpriced_count": costs.unpriced_count,
+    }
+    if provider_id is not None:
+        payload["provider"] = provider_id
+    if harness is not None:
+        payload["harness"] = harness
+    if json_output:
+        typer.echo(
+            json.dumps(
+                _wrap_refresh_json_payload(
+                    payload,
+                    refresh_results=refresh_results,
+                    include_refresh=refresh_details,
+                ),
+                indent=2,
+            )
+        )
+        return
+    label = "today"
+    if provider_id is not None:
+        label += f" {provider_id}"
+    if harness is not None:
+        label += f" {harness}"
+    typer.echo(
+        f"{label}: {_format_int(report.totals.tokens.total)} tokens · "
+        f"{basis} {_format_cost(cost)} · savings {_format_cost(costs.savings_usd)}"
+    )
+
+
+@stats_app.callback(invoke_without_command=True)
+def stats(
+    ctx: typer.Context,
+    format_: Annotated[
+        str,
+        typer.Option("--format", help="Output format: human or json."),
+    ] = "human",
+    period: UsagePeriodOption = None,
+    since: Annotated[str | None, typer.Option("--since")] = None,
+    until: Annotated[str | None, typer.Option("--until")] = None,
+    timezone_name: TimezoneOption = None,
+    utc: UtcOption = False,
+) -> None:
+    if ctx.invoked_subcommand is not None:
+        return
+    if format_ not in {"human", "json"}:
+        _exit_with_error("--format must be one of: human, json.")
+    from toktrail.periods import _resolve_timezone, parse_cli_boundary
+
+    tz = _resolve_timezone(timezone_name=timezone_name, utc=utc)
+    since_ms = parse_cli_boundary(since, tz=tz, is_until=False)
+    until_ms = parse_cli_boundary(until, tz=tz, is_until=True)
+    report = stats_report_api(
+        _resolve_state_db(ctx),
+        period=period,
+        since_ms=since_ms,
+        until_ms=until_ms,
+        timezone=timezone_name,
+        utc=utc,
+        config_path=_resolve_config_path(ctx),
+    )
+    if format_ == "json":
+        typer.echo(json.dumps(report.as_dict(), indent=2))
+        return
+    totals = report.totals
+    tokens = totals["tokens"]
+    typer.echo("Stats v1")
+    typer.echo(f"Messages: {_format_int(int(totals['messages']))}")
+    typer.echo(f"Tokens: {_format_int(int(tokens['total']))}")
+    typer.echo(f"Virtual cost: ${totals['virtual_usd']}")
+    typer.echo(f"Unpriced models: {totals['unpriced_count']}")
 
 
 @usage_app.command("daily")
@@ -2932,6 +3057,11 @@ def _sources_list(
                 ),
                 "tokens": sum(summary.tokens.total for summary in snapshot.sessions),
                 "warning": "" if exists else "source not found",
+                "config_key": get_harness(harness).config_key,
+                "id_prefix": get_harness(harness).id_prefix,
+                "watch_subdirs": list(get_harness(harness).watch_subdirs),
+                "file_based": get_harness(harness).file_based,
+                "effective_roots": [str(resolved)] if resolved is not None else [],
             }
         )
 
@@ -2948,6 +3078,8 @@ def _sources_list(
             "tokens": _format_int(cast(int, row["tokens"])),
             "source_path": str(row["source_path"]),
             "warning": str(row["warning"]),
+            "config_key": str(row.get("config_key") or ""),
+            "id_prefix": str(row.get("id_prefix") or ""),
         }
         for row in rows
     ]
@@ -2960,6 +3092,8 @@ def _sources_list(
             "messages",
             "tokens",
             "source_path",
+            "config_key",
+            "id_prefix",
             "warning",
         ],
         {
@@ -2969,6 +3103,8 @@ def _sources_list(
             "messages": "messages",
             "tokens": "tokens",
             "source_path": "source_path",
+            "config_key": "config_key",
+            "id_prefix": "id_prefix",
             "warning": "warning",
         },
         rich_output=False,
@@ -3241,6 +3377,13 @@ def refresh_usage(
     no_run: NoRunOption = False,
     dry_run: DryRunOption = False,
     json_output: JsonOption = False,
+    full: Annotated[
+        bool,
+        typer.Option(
+            "--full",
+            help="Scan all configured sources instead of quick refresh.",
+        ),
+    ] = False,
 ) -> None:
     """Refresh usage from configured sources or a single explicit harness.
 
@@ -3296,6 +3439,7 @@ def refresh_usage(
                 include_raw_json=raw,
                 config_path=_resolve_config_path(ctx),
                 since_start=since_run_start,
+                refresh_mode="full" if full else "quick",
             )
         except (OSError, ValueError, ToktrailError) as exc:
             _exit_with_error(str(exc))
@@ -3335,6 +3479,51 @@ def watch(
     except (ToktrailError, OSError, ValueError) as exc:
         _exit_with_error(str(exc))
 
+
+@sources_app.command("skipped")
+def sources_skipped(
+    ctx: typer.Context,
+    clear: Annotated[
+        bool,
+        typer.Option(
+            "--clear",
+            help="Clear skipped-source cache instead of listing it.",
+        ),
+    ] = False,
+    harness: HarnessOption = None,
+    json_output: JsonOption = False,
+) -> None:
+    conn = _open_toktrail_connection(ctx)
+    try:
+        if clear:
+            count = clear_skipped_sources(conn, harness=harness)
+            conn.commit()
+            if json_output:
+                typer.echo(json.dumps({"cleared": count}, indent=2))
+            else:
+                typer.echo(f"Cleared {count} skipped source(s).")
+            return
+        rows = [dict(row) for row in list_skipped_sources(conn)]
+    finally:
+        conn.close()
+    if harness is not None:
+        rows = [row for row in rows if row["harness"] == harness]
+    if json_output:
+        typer.echo(json.dumps({"skipped_sources": rows}, indent=2))
+        return
+    if not rows:
+        typer.echo("No skipped sources.")
+        return
+    _print_table(
+        rows,
+        ["harness", "source_path", "reason", "updated_at_ms"],
+        headers={
+            "harness": "harness",
+            "source_path": "source path",
+            "reason": "reason",
+            "updated_at_ms": "updated at ms",
+        },
+    )
 
 @sources_app.command("sessions")
 def sources_sessions(
@@ -5480,6 +5669,7 @@ def _refresh_before_report(
             use_active_session=use_active_session,
             include_raw_json=include_raw_json,
             config_path=_resolve_config_path(ctx),
+            refresh_mode="quick",
             since_start=since_start,
         )
     except (OSError, ValueError, ToktrailError) as exc:

@@ -338,6 +338,12 @@ class HarnessDefinition:
     default_source_path: Path | None
     source_path_env_vars: tuple[str, ...] = ()
     source_path_kind: str = "path"
+    config_key: str | None = None
+    id_prefix: str = ""
+    watch_subdirs: tuple[str, ...] = ()
+    shallow_watch: bool = False
+    file_based: bool = True
+    platform_notes: str = ""
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -348,6 +354,12 @@ class HarnessDefinition:
             "default_source_path": _path_text(self.default_source_path),
             "source_path_env_vars": list(self.source_path_env_vars),
             "source_path_kind": self.source_path_kind,
+            "config_key": self.config_key,
+            "id_prefix": self.id_prefix,
+            "watch_subdirs": list(self.watch_subdirs),
+            "shallow_watch": self.shallow_watch,
+            "file_based": self.file_based,
+            "platform_notes": self.platform_notes,
         }
 
 
@@ -618,6 +630,30 @@ class RunReport:
             "by_model": [row.as_dict() for row in self.by_model],
             "by_activity": [row.as_dict() for row in self.by_activity],
             "unconfigured_models": [row.as_dict() for row in self.unconfigured_models],
+        }
+
+
+@dataclass(frozen=True)
+class StatsReport:
+    schema_version: int
+    range: dict[str, object]
+    totals: dict[str, object]
+    sessions: dict[str, object]
+    cache: dict[str, object]
+    models: tuple[dict[str, object], ...]
+    providers: tuple[dict[str, object], ...]
+    harnesses: tuple[dict[str, object], ...]
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "schema_version": self.schema_version,
+            "range": dict(self.range),
+            "totals": dict(self.totals),
+            "sessions": dict(self.sessions),
+            "cache": dict(self.cache),
+            "models": list(self.models),
+            "providers": list(self.providers),
+            "harnesses": list(self.harnesses),
         }
 
 

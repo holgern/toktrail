@@ -69,6 +69,12 @@ class HarnessDefinition:
     source_kind: Literal["json", "jsonl", "sqlite", "directory", "mixed"] = "directory"
     supports_watch: bool = False
     supports_environment: bool = False
+    config_key: str | None = None
+    id_prefix: str = ""
+    watch_subdirs: tuple[str, ...] = ()
+    shallow_watch: bool = False
+    file_based: bool = True
+    platform_notes: str = ""
 
 
 HARNESS_REGISTRY: dict[str, HarnessDefinition] = {
@@ -83,6 +89,8 @@ HARNESS_REGISTRY: dict[str, HarnessDefinition] = {
         scan=scan_amp_path,
         list_sessions=list_amp_sessions,
         supports_watch=True,
+        config_key="amp_threads",
+        id_prefix="amp",
     ),
     "opencode": HarnessDefinition(
         name="opencode",
@@ -95,6 +103,8 @@ HARNESS_REGISTRY: dict[str, HarnessDefinition] = {
         scan=scan_opencode_sqlite,
         list_sessions=list_opencode_sessions,
         supports_watch=True,
+        config_key="opencode_db",
+        id_prefix="opencode",
     ),
     "pi": HarnessDefinition(
         name="pi",
@@ -108,6 +118,9 @@ HARNESS_REGISTRY: dict[str, HarnessDefinition] = {
         scan=scan_pi_path,
         list_sessions=list_pi_sessions,
         supports_watch=True,
+        config_key="pi_sessions",
+        id_prefix="pi",
+        watch_subdirs=(".",),
     ),
     "copilot": HarnessDefinition(
         name="copilot",
@@ -124,6 +137,8 @@ HARNESS_REGISTRY: dict[str, HarnessDefinition] = {
         list_sessions=list_copilot_sessions,
         supports_watch=True,
         supports_environment=True,
+        config_key="copilot_otel",
+        id_prefix="copilot",
     ),
     "codex": HarnessDefinition(
         name="codex",
@@ -136,6 +151,9 @@ HARNESS_REGISTRY: dict[str, HarnessDefinition] = {
         scan=scan_codex_path,
         list_sessions=list_codex_sessions,
         supports_watch=True,
+        config_key="codex_sessions",
+        id_prefix="codex",
+        watch_subdirs=(".", "archived_sessions"),
     ),
     "goose": HarnessDefinition(
         name="goose",
@@ -159,6 +177,9 @@ HARNESS_REGISTRY: dict[str, HarnessDefinition] = {
         scan=scan_goose_sqlite,
         list_sessions=list_goose_sessions,
         supports_watch=True,
+        config_key="goose_sessions",
+        id_prefix="goose",
+        platform_notes="Linux, macOS, and Block legacy paths are supported.",
     ),
     "droid": HarnessDefinition(
         name="droid",
@@ -171,6 +192,8 @@ HARNESS_REGISTRY: dict[str, HarnessDefinition] = {
         scan=scan_droid_path,
         list_sessions=list_droid_sessions,
         supports_watch=True,
+        config_key="droid_sessions",
+        id_prefix="droid",
     ),
     "claude": HarnessDefinition(
         name="claude",
@@ -184,6 +207,9 @@ HARNESS_REGISTRY: dict[str, HarnessDefinition] = {
         scan=scan_claude_path,
         list_sessions=list_claude_sessions,
         supports_watch=True,
+        config_key="claude_projects",
+        id_prefix="claude",
+        watch_subdirs=(".",),
     ),
     "vibe": HarnessDefinition(
         name="vibe",
@@ -196,6 +222,8 @@ HARNESS_REGISTRY: dict[str, HarnessDefinition] = {
         scan=scan_vibe_path,
         list_sessions=list_vibe_sessions,
         supports_watch=True,
+        config_key="vibe_logs",
+        id_prefix="vibe",
     ),
 }
 
