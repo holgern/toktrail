@@ -935,6 +935,7 @@ def _subscriptions_status_impl(
         display_utc=utc,
     )
 
+
 @usage_app.command("statusline")
 def usage_statusline(
     ctx: typer.Context,
@@ -3524,6 +3525,7 @@ def sources_skipped(
             "updated_at_ms": "updated at ms",
         },
     )
+
 
 @sources_app.command("sessions")
 def sources_sessions(

@@ -21,3 +21,8 @@ Use::
 
 The command returns one row per configured harness with discovery metadata and
 the resolved effective root when available.
+
+Supported harnesses
+--------------------
+
+amp, claude, codex, copilot, droid, goose, opencode, pi, vibe
