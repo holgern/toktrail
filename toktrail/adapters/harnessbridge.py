@@ -27,6 +27,8 @@ class _SessionHeader:
     harness: str | None = None
     accounting: str | None = None
     started_ms: int | None = None
+    provider_id: str | None = None
+    model_id: str | None = None
 
 
 def scan_harnessbridge_path(
@@ -201,6 +203,16 @@ def _merge_session_header(
         started_ms=_timestamp_ms_from_value(row.get("started_ms"))
         or _parse_rfc3339_ms(row.get("started_at"))
         or previous.started_ms,
+        provider_id=(
+            _normalized_identity(row.get("provider_id"))
+            or _normalized_identity(row.get("provider"))
+            or previous.provider_id
+        ),
+        model_id=(
+            _as_str(row.get("model_id"))
+            or _as_str(row.get("model"))
+            or previous.model_id
+        ),
     )
 
 
@@ -241,17 +253,37 @@ def _parse_usage_row(
         or _as_str(row.get("id"))
         or source_row_id
     )
+    explicit_global_dedup_key = (
+        row.get("global_dedup_key") or row.get("dedup_key")
+    )
     created_ms = (
         _timestamp_ms_from_value(row.get("created_ms"))
         or _parse_rfc3339_ms(row.get("created_at"))
+        or _parse_rfc3339_ms(row.get("timestamp"))
         or header.started_ms
         or fallback_timestamp
     )
     completed_ms = _timestamp_ms_from_value(
         row.get("completed_ms")
-    ) or _parse_rfc3339_ms(row.get("completed_at"))
+    ) or _parse_rfc3339_ms(row.get("completed_at")) or _parse_rfc3339_ms(
+        row.get("timestamp")
+    )
     if completed_ms is not None and completed_ms < created_ms:
         completed_ms = None
+
+    provider_id = (
+        _normalized_identity(row.get("provider_id"))
+        or _normalized_identity(row.get("provider"))
+        or header.provider_id
+        or "unknown"
+    )
+    model_id = (
+        _as_str(row.get("model_id"))
+        or _as_str(row.get("model"))
+        or header.model_id
+        or "unknown"
+    )
+    model_id = _strip_provider_prefix(model_id, provider_id)
 
     event = UsageEvent(
         harness=event_harness,
@@ -260,14 +292,14 @@ def _parse_usage_row(
         source_message_id=source_message_id,
         source_dedup_key=source_dedup_key,
         global_dedup_key=_global_dedup_key(
-            row.get("global_dedup_key"),
+            explicit_global_dedup_key,
             harness=event_harness,
             source_session_id=resolved_source_session_id,
             source_dedup_key=source_dedup_key,
         ),
         fingerprint_hash="",
-        provider_id=_normalized_identity(row.get("provider_id")) or "unknown",
-        model_id=_as_str(row.get("model_id")) or "unknown",
+        provider_id=provider_id,
+        model_id=model_id,
         thinking_level=normalize_thinking_level(row.get("thinking_level")),
         agent=_normalized_identity(row.get("agent")),
         created_ms=created_ms,
@@ -310,6 +342,14 @@ def _global_dedup_key(
     if explicit.startswith(f"{HARNESSBRIDGE_SOURCE}:"):
         return explicit
     return f"{HARNESSBRIDGE_SOURCE}:{explicit}"
+
+
+def _strip_provider_prefix(model_id: str, provider_id: str) -> str:
+    prefix = f"{provider_id}/"
+    if model_id.lower().startswith(prefix.lower()):
+        stripped = model_id[len(prefix):]
+        return stripped or model_id
+    return model_id
 
 
 def _token_breakdown(value: object) -> TokenBreakdown:

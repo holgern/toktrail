@@ -355,6 +355,86 @@ def test_cli_statusline_json_shape(tmp_path: Path) -> None:
     assert payload["cache"]["cached_tokens"] == 200
 
 
+def test_cli_statusline_harnessbridge_refresh_always_bypasses_cached_empty_output(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    state_db = tmp_path / "toktrail.db"
+    source_dir = tmp_path / "harnessbridge-sessions"
+    source_file = source_dir / "hb.jsonl"
+    runtime_dir = tmp_path / "runtime"
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        f"""
+config_version = 1
+
+[imports]
+harnesses = ["harnessbridge"]
+missing_source = "warn"
+include_raw_json = false
+
+[imports.sources]
+harnessbridge = "{_toml_path_value(source_dir)}"
+""".strip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("TOKTRAIL_CONFIG", str(config_path))
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(runtime_dir))
+
+    runner = CliRunner()
+    init_result = runner.invoke(app, ["--db", str(state_db), "init"])
+    assert init_result.exit_code == 0, init_result.output
+
+    empty_result = runner.invoke(
+        app,
+        ["--db", str(state_db), "statusline", "--harness", "harnessbridge"],
+    )
+    assert empty_result.exit_code == 0, empty_result.output
+    assert "no usage sources" in empty_result.output
+
+    write_jsonl_rows(
+        source_file,
+        [
+            {
+                "type": "session",
+                "id": "hb_20260513T161435Z_8f434346",
+                "harness": "pi",
+                "accounting": "primary",
+                "started_at": "2026-05-13T16:14:35.963000+00:00",
+            },
+            {
+                "type": "usage",
+                "id": "usage_0001",
+                "harness": "pi",
+                "timestamp": "2026-05-13T16:14:44.720215+00:00",
+                "provider": "zai",
+                "model": "zai/glm-5.1",
+                "dedup_key": "harnessbridge:hb_20260513T161435Z_8f434346:usage_0001",
+                "tokens": {"input": 815, "output": 48, "cacheRead": 1024},
+                "cost": {"total": "0.0009686"},
+            },
+        ],
+    )
+
+    refreshed_result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "statusline",
+            "--harness",
+            "harnessbridge",
+            "--refresh",
+            "always",
+        ],
+    )
+
+    assert refreshed_result.exit_code == 0, refreshed_result.output
+    assert "no usage sources" not in refreshed_result.output
+    assert "pi" in refreshed_result.output
+    assert "glm-5.1" in refreshed_result.output
+
+
 def test_cli_statusline_shows_compact_unpriced_marker(tmp_path: Path) -> None:
     state_db = tmp_path / "toktrail.db"
     conn = connect(state_db)

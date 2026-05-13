@@ -109,6 +109,53 @@ def test_parse_harnessbridge_primary_usage_rows(tmp_path) -> None:
     assert all(event.raw_json is not None for event in events)
 
 
+def test_parse_harnessbridge_v002_usage_aliases(tmp_path) -> None:
+    session_file = write_harnessbridge_rows(
+        tmp_path / "v002.jsonl",
+        [
+            {
+                "type": "session",
+                "id": "hb_20260513T161435Z_8f434346",
+                "harness": "pi",
+                "accounting": "primary",
+                "started_at": "2026-05-13T16:14:35.963000+00:00",
+                "provider": "zai",
+                "model": "zai/glm-5.1",
+            },
+            {
+                "type": "usage",
+                "id": "usage_0001",
+                "harness": "pi",
+                "timestamp": "2026-05-13T16:14:44.720215+00:00",
+                "provider": "zai",
+                "model": "zai/glm-5.1",
+                "dedup_key": "harnessbridge:hb_20260513T161435Z_8f434346:usage_0001",
+                "tokens": {"input": 815, "output": 48, "cacheRead": 1024},
+                "cost": {"total": "0.0009686"},
+            },
+        ],
+    )
+
+    events = parse_harnessbridge_file(session_file)
+
+    assert len(events) == 1
+    event = events[0]
+    assert event.harness == "pi"
+    assert event.source_session_id == "hb_20260513T161435Z_8f434346"
+    assert event.provider_id == "zai"
+    assert event.model_id == "glm-5.1"
+    assert event.created_ms == 1_778_688_884_720
+    assert event.completed_ms == 1_778_688_884_720
+    assert event.tokens.input == 815
+    assert event.tokens.output == 48
+    assert event.tokens.cache_read == 1024
+    assert event.source_cost_usd == Decimal("0.0009686")
+    assert (
+        event.global_dedup_key
+        == "harnessbridge:hb_20260513T161435Z_8f434346:usage_0001"
+    )
+
+
 def test_scan_harnessbridge_skips_mirror_rows_by_default(tmp_path) -> None:
     session_file = write_harnessbridge_rows(
         tmp_path / "mirror.jsonl",

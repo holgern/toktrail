@@ -15,6 +15,7 @@ from tests.helpers import (
 from tests.test_amp_parser import create_amp_source
 from tests.test_droid_parser import write_droid_settings
 from tests.test_goose_parser import create_goose_db, insert_session
+from tests.test_harnessbridge_parser import write_harnessbridge_rows
 from toktrail.api.imports import import_configured_usage, import_usage
 from toktrail.api.models import RunScope
 from toktrail.api.reports import session_report
@@ -353,6 +354,68 @@ def test_import_usage_supports_amp_source(tmp_path) -> None:
     assert report.totals.tokens.cache_write == 40
     assert report.totals.tokens.total == 120
     assert report.totals.costs.source_cost_usd == 0.75
+
+
+def test_import_usage_reimports_directory_source_when_child_file_changes(
+    tmp_path,
+) -> None:
+    state_db = tmp_path / "toktrail.db"
+    harnessbridge_source = tmp_path / "harnessbridge" / "sessions"
+    session_file = harnessbridge_source / "session.jsonl"
+    init_state(state_db)
+    session = start_run(state_db, name="harnessbridge", started_at_ms=0)
+
+    first_rows = [
+        {
+            "type": "session",
+            "id": "hb-session-1",
+            "harness": "pi",
+            "accounting": "primary",
+            "started_ms": 1_778_682_000_000,
+        },
+        {
+            "type": "usage",
+            "id": "evt-1",
+            "harness": "pi",
+            "provider_id": "anthropic",
+            "model_id": "claude-sonnet-4",
+            "created_ms": 1_778_682_001_000,
+            "tokens": {"input": 5, "output": 2},
+        },
+    ]
+    second_rows = first_rows + [
+        {
+            "type": "usage",
+            "id": "evt-2",
+            "harness": "pi",
+            "provider_id": "anthropic",
+            "model_id": "claude-sonnet-4",
+            "created_ms": 1_778_682_002_000,
+            "tokens": {"input": 7, "output": 3},
+        }
+    ]
+    write_harnessbridge_rows(session_file, first_rows)
+
+    first = import_usage(
+        state_db,
+        "harnessbridge",
+        source_path=harnessbridge_source,
+        session_id=session.id,
+    )
+
+    write_harnessbridge_rows(session_file, second_rows)
+    second = import_usage(
+        state_db,
+        "harnessbridge",
+        source_path=harnessbridge_source,
+        session_id=session.id,
+    )
+    report = session_report(state_db, session.id)
+
+    assert first.rows_imported == 1
+    assert second.rows_imported == 1
+    assert report.by_harness[0].message_count == 2
+    assert report.totals.tokens.total == 17
 
 
 def test_import_configured_usage_imports_all_configured_harnesses(tmp_path) -> None:

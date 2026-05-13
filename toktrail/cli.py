@@ -5856,6 +5856,10 @@ def _build_statusline_cli(
         if stale_after is not None
         else statusline_config.cache.stale_after_secs
     )
+    refresh_harness = effective_harness
+    report_harness = effective_harness
+    if effective_harness == "harnessbridge":
+        report_harness = None
     payload = _read_statusline_stdin_payload()
     request = StatuslineRequest(
         harness=effective_harness,
@@ -5873,7 +5877,7 @@ def _build_statusline_cli(
     state_db_path = _resolve_state_db(ctx)
     resolved_source_path = _configured_statusline_source_path(
         loaded_config,
-        effective_harness,
+        refresh_harness,
     )
     cache_dir = statusline_cache_dir()
     cache_key = statusline_cache_key(
@@ -5881,14 +5885,16 @@ def _build_statusline_cli(
         request=request,
         json_output=False,
     )
-    cached = load_statusline_output_cache(
-        cache_dir=cache_dir,
-        cache_key=cache_key,
-        state_db_path=state_db_path,
-        config_path=loaded_config.config_path,
-        source_path=resolved_source_path,
-        max_age_seconds=statusline_config.cache.output_cache_secs,
-    )
+    cached = None
+    if requested_refresh != "always" and not refresh_details:
+        cached = load_statusline_output_cache(
+            cache_dir=cache_dir,
+            cache_key=cache_key,
+            state_db_path=state_db_path,
+            config_path=loaded_config.config_path,
+            source_path=resolved_source_path,
+            max_age_seconds=statusline_config.cache.output_cache_secs,
+        )
     if cached is not None:
         return cached, (), payload, 0
     effective_refresh = requested_refresh
@@ -5906,13 +5912,13 @@ def _build_statusline_cli(
     refresh_results = _refresh_for_statusline(
         ctx,
         mode=effective_refresh,
-        harness=effective_harness,
+        harness=refresh_harness,
         details=refresh_details,
         raw=raw,
     )
     report = statusline_report_api(
         state_db_path,
-        harness=effective_harness,
+        harness=report_harness,
         provider_id=provider_id,
         model_id=model_id,
         source_session_id=source_session_id,
@@ -6026,7 +6032,9 @@ def _configured_statusline_source_path(
     configured = sources.get(harness)
     if isinstance(configured, list):
         return configured[0] if configured else None
-    return configured
+    if configured is not None:
+        return configured
+    return get_harness(harness).resolve_source_path(None)
 
 
 def _should_skip_statusline_auto_refresh(
@@ -6036,8 +6044,15 @@ def _should_skip_statusline_auto_refresh(
     cache_metadata: dict[str, object] | None,
     min_refresh_interval_secs: int,
 ) -> bool:
-    if source_path is None or not source_path.exists() or source_path.is_dir():
+    if source_path is None or not source_path.exists():
         return True
+    if source_path.is_dir():
+        if cache_metadata is None:
+            return False
+        created_ms = cache_metadata.get("created_ms")
+        if not isinstance(created_ms, int):
+            return False
+        return int(time.time() * 1000) - created_ms < min_refresh_interval_secs * 1000
     state_mtime_ns = _path_mtime_ns(state_db_path)
     source_mtime_ns = _path_mtime_ns(source_path)
     if (

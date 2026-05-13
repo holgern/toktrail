@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from decimal import Decimal
 from pathlib import Path
 
@@ -551,7 +552,9 @@ def test_statusline_cache_atomic_write(tmp_path: Path) -> None:
     assert not (cache_dir / f"{cache_key}.tmp").exists()
 
 
-def test_statusline_refresh_auto_skips_directory_sources(tmp_path: Path) -> None:
+def test_statusline_refresh_auto_checks_directory_sources_without_recent_cache(
+    tmp_path: Path,
+) -> None:
     state_db = tmp_path / "toktrail.db"
     source_dir = tmp_path / "sessions"
     source_dir.mkdir()
@@ -562,6 +565,16 @@ def test_statusline_refresh_auto_skips_directory_sources(tmp_path: Path) -> None
             state_db_path=state_db,
             source_path=source_dir,
             cache_metadata=None,
+            min_refresh_interval_secs=5,
+        )
+        is False
+    )
+
+    assert (
+        _should_skip_statusline_auto_refresh(
+            state_db_path=state_db,
+            source_path=source_dir,
+            cache_metadata={"created_ms": int(time.time() * 1000)},
             min_refresh_interval_secs=5,
         )
         is True

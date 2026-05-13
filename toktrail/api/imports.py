@@ -377,6 +377,8 @@ def _source_fingerprint(
 ) -> tuple[int | None, int | None, int | None, int | None, int | None]:
     if not path.exists():
         return (None, None, None, None, None)
+    if path.is_dir():
+        return _directory_fingerprint(path)
     try:
         stat = path.stat()
         size = int(stat.st_size)
@@ -402,3 +404,27 @@ def _source_fingerprint(
             sqlite_page_count = None
             sqlite_schema_version = None
     return (size, mtime_ns, inode, sqlite_page_count, sqlite_schema_version)
+
+
+def _directory_fingerprint(
+    path: Path,
+) -> tuple[int | None, int | None, int | None, int | None, int | None]:
+    file_count = 0
+    total_size = 0
+    max_mtime_ns = 0
+    inode_hash = 0
+    try:
+        for child in path.rglob("*"):
+            if not child.is_file():
+                continue
+            try:
+                stat = child.stat()
+            except OSError:
+                continue
+            file_count += 1
+            total_size += int(stat.st_size)
+            max_mtime_ns = max(max_mtime_ns, int(stat.st_mtime_ns))
+            inode_hash ^= int(stat.st_ino)
+    except OSError:
+        return (None, None, None, None, None)
+    return (total_size, max_mtime_ns, file_count ^ inode_hash, None, None)
