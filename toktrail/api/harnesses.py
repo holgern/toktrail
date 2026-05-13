@@ -4,12 +4,14 @@ from toktrail.api._common import _normalize_harness_name
 from toktrail.api.models import HarnessDefinition
 from toktrail.errors import UnsupportedHarnessError
 from toktrail.paths import (
+    CODE_HOME_ENV,
     COPILOT_FILE_ENV,
     COPILOT_OTEL_DIR_ENV,
     COPILOT_OTEL_FILE_EXPORTER_PATH_ENV,
     GOOSE_PATH_ROOT_ENV,
     TOKTRAIL_AMP_THREADS_ENV,
     TOKTRAIL_CLAUDE_PROJECTS_ENV,
+    TOKTRAIL_CODE_SESSIONS_ENV,
     TOKTRAIL_CODEX_SESSIONS_ENV,
     TOKTRAIL_DROID_SESSIONS_ENV,
     TOKTRAIL_GOOSE_SESSIONS_ENV,
@@ -18,6 +20,7 @@ from toktrail.paths import (
     TOKTRAIL_VIBE_LOGS_ENV,
     default_amp_threads_path,
     default_claude_projects_path,
+    default_code_sessions_path,
     default_codex_sessions_path,
     default_copilot_otel_dir,
     default_droid_sessions_path,
@@ -88,6 +91,18 @@ _HARNESSES: tuple[HarnessDefinition, ...] = (
         source_path_kind="path",
         config_key="codex_sessions",
         id_prefix="codex",
+        watch_subdirs=(".", "archived_sessions"),
+    ),
+    HarnessDefinition(
+        name="code",
+        display_name="Code",
+        supports_watch=True,
+        supports_environment=False,
+        default_source_path=default_code_sessions_path(),
+        source_path_env_vars=(TOKTRAIL_CODE_SESSIONS_ENV, CODE_HOME_ENV),
+        source_path_kind="path",
+        config_key="code_sessions",
+        id_prefix="code",
         watch_subdirs=(".", "archived_sessions"),
     ),
     HarnessDefinition(

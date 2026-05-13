@@ -8,6 +8,7 @@ from typing import Literal
 from toktrail.adapters.amp import list_amp_sessions, scan_amp_path
 from toktrail.adapters.base import ScanResult, SourceSessionSummary
 from toktrail.adapters.claude import list_claude_sessions, scan_claude_path
+from toktrail.adapters.code import list_code_sessions, scan_code_path
 from toktrail.adapters.codex import list_codex_sessions, scan_codex_path
 from toktrail.adapters.copilot import list_copilot_sessions, scan_copilot_path
 from toktrail.adapters.droid import list_droid_sessions, scan_droid_path
@@ -25,6 +26,7 @@ from toktrail.paths import (
     GOOSE_PATH_ROOT_ENV,
     TOKTRAIL_AMP_THREADS_ENV,
     TOKTRAIL_CLAUDE_PROJECTS_ENV,
+    TOKTRAIL_CODE_SESSIONS_ENV,
     TOKTRAIL_CODEX_SESSIONS_ENV,
     TOKTRAIL_DROID_SESSIONS_ENV,
     TOKTRAIL_GOOSE_SESSIONS_ENV,
@@ -33,6 +35,7 @@ from toktrail.paths import (
     TOKTRAIL_VIBE_LOGS_ENV,
     resolve_amp_threads_path,
     resolve_claude_projects_path,
+    resolve_code_sessions_path,
     resolve_codex_sessions_path,
     resolve_copilot_source_path,
     resolve_droid_sessions_path,
@@ -159,6 +162,24 @@ HARNESS_REGISTRY: dict[str, HarnessDefinition] = {
         supports_watch=True,
         config_key="codex_sessions",
         id_prefix="codex",
+        watch_subdirs=(".", "archived_sessions"),
+    ),
+    "code": HarnessDefinition(
+        name="code",
+        display_name="Code",
+        default_roots=(PathTemplate((".code", "sessions")),),
+        env_roots=(
+            EnvRoot(TOKTRAIL_CODE_SESSIONS_ENV),
+            EnvRoot("CODE_HOME", ("sessions",)),
+        ),
+        patterns=("*.json", "*.jsonl"),
+        source_kind="mixed",
+        resolve_source_path=resolve_code_sessions_path,
+        scan=scan_code_path,
+        list_sessions=list_code_sessions,
+        supports_watch=True,
+        config_key="code_sessions",
+        id_prefix="code",
         watch_subdirs=(".", "archived_sessions"),
     ),
     "goose": HarnessDefinition(

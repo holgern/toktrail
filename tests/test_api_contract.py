@@ -202,12 +202,15 @@ def test_public_harness_metadata_and_paths_include_harnessbridge(
     monkeypatch,
     tmp_path,
 ) -> None:
+    code_env_path = tmp_path / "code-sessions"
     codex_env_path = tmp_path / "codex-sessions"
     copilot_env_path = tmp_path / "copilot.jsonl"
     goose_env_path = tmp_path / "goose-sessions.db"
     harnessbridge_env_path = tmp_path / "harnessbridge-sessions"
     droid_env_path = tmp_path / "factory-sessions"
     amp_env_path = tmp_path / "amp-threads"
+    monkeypatch.delenv("CODE_HOME", raising=False)
+    monkeypatch.setenv("TOKTRAIL_CODE_SESSIONS", str(code_env_path))
     monkeypatch.setenv("TOKTRAIL_CODEX_SESSIONS", str(codex_env_path))
     monkeypatch.setenv("TOKTRAIL_COPILOT_FILE", str(copilot_env_path))
     monkeypatch.setenv("TOKTRAIL_GOOSE_SESSIONS", str(goose_env_path))
@@ -217,12 +220,14 @@ def test_public_harness_metadata_and_paths_include_harnessbridge(
 
     harness_names = {definition.name for definition in supported_harnesses()}
 
+    assert "code" in harness_names
     assert "codex" in harness_names
     assert "goose" in harness_names
     assert "harnessbridge" in harness_names
     assert "droid" in harness_names
     assert "amp" in harness_names
     assert default_source_path("amp") == default_amp_threads_path()
+    assert default_source_path("code") == Path.home() / ".code" / "sessions"
     assert default_source_path("codex") == Path.home() / ".codex" / "sessions"
     assert default_source_path("goose") == default_goose_sessions_db_path()
     assert default_source_path("harnessbridge") == default_harnessbridge_sessions_path()
@@ -231,6 +236,10 @@ def test_public_harness_metadata_and_paths_include_harnessbridge(
     assert resolve_source_path("codex", tmp_path / "explicit-codex") == (
         tmp_path / "explicit-codex"
     )
+    assert resolve_source_path("code", tmp_path / "explicit-code") == (
+        tmp_path / "explicit-code"
+    )
+    assert resolve_source_path("code") == code_env_path
     assert resolve_source_path("codex") == codex_env_path
     assert resolve_source_path("goose", tmp_path / "explicit-goose.db") == (
         tmp_path / "explicit-goose.db"
@@ -251,6 +260,15 @@ def test_public_harness_metadata_and_paths_include_harnessbridge(
     assert resolve_source_path("amp") == amp_env_path
 
 
+def test_public_code_default_path_honors_code_home(monkeypatch, tmp_path) -> None:
+    code_home = tmp_path / "code-home"
+    monkeypatch.setenv("CODE_HOME", str(code_home))
+    monkeypatch.delenv("TOKTRAIL_CODE_SESSIONS", raising=False)
+
+    assert default_source_path("code") == code_home / "sessions"
+    assert resolve_source_path("code") == code_home / "sessions"
+
+
 def test_harness_watch_metadata_all_importable_harnesses_support_watch() -> None:
     """Verify all importable harnesses have supports_watch=True.
 
@@ -262,6 +280,7 @@ def test_harness_watch_metadata_all_importable_harnesses_support_watch() -> None
         "opencode",
         "pi",
         "copilot",
+        "code",
         "codex",
         "goose",
         "harnessbridge",

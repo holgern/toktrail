@@ -25,7 +25,12 @@ the resolved effective root when available.
 Supported harnesses
 --------------------
 
-amp, claude, codex, copilot, droid, goose, harnessbridge, opencode, pi, vibe
+amp, claude, code, codex, copilot, droid, goose, harnessbridge, opencode, pi, vibe
+
+Code is the Every Code (`just-every/code`) harness. It scans
+``~/.code/sessions`` by default, honors ``TOKTRAIL_CODE_SESSIONS`` and
+``CODE_HOME``, and reuses the Codex-compatible session parser while keeping
+imported usage under the distinct harness name ``code``.
 
 Harnessbridge is a ledger source: it scans ``~/.harnessbridge/sessions`` (or
 ``TOKTRAIL_HARNESSBRIDGE_SESSIONS``) and imports only rows marked

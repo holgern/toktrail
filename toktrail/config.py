@@ -184,6 +184,7 @@ _SUPPORTED_HARNESSES = {
     "opencode",
     "pi",
     "copilot",
+    "code",
     "codex",
     "goose",
     "harnessbridge",
@@ -201,7 +202,7 @@ config_version = 1
 
 [imports]
 harnesses = [
-  "opencode", "pi", "copilot", "codex", "goose",
+  "opencode", "pi", "copilot", "codex", "code", "goose",
   "harnessbridge", "droid", "amp", "claude", "vibe"
 ]
 missing_source = "warn"
@@ -212,6 +213,7 @@ opencode = "~/.local/share/opencode/opencode.db"
 pi = "~/.pi/agent/sessions"
 copilot = "~/.copilot/otel"
 codex = "~/.codex/sessions"
+code = "~/.code/sessions"
 goose = "~/.local/share/goose/sessions/sessions.db"
 harnessbridge = "~/.harnessbridge/sessions"
 droid = "~/.factory/sessions"
@@ -267,6 +269,10 @@ mode = "zero"
 
 [[actual_cost]]
 harness = "codex"
+mode = "zero"
+
+[[actual_cost]]
+harness = "code"
 mode = "zero"
 
 [[actual_cost]]
@@ -314,7 +320,7 @@ config_version = 1
 
 [imports]
 harnesses = [
-  "opencode", "pi", "copilot", "codex", "goose",
+  "opencode", "pi", "copilot", "codex", "code", "goose",
   "harnessbridge", "droid", "amp", "claude", "vibe"
 ]
 missing_source = "warn"
@@ -325,6 +331,7 @@ opencode = "~/.local/share/opencode/opencode.db"
 pi = "~/.pi/agent/sessions"
 copilot = "~/.copilot/otel"
 codex = "~/.codex/sessions"
+code = "~/.code/sessions"
 goose = "~/.local/share/goose/sessions/sessions.db"
 harnessbridge = "~/.harnessbridge/sessions"
 droid = "~/.factory/sessions"
@@ -352,6 +359,10 @@ mode = "source"
 
 [[actual_cost]]
 harness = "codex"
+mode = "zero"
+
+[[actual_cost]]
+harness = "code"
 mode = "zero"
 
 [[actual_cost]]
@@ -384,7 +395,7 @@ config_version = 1
 
 [imports]
 harnesses = [
-  "opencode", "pi", "copilot", "codex", "goose",
+  "opencode", "pi", "copilot", "codex", "code", "goose",
   "harnessbridge", "droid", "amp", "claude", "vibe"
 ]
 missing_source = "warn"
@@ -395,6 +406,7 @@ opencode = "~/.local/share/opencode/opencode.db"
 pi = "~/.pi/agent/sessions"
 copilot = "~/.copilot/otel"
 codex = "~/.codex/sessions"
+code = "~/.code/sessions"
 goose = "~/.local/share/goose/sessions/sessions.db"
 harnessbridge = "~/.harnessbridge/sessions"
 droid = "~/.factory/sessions"
@@ -451,6 +463,10 @@ mode = "source"
 
 [[actual_cost]]
 harness = "codex"
+mode = "zero"
+
+[[actual_cost]]
+harness = "code"
 mode = "zero"
 
 [[actual_cost]]
@@ -828,6 +844,7 @@ class ImportConfig:
         "pi",
         "copilot",
         "codex",
+        "code",
         "goose",
         "harnessbridge",
         "droid",
@@ -1020,6 +1037,12 @@ def default_costing_config() -> CostingConfig:
             ),
             ActualCostRule(
                 harness="codex",
+                provider=None,
+                model=None,
+                mode="zero",
+            ),
+            ActualCostRule(
+                harness="code",
                 provider=None,
                 model=None,
                 mode="zero",

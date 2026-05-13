@@ -23,7 +23,7 @@ Example
    config_version = 1
 
    [imports]
-   harnesses = ["opencode", "pi", "copilot", "codex", "goose", "droid", "amp", "claude", "vibe"]
+   harnesses = ["opencode", "pi", "copilot", "codex", "code", "goose", "droid", "amp", "claude", "vibe"]
    missing_source = "warn"
    include_raw_json = false
 
@@ -32,6 +32,7 @@ Example
    pi = "~/.pi/agent/sessions"
    copilot = "~/.copilot/otel"
    codex = "~/.codex/sessions"
+   code = "~/.code/sessions"
    goose = "~/.local/share/goose/sessions/sessions.db"
    droid = "~/.factory/sessions"
    amp = "~/.local/share/amp/threads"

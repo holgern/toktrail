@@ -5,15 +5,15 @@
 
 # toktrail
 
-`toktrail` is a Python CLI for tracking OpenCode, Pi, Codex, Goose, Droid,
-Amp, Vibe, Harnessbridge ledger, and GitHub Copilot CLI token usage inside a
-local toktrail SQLite database.
+`toktrail` is a Python CLI for tracking OpenCode, Pi, Codex, Every Code, Goose,
+Droid, Amp, Vibe, Harnessbridge ledger, and GitHub Copilot CLI token usage
+inside a local toktrail SQLite database.
 
 The first implementation focuses on:
 
-- OpenCode SQLite, Pi JSONL sessions, Codex JSONL sessions, Goose SQLite
-  sessions, Droid settings JSON sessions, Amp thread JSON sessions, Vibe session logs, and GitHub
-  Copilot CLI OTEL JSONL as supported source harnesses
+- OpenCode SQLite, Pi JSONL sessions, Codex/Every Code JSONL sessions, Goose
+  SQLite sessions, Droid settings JSON sessions, Amp thread JSON sessions, Vibe
+  session logs, and GitHub Copilot CLI OTEL JSONL as supported source harnesses
 - local SQLite for both the OpenCode source database and toktrail state
 - reporting totals by tracking session, harness, model, and agent/mode
 
@@ -24,6 +24,7 @@ The first implementation focuses on:
   `~/.local/share/opencode/opencode.db`, and/or
 - Pi session JSONL files, typically under `~/.pi/agent/sessions`, and/or
 - Codex session JSONL files, typically under `~/.codex/sessions`, and/or
+- Every Code session JSONL files, typically under `~/.code/sessions`, and/or
 - Goose SQLite sessions, typically at
   `~/.local/share/goose/sessions/sessions.db`, and/or
 - Harnessbridge JSONL session ledgers, typically under
@@ -36,6 +37,17 @@ The first implementation focuses on:
 
 toktrail reads supported source data in read-only mode and does not modify the
 source database or source JSONL files.
+
+## Code / Every Code
+
+Toktrail supports Every Code (`just-every/code`) as harness `code`. Code keeps
+the Codex-compatible session format, so toktrail reuses the Codex parser while
+storing imported usage separately under `harness=code`.
+
+- Default source path: `~/.code/sessions`
+- `TOKTRAIL_CODE_SESSIONS` overrides the exact file or directory to import
+- `CODE_HOME` sets the Code home directory and resolves `${CODE_HOME}/sessions`
+  when `TOKTRAIL_CODE_SESSIONS` is unset
 
 ## Configuration files
 
@@ -128,6 +140,7 @@ Refresh usage from config or a single harness:
 toktrail config init
 toktrail refresh
 toktrail refresh --harness codex --source ~/.codex/sessions
+toktrail refresh --harness code --source ~/.code/sessions
 toktrail refresh --harness harnessbridge --source ~/.harnessbridge/sessions
 toktrail refresh --harness amp --source ~/.local/share/amp/threads
 toktrail refresh --harness claude --source ~/.claude/projects
@@ -209,8 +222,8 @@ is the fastest state-only path. `toktrail usage statusline` remains as a
 compatibility alias.
 
 Safe install targets print ready-to-paste snippets for `starship`, `tmux`,
-`bash`, and `zsh`. Native harness targets (`pi`, `opencode`, `codex`) print
-instructions instead of editing unknown config files.
+`bash`, and `zsh`. Native harness targets (`pi`, `opencode`, `codex`, `code`)
+print instructions instead of editing unknown config files.
 
 Statusline config lives in `config.toml`:
 
@@ -296,7 +309,7 @@ harnesses and source paths from `config.toml`:
 
 ```toml
 [imports]
-harnesses = ["opencode", "pi", "copilot", "codex", "goose", "harnessbridge", "droid", "amp", "claude", "vibe"]
+harnesses = ["opencode", "pi", "copilot", "codex", "code", "goose", "harnessbridge", "droid", "amp", "claude", "vibe"]
 missing_source = "warn"
 include_raw_json = false
 
@@ -305,6 +318,7 @@ opencode = ["~/.local/share/opencode/opencode.db", "~/.local/share/opencode/open
 pi = ["~/.pi/agent/sessions", "~/.omp/agent/sessions"]
 copilot = "~/.copilot/otel"
 codex = ["~/.codex/sessions", "~/.codex/archived_sessions"]
+code = "~/.code/sessions"
 goose = "~/.local/share/goose/sessions/sessions.db"
 harnessbridge = "~/.harnessbridge/sessions"
 droid = "~/.factory/sessions"
@@ -416,6 +430,7 @@ toktrail refresh
 toktrail refresh --harness opencode --source /path/to/opencode.db
 toktrail refresh --harness pi --source ~/.pi/agent/sessions
 toktrail refresh --harness codex --source ~/.codex/sessions
+toktrail refresh --harness code --source ~/.code/sessions
 toktrail refresh --harness goose --source ~/.local/share/goose/sessions/sessions.db
 toktrail refresh --harness harnessbridge --source ~/.harnessbridge/sessions
 toktrail refresh --harness droid --source ~/.factory/sessions
@@ -448,7 +463,7 @@ toktrail refresh --harness vibe --source ~/.vibe/logs/session
 toktrail watch
 
 toktrail watch --harness opencode
-toktrail watch --harness opencode --harness codex
+toktrail watch --harness opencode --harness codex --harness code
 
 toktrail copilot env bash
 toktrail copilot env zsh
@@ -458,6 +473,7 @@ toktrail copilot env powershell
 
 toktrail sources sessions pi
 toktrail sources sessions codex
+toktrail sources sessions code
 toktrail sources sessions claude
 toktrail sources session pi pi_ses_001
 toktrail sources session goose goose_session_id
@@ -468,10 +484,11 @@ toktrail prices list --missing-only
 
 Copilot source discovery honors `TOKTRAIL_COPILOT_FILE`,
 `COPILOT_OTEL_FILE_EXPORTER_PATH`, and `TOKTRAIL_COPILOT_OTEL_DIR`. Codex
-discovery honors both `TOKTRAIL_CODEX_SESSIONS` and `CODEX_HOME`, including
-archived sessions. Goose discovery honors `TOKTRAIL_GOOSE_SESSIONS` and
-`GOOSE_PATH_ROOT`. Harnessbridge discovery honors
-`TOKTRAIL_HARNESSBRIDGE_SESSIONS` and defaults to `~/.harnessbridge/sessions`.
+discovery honors `TOKTRAIL_CODEX_SESSIONS`. Code discovery honors
+`TOKTRAIL_CODE_SESSIONS` and `CODE_HOME`. Goose discovery honors
+`TOKTRAIL_GOOSE_SESSIONS` and `GOOSE_PATH_ROOT`. Harnessbridge discovery
+honors `TOKTRAIL_HARNESSBRIDGE_SESSIONS` and defaults to
+`~/.harnessbridge/sessions`.
 
 Harnessbridge is treated as a source format, not a reporting harness. Imported
 usage rows keep the inner harness name from each ledger row, so reports still

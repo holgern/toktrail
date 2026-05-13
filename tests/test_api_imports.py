@@ -292,6 +292,33 @@ def test_import_usage_supports_codex_source(tmp_path) -> None:
     assert report.totals.tokens.total == 130
 
 
+def test_import_usage_supports_code_source(tmp_path) -> None:
+    state_db = tmp_path / "toktrail.db"
+    code_file = tmp_path / "code" / "session-001.jsonl"
+    create_codex_session_file(code_file)
+    init_state(state_db)
+    session = start_run(state_db, name="code", started_at_ms=0)
+
+    first = import_usage(
+        state_db,
+        "code",
+        source_path=code_file,
+        session_id=session.id,
+    )
+    second = import_usage(
+        state_db,
+        "code",
+        source_path=code_file,
+        session_id=session.id,
+    )
+    report = session_report(state_db, session.id)
+
+    assert first.rows_imported == 1
+    assert second.rows_imported == 0
+    assert report.by_harness[0].harness == "code"
+    assert report.by_model[0].model_id == "gpt-5.2-codex"
+
+
 def test_import_usage_supports_droid_source(tmp_path) -> None:
     state_db = tmp_path / "toktrail.db"
     droid_source = tmp_path / "factory" / "sessions"
@@ -421,11 +448,13 @@ def test_import_usage_reimports_directory_source_when_child_file_changes(
 def test_import_configured_usage_imports_all_configured_harnesses(tmp_path) -> None:
     state_db = tmp_path / "toktrail.db"
     source_db = tmp_path / "opencode.db"
+    code_file = tmp_path / "code" / "session-001.jsonl"
     codex_file = tmp_path / "codex" / "session-001.jsonl"
     goose_db = tmp_path / "goose" / "sessions.db"
     droid_source = tmp_path / "factory" / "sessions"
     amp_source = tmp_path / "amp" / "threads"
     _create_opencode_messages(source_db)
+    create_codex_session_file(code_file)
     create_codex_session_file(codex_file)
     create_goose_db(goose_db)
     insert_session(goose_db)
@@ -437,7 +466,7 @@ def test_import_configured_usage_imports_all_configured_harnesses(tmp_path) -> N
 config_version = 1
 
 [imports]
-harnesses = ["opencode", "pi", "codex", "goose", "droid", "amp"]
+harnesses = ["opencode", "pi", "codex", "code", "goose", "droid", "amp"]
 missing_source = "warn"
 include_raw_json = false
 
@@ -445,6 +474,7 @@ include_raw_json = false
 opencode = "{_toml_path_value(source_db)}"
 pi = "{_toml_path_value(tmp_path / "missing-pi")}"
 codex = "{_toml_path_value(codex_file)}"
+code = "{_toml_path_value(code_file)}"
 goose = "{_toml_path_value(goose_db)}"
 droid = "{_toml_path_value(droid_source)}"
 amp = "{_toml_path_value(amp_source)}"
@@ -461,6 +491,7 @@ amp = "{_toml_path_value(amp_source)}"
         ("opencode", "ok", 2),
         ("pi", "skipped", 0),
         ("codex", "ok", 1),
+        ("code", "ok", 1),
         ("goose", "ok", 1),
         ("droid", "ok", 1),
         ("amp", "ok", 1),

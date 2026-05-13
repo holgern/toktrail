@@ -11,6 +11,9 @@ from toktrail.paths import (
     default_claude_projects_path as _default_claude_projects_path,
 )
 from toktrail.paths import (
+    default_code_sessions_path as _default_code_sessions_path,
+)
+from toktrail.paths import (
     default_codex_sessions_path as _default_codex_sessions_path,
 )
 from toktrail.paths import (
@@ -49,6 +52,7 @@ from toktrail.paths import (
 from toktrail.paths import (
     resolve_amp_threads_path,
     resolve_claude_projects_path,
+    resolve_code_sessions_path,
     resolve_codex_sessions_path,
     resolve_copilot_source_path,
     resolve_droid_sessions_path,
@@ -141,7 +145,10 @@ def resolve_toktrail_subscriptions_path(
 
 
 def default_source_path(harness: str) -> Path | None:
-    return get_harness_definition(harness).default_source_path
+    normalized = get_harness_definition(harness).name
+    if normalized == "code":
+        return default_code_sessions_path()
+    return get_harness_definition(normalized).default_source_path
 
 
 def default_amp_threads_path() -> Path:
@@ -154,6 +161,10 @@ def default_claude_projects_path() -> Path:
 
 def default_codex_sessions_path() -> Path:
     return _default_codex_sessions_path()
+
+
+def default_code_sessions_path() -> Path:
+    return _default_code_sessions_path()
 
 
 def default_goose_sessions_db_path() -> Path:
@@ -185,6 +196,8 @@ def resolve_source_path(
         return resolve_pi_sessions_path(source_path)
     if normalized == "copilot":
         return resolve_copilot_source_path(source_path)
+    if normalized == "code":
+        return resolve_code_sessions_path(source_path)
     if normalized == "codex":
         return resolve_codex_sessions_path(source_path)
     if normalized == "goose":
@@ -204,6 +217,7 @@ def resolve_source_path(
 __all__ = [
     "default_amp_threads_path",
     "default_claude_projects_path",
+    "default_code_sessions_path",
     "default_codex_sessions_path",
     "default_droid_sessions_path",
     "default_goose_sessions_db_path",

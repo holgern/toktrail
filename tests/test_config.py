@@ -29,6 +29,7 @@ def test_load_costing_config_missing_file_returns_default_config(tmp_path) -> No
         "pi",
         "copilot",
         "codex",
+        "code",
         "goose",
         "harnessbridge",
         "droid",
@@ -55,6 +56,7 @@ def test_load_costing_config_parses_minimal_config(tmp_path) -> None:
         "zero",
         "zero",
         "zero",
+        "zero",
         "source",
         "zero",
         "source",
@@ -74,6 +76,7 @@ def test_load_toktrail_config_parses_import_settings(tmp_path) -> None:
         "pi",
         "copilot",
         "codex",
+        "code",
         "goose",
         "harnessbridge",
         "droid",
@@ -85,6 +88,7 @@ def test_load_toktrail_config_parses_import_settings(tmp_path) -> None:
     assert config.imports.include_raw_json is False
     assert config.imports.sources["opencode"].name == "opencode.db"
     assert config.imports.sources["codex"].name == "sessions"
+    assert config.imports.sources["code"].name == "sessions"
     assert config.imports.sources["goose"].name == "sessions.db"
     assert config.imports.sources["harnessbridge"].name == "sessions"
     assert config.imports.sources["droid"].name == "sessions"
@@ -112,6 +116,27 @@ harnessbridge = "~/.harnessbridge/sessions"
 
     assert config.imports.harnesses == ("harnessbridge",)
     assert config.imports.sources["harnessbridge"].name == "sessions"
+
+
+def test_load_runtime_config_accepts_code_import_source(tmp_path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        """
+config_version = 1
+
+[imports]
+harnesses = ["code"]
+
+[imports.sources]
+code = "~/.code/sessions"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    config = load_runtime_config(config_path)
+
+    assert config.imports.harnesses == ("code",)
+    assert config.imports.sources["code"].as_posix().endswith("/.code/sessions")
 
 
 def test_load_toktrail_config_exposes_statusline_defaults(tmp_path) -> None:

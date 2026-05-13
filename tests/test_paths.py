@@ -5,6 +5,7 @@ from datetime import datetime
 
 from toktrail.paths import (
     default_amp_threads_path,
+    default_code_sessions_path,
     default_codex_sessions_path,
     default_droid_sessions_path,
     default_goose_sessions_db_path,
@@ -16,6 +17,7 @@ from toktrail.paths import (
     default_toktrail_subscriptions_path,
     new_copilot_otel_file_path,
     resolve_amp_threads_path,
+    resolve_code_sessions_path,
     resolve_codex_sessions_path,
     resolve_copilot_file_path,
     resolve_copilot_source_path,
@@ -187,6 +189,20 @@ def test_default_codex_sessions_path_uses_home(monkeypatch, tmp_path) -> None:
     assert default_codex_sessions_path() == tmp_path / ".codex" / "sessions"
 
 
+def test_default_code_sessions_path_uses_home(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("CODE_HOME", raising=False)
+
+    assert default_code_sessions_path() == tmp_path / ".code" / "sessions"
+
+
+def test_default_code_sessions_path_uses_code_home(monkeypatch, tmp_path) -> None:
+    code_home = tmp_path / "custom-code-home"
+    monkeypatch.setenv("CODE_HOME", str(code_home))
+
+    assert default_code_sessions_path() == code_home / "sessions"
+
+
 def test_default_amp_threads_path_uses_home(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
 
@@ -223,6 +239,23 @@ def test_resolve_codex_sessions_path_prefers_cli(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("TOKTRAIL_CODEX_SESSIONS", str(env_path))
 
     assert resolve_codex_sessions_path(cli_path) == cli_path
+
+
+def test_resolve_code_sessions_path_prefers_toktrail_env(monkeypatch, tmp_path) -> None:
+    source = tmp_path / "code-sessions"
+    code_home = tmp_path / "code-home"
+    monkeypatch.setenv("TOKTRAIL_CODE_SESSIONS", str(source))
+    monkeypatch.setenv("CODE_HOME", str(code_home))
+
+    assert resolve_code_sessions_path(None) == source
+
+
+def test_resolve_code_sessions_path_prefers_cli(monkeypatch, tmp_path) -> None:
+    env_path = tmp_path / "env"
+    cli_path = tmp_path / "cli"
+    monkeypatch.setenv("TOKTRAIL_CODE_SESSIONS", str(env_path))
+
+    assert resolve_code_sessions_path(cli_path) == cli_path
 
 
 def test_resolve_goose_sessions_path_prefers_cli(monkeypatch, tmp_path) -> None:

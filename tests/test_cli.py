@@ -61,6 +61,8 @@ opencode = "{_toml_path_value(tmp_path / "missing-opencode.db")}"
         "TOKTRAIL_COPILOT_FILE",
         "COPILOT_OTEL_FILE_EXPORTER_PATH",
         "TOKTRAIL_COPILOT_OTEL_DIR",
+        "TOKTRAIL_CODE_SESSIONS",
+        "CODE_HOME",
         "TOKTRAIL_CODEX_SESSIONS",
         "CODEX_HOME",
         "TOKTRAIL_GOOSE_SESSIONS",
@@ -1159,6 +1161,42 @@ def test_cli_refresh_codex_status(tmp_path) -> None:
     assert payload["totals"]["reasoning"] == 5
 
 
+def test_cli_refresh_code_status(tmp_path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    code_file = tmp_path / "code" / "session-001.jsonl"
+    create_codex_session_file(code_file)
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    runner.invoke(
+        app, ["--db", str(state_db), "run", "start", "--name", "test-session"]
+    )
+    result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "refresh",
+            "--harness",
+            "code",
+            "--source",
+            str(code_file),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Refreshed Code usage:" in result.output
+    assert "rows imported: 1" in result.output
+
+    status = runner.invoke(app, ["--db", str(state_db), "run", "status", "1", "--json"])
+    payload = json.loads(status.output)
+    assert payload["by_harness"][0]["harness"] == "code"
+    assert payload["totals"]["input"] == 100
+    assert payload["totals"]["cache_read"] == 20
+    assert payload["totals"]["output"] == 30
+    assert payload["totals"]["reasoning"] == 5
+
+
 def test_cli_refresh_goose_status(tmp_path) -> None:
     runner = CliRunner()
     state_db = tmp_path / "toktrail.db"
@@ -1824,6 +1862,48 @@ include_raw_json = false
     assert payload[0]["rows_imported"] == 1
 
 
+def test_cli_plain_refresh_supports_code_harness_override_and_source(tmp_path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    code_file = tmp_path / "code" / "session-001.jsonl"
+    config_path = tmp_path / "toktrail.toml"
+    create_codex_session_file(code_file)
+    config_path.write_text(
+        """
+config_version = 1
+
+[imports]
+harnesses = ["pi"]
+missing_source = "warn"
+include_raw_json = false
+""".strip(),
+        encoding="utf-8",
+    )
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+
+    result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "--config",
+            str(config_path),
+            "refresh",
+            "--harness",
+            "code",
+            "--source",
+            str(code_file),
+            "--json",
+        ],
+    )
+    payload = json.loads(result.output)
+
+    assert result.exit_code == 0, result.output
+    assert [row["harness"] for row in payload] == ["code"]
+    assert payload[0]["rows_imported"] == 1
+
+
 def test_cli_plain_refresh_supports_amp_harness_override_and_source(tmp_path) -> None:
     runner = CliRunner()
     state_db = tmp_path / "toktrail.db"
@@ -2073,6 +2153,34 @@ def test_cli_refresh_codex_without_path_or_env_fails(tmp_path, monkeypatch) -> N
 
     assert result.exit_code == 1
     assert "Codex source path not found" in result.output
+
+
+def test_cli_refresh_code_without_path_or_env_fails(tmp_path, monkeypatch) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("TOKTRAIL_CODE_SESSIONS", raising=False)
+    monkeypatch.delenv("CODE_HOME", raising=False)
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    runner.invoke(
+        app, ["--db", str(state_db), "run", "start", "--name", "test-session"]
+    )
+    result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "refresh",
+            "--harness",
+            "code",
+            "--source",
+            str(tmp_path / "missing_sessions"),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "Code source path not found" in result.output
 
 
 def test_cli_refresh_copilot_without_file_or_env_fails(tmp_path) -> None:
@@ -3495,6 +3603,23 @@ def test_cli_sessions_codex_lists_source_sessions(tmp_path) -> None:
     assert "2026-" in result.output
 
 
+def test_cli_sessions_code_lists_source_sessions(tmp_path) -> None:
+    runner = CliRunner()
+    code_file = tmp_path / "code" / "session-001.jsonl"
+    create_codex_session_file(code_file)
+
+    result = runner.invoke(
+        app,
+        ["sources", "sessions", "code", "--source", str(code_file)],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "source_session_id" in result.output
+    assert "session-001" in result.output
+    assert "130" in result.output
+    assert "2026-" in result.output
+
+
 def test_cli_sessions_amp_lists_source_sessions(tmp_path) -> None:
     runner = CliRunner()
     source_path = tmp_path / "amp" / "threads"
@@ -3586,6 +3711,31 @@ def test_cli_sessions_codex_breakdown_shows_token_columns(tmp_path) -> None:
             "codex",
             "--source",
             str(codex_file),
+            "--last",
+            "--breakdown",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "By model" in result.output
+    assert "provider/model" in result.output
+    assert "input" in result.output
+    assert "gpt-5.2-codex" in result.output
+
+
+def test_cli_sessions_code_breakdown_shows_token_columns(tmp_path) -> None:
+    runner = CliRunner()
+    code_file = tmp_path / "code" / "session-001.jsonl"
+    create_codex_session_file(code_file)
+
+    result = runner.invoke(
+        app,
+        [
+            "sources",
+            "sessions",
+            "code",
+            "--source",
+            str(code_file),
             "--last",
             "--breakdown",
         ],

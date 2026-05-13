@@ -69,6 +69,12 @@ def _build_codex_source(tmp_path):
     return codex_file
 
 
+def _build_code_source(tmp_path):
+    code_file = tmp_path / "code" / "session-001.jsonl"
+    create_codex_session_file(code_file)
+    return code_file
+
+
 def _build_goose_source(tmp_path):
     goose_db = tmp_path / "goose" / "sessions.db"
     create_goose_db(goose_db)
@@ -94,6 +100,7 @@ def _build_amp_source(tmp_path):
         ("opencode", _build_opencode_source, "ses-1"),
         ("pi", _build_pi_source, "pi_ses_001"),
         ("copilot", _build_copilot_source, "conv-1"),
+        ("code", _build_code_source, "session-001"),
         ("codex", _build_codex_source, "session-001"),
         ("goose", _build_goose_source, "goose-1"),
         ("droid", _build_droid_source, "droid-1"),
