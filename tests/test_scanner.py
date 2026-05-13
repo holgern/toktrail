@@ -163,6 +163,27 @@ def test_discover_sources_with_list_of_paths(tmp_path: Path) -> None:
     assert {s.path for s in result.sources} == {path1, path2}
 
 
+def test_discover_sources_with_harnessbridge_configured_path(tmp_path: Path) -> None:
+    source_root = tmp_path / "harnessbridge-sessions"
+    source_root.mkdir()
+
+    config = ToktrailConfig(
+        costing=CostingConfig(),
+        imports=ImportConfig(
+            harnesses=("harnessbridge",),
+            sources={"harnessbridge": source_root},
+        ),
+    )
+    result = discover_sources(
+        harnesses=["harnessbridge"],
+        config=config,
+    )
+
+    assert len(result.sources) == 1
+    assert result.sources[0].harness == "harnessbridge"
+    assert result.sources[0].path == source_root
+
+
 def test_source_fingerprint_frozen() -> None:
     """Test that SourceFingerprint is frozen."""
     fp = SourceFingerprint(size=100, mtime_ns=1000, inode=5)

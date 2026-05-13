@@ -25,4 +25,9 @@ the resolved effective root when available.
 Supported harnesses
 --------------------
 
-amp, claude, codex, copilot, droid, goose, opencode, pi, vibe
+amp, claude, codex, copilot, droid, goose, harnessbridge, opencode, pi, vibe
+
+Harnessbridge is a ledger source: it scans ``~/.harnessbridge/sessions`` (or
+``TOKTRAIL_HARNESSBRIDGE_SESSIONS``) and imports only rows marked
+``accounting="primary"``. Imported events keep the inner harness name from the
+ledger row so reporting still groups by the actual harness.

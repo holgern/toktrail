@@ -5,8 +5,9 @@
 
 # toktrail
 
-`toktrail` is a Python CLI for tracking OpenCode, Pi, Codex, Goose, Droid, Amp, Vibe,
-and GitHub Copilot CLI token usage inside a local toktrail SQLite database.
+`toktrail` is a Python CLI for tracking OpenCode, Pi, Codex, Goose, Droid,
+Amp, Vibe, Harnessbridge ledger, and GitHub Copilot CLI token usage inside a
+local toktrail SQLite database.
 
 The first implementation focuses on:
 
@@ -25,6 +26,8 @@ The first implementation focuses on:
 - Codex session JSONL files, typically under `~/.codex/sessions`, and/or
 - Goose SQLite sessions, typically at
   `~/.local/share/goose/sessions/sessions.db`, and/or
+- Harnessbridge JSONL session ledgers, typically under
+  `~/.harnessbridge/sessions`, and/or
 - Droid settings JSON sessions, typically under `~/.factory/sessions`, and/or
 - Amp thread JSON sessions, typically under `~/.local/share/amp/threads`, and/or
 - Vibe session logs, typically under `~/.vibe/logs/session`, and/or
@@ -100,8 +103,8 @@ subscription_usage = subscription_usage_report(db_path, provider_id="opencode-go
 See [`API.md`](API.md) for the stable import boundary, public models, workflow
 API, canonical errors, and privacy defaults. Task-oriented Python usage is in
 [`docs/api_usage.rst`](docs/api_usage.rst). Runnable manual-run examples for
-OpenCode, Pi, Copilot, Codex, Goose, Droid, Amp, Claude, and Vibe are
-documented in [`docs/stable_api_examples.md`](docs/stable_api_examples.md).
+OpenCode, Pi, Copilot, Codex, Goose, Harnessbridge, Droid, Amp, Claude, and
+Vibe are documented in [`docs/stable_api_examples.md`](docs/stable_api_examples.md).
 
 ## Quickstart
 
@@ -125,6 +128,7 @@ Refresh usage from config or a single harness:
 toktrail config init
 toktrail refresh
 toktrail refresh --harness codex --source ~/.codex/sessions
+toktrail refresh --harness harnessbridge --source ~/.harnessbridge/sessions
 toktrail refresh --harness amp --source ~/.local/share/amp/threads
 toktrail refresh --harness claude --source ~/.claude/projects
 toktrail refresh --dry-run
@@ -292,7 +296,7 @@ harnesses and source paths from `config.toml`:
 
 ```toml
 [imports]
-harnesses = ["opencode", "pi", "copilot", "codex", "goose", "droid", "amp", "claude", "vibe"]
+harnesses = ["opencode", "pi", "copilot", "codex", "goose", "harnessbridge", "droid", "amp", "claude", "vibe"]
 missing_source = "warn"
 include_raw_json = false
 
@@ -302,6 +306,7 @@ pi = ["~/.pi/agent/sessions", "~/.omp/agent/sessions"]
 copilot = "~/.copilot/otel"
 codex = ["~/.codex/sessions", "~/.codex/archived_sessions"]
 goose = "~/.local/share/goose/sessions/sessions.db"
+harnessbridge = "~/.harnessbridge/sessions"
 droid = "~/.factory/sessions"
 amp = "~/.local/share/amp/threads"
 claude = "~/.claude/projects"
@@ -412,6 +417,7 @@ toktrail refresh --harness opencode --source /path/to/opencode.db
 toktrail refresh --harness pi --source ~/.pi/agent/sessions
 toktrail refresh --harness codex --source ~/.codex/sessions
 toktrail refresh --harness goose --source ~/.local/share/goose/sessions/sessions.db
+toktrail refresh --harness harnessbridge --source ~/.harnessbridge/sessions
 toktrail refresh --harness droid --source ~/.factory/sessions
 toktrail refresh --harness amp --source ~/.local/share/amp/threads
 toktrail refresh --dry-run
@@ -433,6 +439,7 @@ toktrail refresh --harness pi --source ~/.pi/agent/sessions
 toktrail refresh --harness copilot --source ~/.copilot/otel
 toktrail refresh --harness codex --source ~/.codex/sessions
 toktrail refresh --harness goose --source ~/.local/share/goose/sessions/sessions.db
+toktrail refresh --harness harnessbridge --source ~/.harnessbridge/sessions
 toktrail refresh --harness droid --source ~/.factory/sessions
 toktrail refresh --harness amp --source ~/.local/share/amp/threads
 toktrail refresh --harness claude --source ~/.claude/projects
@@ -463,7 +470,15 @@ Copilot source discovery honors `TOKTRAIL_COPILOT_FILE`,
 `COPILOT_OTEL_FILE_EXPORTER_PATH`, and `TOKTRAIL_COPILOT_OTEL_DIR`. Codex
 discovery honors both `TOKTRAIL_CODEX_SESSIONS` and `CODEX_HOME`, including
 archived sessions. Goose discovery honors `TOKTRAIL_GOOSE_SESSIONS` and
-`GOOSE_PATH_ROOT`.
+`GOOSE_PATH_ROOT`. Harnessbridge discovery honors
+`TOKTRAIL_HARNESSBRIDGE_SESSIONS` and defaults to `~/.harnessbridge/sessions`.
+
+Harnessbridge is treated as a source format, not a reporting harness. Imported
+usage rows keep the inner harness name from each ledger row, so reports still
+group under `pi`, `codex`, `copilot`, `opencode`, or other recorded harnesses.
+Rows marked `accounting="primary"` import normally; rows marked
+`accounting="mirror"` are skipped by default to avoid double-counting native
+sessions.
 
 ## Storage and privacy
 
@@ -503,8 +518,8 @@ disabled by default and remains opt-in local debugging data only. Use `--raw`
 to store raw source payloads for a run, or `--no-raw` to make that choice
 explicit in automation.
 
-toktrail never prints raw OpenCode, Pi, Codex, Goose, Droid, Amp, or Copilot JSON in
-CLI output.
+toktrail never prints raw OpenCode, Pi, Codex, Goose, Harnessbridge, Droid,
+Amp, or Copilot JSON in CLI output.
 
 ## Reporting
 

@@ -65,6 +65,7 @@ opencode = "{_toml_path_value(tmp_path / "missing-opencode.db")}"
         "CODEX_HOME",
         "TOKTRAIL_GOOSE_SESSIONS",
         "GOOSE_PATH_ROOT",
+        "TOKTRAIL_HARNESSBRIDGE_SESSIONS",
         "TOKTRAIL_DROID_SESSIONS",
         "TOKTRAIL_AMP_THREADS",
     ):
@@ -231,6 +232,31 @@ def create_droid_source(path: Path) -> None:
             }
         ),
         encoding="utf-8",
+    )
+
+
+def create_harnessbridge_source(path: Path) -> None:
+    write_jsonl_rows(
+        path,
+        [
+            {
+                "type": "session",
+                "id": "hb-session-1",
+                "accounting": "primary",
+                "started_ms": _future_ms(),
+            },
+            {
+                "type": "usage",
+                "id": "evt-1",
+                "harness": "pi",
+                "accounting": "primary",
+                "provider_id": "anthropic",
+                "model_id": "claude-sonnet-4",
+                "created_ms": _future_ms(),
+                "tokens": {"input": 10, "output": 5},
+                "source_cost_usd": "0.12",
+            },
+        ],
     )
 
 
@@ -1831,6 +1857,54 @@ def test_cli_refresh_with_no_session_is_idempotent(tmp_path) -> None:
         ],
     )
     payload2 = json.loads(result2.output)
+    assert payload2[0]["rows_imported"] == 0
+    assert payload2[0]["rows_skipped"] == 1
+
+
+def test_cli_refresh_harnessbridge_with_no_session_is_idempotent(tmp_path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    source_file = tmp_path / "hb.jsonl"
+    create_harnessbridge_source(source_file)
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+
+    result1 = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "refresh",
+            "--no-run",
+            "--harness",
+            "harnessbridge",
+            "--source",
+            str(source_file),
+            "--json",
+        ],
+    )
+    payload1 = json.loads(result1.output)
+
+    assert result1.exit_code == 0, result1.output
+    assert payload1[0]["rows_imported"] == 1
+
+    result2 = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "refresh",
+            "--no-run",
+            "--harness",
+            "harnessbridge",
+            "--source",
+            str(source_file),
+            "--json",
+        ],
+    )
+    payload2 = json.loads(result2.output)
+
+    assert result2.exit_code == 0, result2.output
     assert payload2[0]["rows_imported"] == 0
     assert payload2[0]["rows_skipped"] == 1
 

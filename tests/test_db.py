@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import json
 from decimal import Decimal
 from pathlib import Path
 from time import time
 
 import pytest
 
+from toktrail.adapters.harnessbridge import parse_harnessbridge_file
 from toktrail.config import (
     ActualCostRule,
     CostingConfig,
@@ -112,6 +114,15 @@ def make_usage_event(
         else source_cost_usd,
         raw_json="{}",
     )
+
+
+def write_harnessbridge_session(path: Path, rows: list[dict[str, object]]) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "".join(f"{json.dumps(row)}\n" for row in rows),
+        encoding="utf-8",
+    )
+    return path
 
 
 def test_migrate_creates_tables_and_is_idempotent(tmp_path: Path) -> None:
@@ -401,6 +412,48 @@ def test_insert_usage_events_is_idempotent_and_aggregates_correctly(
     assert report.by_activity[0].agent == "build"
     assert report.by_activity[0].source_cost_usd == Decimal("0.75")
     assert report.by_activity[0].actual_cost_usd == 0.75
+
+
+def test_insert_harnessbridge_events_remains_idempotent(tmp_path: Path) -> None:
+    conn = connect(tmp_path / "toktrail.db")
+    migrate(conn)
+    session_id = create_tracking_session(
+        conn,
+        "harnessbridge",
+        started_at_ms=1_778_682_000_000,
+    )
+    source_file = write_harnessbridge_session(
+        tmp_path / "hb.jsonl",
+        [
+            {
+                "type": "session",
+                "id": "hb-session-1",
+                "accounting": "primary",
+                "started_ms": 1_778_682_000_000,
+            },
+            {
+                "type": "usage",
+                "id": "evt-1",
+                "harness": "pi",
+                "accounting": "primary",
+                "provider_id": "anthropic",
+                "model_id": "claude-sonnet-4",
+                "created_ms": 1_778_682_001_000,
+                "tokens": {"input": 10, "output": 5},
+                "source_cost_usd": "0.12",
+            },
+        ],
+    )
+    events = parse_harnessbridge_file(source_file)
+
+    first_insert = insert_usage_events(conn, session_id, events)
+    second_insert = insert_usage_events(conn, session_id, events)
+    report = summarize_tracking_session(conn, session_id)
+
+    assert first_insert.rows_inserted == 1
+    assert second_insert.rows_inserted == 0
+    assert report.totals.tokens.total == 15
+    assert report.totals.source_cost_usd == Decimal("0.12")
 
 
 def test_summarize_usage_applies_filters_and_echoes_them(tmp_path: Path) -> None:

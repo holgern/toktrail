@@ -12,6 +12,10 @@ from toktrail.adapters.codex import list_codex_sessions, scan_codex_path
 from toktrail.adapters.copilot import list_copilot_sessions, scan_copilot_path
 from toktrail.adapters.droid import list_droid_sessions, scan_droid_path
 from toktrail.adapters.goose import list_goose_sessions, scan_goose_sqlite
+from toktrail.adapters.harnessbridge import (
+    list_harnessbridge_sessions,
+    scan_harnessbridge_path,
+)
 from toktrail.adapters.opencode import list_opencode_sessions, scan_opencode_sqlite
 from toktrail.adapters.pi import list_pi_sessions, scan_pi_path
 from toktrail.adapters.vibe import list_vibe_sessions, scan_vibe_path
@@ -24,6 +28,7 @@ from toktrail.paths import (
     TOKTRAIL_CODEX_SESSIONS_ENV,
     TOKTRAIL_DROID_SESSIONS_ENV,
     TOKTRAIL_GOOSE_SESSIONS_ENV,
+    TOKTRAIL_HARNESSBRIDGE_SESSIONS_ENV,
     TOKTRAIL_PI_SESSIONS_ENV,
     TOKTRAIL_VIBE_LOGS_ENV,
     resolve_amp_threads_path,
@@ -32,6 +37,7 @@ from toktrail.paths import (
     resolve_copilot_source_path,
     resolve_droid_sessions_path,
     resolve_goose_sessions_path,
+    resolve_harnessbridge_sessions_path,
     resolve_opencode_db_path,
     resolve_pi_sessions_path,
     resolve_vibe_logs_path,
@@ -180,6 +186,21 @@ HARNESS_REGISTRY: dict[str, HarnessDefinition] = {
         config_key="goose_sessions",
         id_prefix="goose",
         platform_notes="Linux, macOS, and Block legacy paths are supported.",
+    ),
+    "harnessbridge": HarnessDefinition(
+        name="harnessbridge",
+        display_name="Harnessbridge",
+        default_roots=(PathTemplate((".harnessbridge", "sessions")),),
+        env_roots=(EnvRoot(TOKTRAIL_HARNESSBRIDGE_SESSIONS_ENV),),
+        patterns=("*.jsonl",),
+        source_kind="jsonl",
+        resolve_source_path=resolve_harnessbridge_sessions_path,
+        scan=scan_harnessbridge_path,
+        list_sessions=list_harnessbridge_sessions,
+        supports_watch=True,
+        config_key="harnessbridge_sessions",
+        id_prefix="harnessbridge",
+        watch_subdirs=(".",),
     ),
     "droid": HarnessDefinition(
         name="droid",

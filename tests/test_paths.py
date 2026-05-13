@@ -8,6 +8,7 @@ from toktrail.paths import (
     default_codex_sessions_path,
     default_droid_sessions_path,
     default_goose_sessions_db_path,
+    default_harnessbridge_sessions_path,
     default_provider_prices_path,
     default_toktrail_config_path,
     default_toktrail_prices_dir,
@@ -20,6 +21,7 @@ from toktrail.paths import (
     resolve_copilot_source_path,
     resolve_droid_sessions_path,
     resolve_goose_sessions_path,
+    resolve_harnessbridge_sessions_path,
     resolve_toktrail_config_path,
     resolve_toktrail_prices_dir,
     resolve_toktrail_prices_path,
@@ -268,6 +270,35 @@ def test_default_droid_sessions_path_uses_home(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
 
     assert default_droid_sessions_path() == tmp_path / ".factory" / "sessions"
+
+
+def test_default_harnessbridge_sessions_path_uses_home(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    assert default_harnessbridge_sessions_path() == (
+        tmp_path / ".harnessbridge" / "sessions"
+    )
+
+
+def test_resolve_harnessbridge_sessions_path_prefers_env(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    source = tmp_path / "harnessbridge-sessions"
+    monkeypatch.setenv("TOKTRAIL_HARNESSBRIDGE_SESSIONS", str(source))
+
+    assert resolve_harnessbridge_sessions_path(None) == source
+
+
+def test_resolve_harnessbridge_sessions_path_prefers_cli(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    env_source = tmp_path / "env"
+    cli_source = tmp_path / "cli"
+    monkeypatch.setenv("TOKTRAIL_HARNESSBRIDGE_SESSIONS", str(env_source))
+
+    assert resolve_harnessbridge_sessions_path(cli_source) == cli_source
 
 
 def test_resolve_droid_sessions_path_prefers_env(monkeypatch, tmp_path) -> None:

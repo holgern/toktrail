@@ -18,6 +18,7 @@ TOKTRAIL_AMP_THREADS_ENV = "TOKTRAIL_AMP_THREADS"
 TOKTRAIL_CODEX_SESSIONS_ENV = "TOKTRAIL_CODEX_SESSIONS"
 TOKTRAIL_GOOSE_SESSIONS_ENV = "TOKTRAIL_GOOSE_SESSIONS"
 TOKTRAIL_DROID_SESSIONS_ENV = "TOKTRAIL_DROID_SESSIONS"
+TOKTRAIL_HARNESSBRIDGE_SESSIONS_ENV = "TOKTRAIL_HARNESSBRIDGE_SESSIONS"
 TOKTRAIL_VIBE_LOGS_ENV = "TOKTRAIL_VIBE_LOGS"
 GOOSE_PATH_ROOT_ENV = "GOOSE_PATH_ROOT"
 TOKTRAIL_CLAUDE_PROJECTS_ENV = "TOKTRAIL_CLAUDE_PROJECTS"
@@ -278,6 +279,19 @@ def resolve_droid_sessions_path(cli_value: Path | None = None) -> Path:
     if env_value:
         return Path(env_value).expanduser()
     return default_droid_sessions_path()
+
+
+def default_harnessbridge_sessions_path() -> Path:
+    return _home_dir() / ".harnessbridge" / "sessions"
+
+
+def resolve_harnessbridge_sessions_path(cli_value: Path | None = None) -> Path:
+    if cli_value is not None:
+        return cli_value.expanduser()
+    env_value = os.environ.get(TOKTRAIL_HARNESSBRIDGE_SESSIONS_ENV)
+    if env_value:
+        return Path(env_value).expanduser()
+    return default_harnessbridge_sessions_path()
 
 
 def default_claude_projects_path() -> Path:

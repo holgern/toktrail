@@ -63,7 +63,7 @@ harnesses and source paths from ``config.toml``:
 .. code-block:: toml
 
    [imports]
-   harnesses = ["opencode", "pi", "copilot", "codex", "goose", "droid", "amp", "claude", "vibe"]
+   harnesses = ["opencode", "pi", "copilot", "codex", "goose", "harnessbridge", "droid", "amp", "claude", "vibe"]
    missing_source = "warn"
    include_raw_json = false
 
@@ -73,6 +73,7 @@ harnesses and source paths from ``config.toml``:
    copilot = "~/.copilot/otel"
    codex = ["~/.codex/sessions", "~/.codex/archived_sessions"]
    goose = "~/.local/share/goose/sessions/sessions.db"
+   harnessbridge = "~/.harnessbridge/sessions"
    droid = "~/.factory/sessions"
    amp = "~/.local/share/amp/threads"
    claude = "~/.claude/projects"
@@ -101,6 +102,7 @@ Core commands
    toktrail sources sessions pi
    toktrail sources sessions codex
    toktrail sources sessions goose
+   toktrail refresh --harness harnessbridge --source ~/.harnessbridge/sessions
    toktrail refresh --harness goose --source ~/.local/share/goose/sessions/sessions.db
    toktrail refresh --harness droid --source ~/.factory/sessions
    toktrail refresh --harness amp --source ~/.local/share/amp/threads

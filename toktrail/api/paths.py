@@ -20,6 +20,9 @@ from toktrail.paths import (
     default_goose_sessions_db_path as _default_goose_sessions_db_path,
 )
 from toktrail.paths import (
+    default_harnessbridge_sessions_path as _default_harnessbridge_sessions_path,
+)
+from toktrail.paths import (
     default_provider_prices_path as _default_provider_prices_path,
 )
 from toktrail.paths import (
@@ -50,6 +53,7 @@ from toktrail.paths import (
     resolve_copilot_source_path,
     resolve_droid_sessions_path,
     resolve_goose_sessions_path,
+    resolve_harnessbridge_sessions_path,
     resolve_opencode_db_path,
     resolve_pi_sessions_path,
     resolve_vibe_logs_path,
@@ -160,6 +164,10 @@ def default_droid_sessions_path() -> Path:
     return _default_droid_sessions_path()
 
 
+def default_harnessbridge_sessions_path() -> Path:
+    return _default_harnessbridge_sessions_path()
+
+
 def default_vibe_logs_path() -> Path:
     return _default_vibe_logs_path()
 
@@ -181,6 +189,8 @@ def resolve_source_path(
         return resolve_codex_sessions_path(source_path)
     if normalized == "goose":
         return resolve_goose_sessions_path(source_path)
+    if normalized == "harnessbridge":
+        return resolve_harnessbridge_sessions_path(source_path)
     if normalized == "droid":
         return resolve_droid_sessions_path(source_path)
     if normalized == "claude":
@@ -197,6 +207,7 @@ __all__ = [
     "default_codex_sessions_path",
     "default_droid_sessions_path",
     "default_goose_sessions_db_path",
+    "default_harnessbridge_sessions_path",
     "default_source_path",
     "default_toktrail_config_path",
     "default_toktrail_config_dir",

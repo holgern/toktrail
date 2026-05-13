@@ -14,6 +14,7 @@ from toktrail.api.paths import (
     default_amp_threads_path,
     default_droid_sessions_path,
     default_goose_sessions_db_path,
+    default_harnessbridge_sessions_path,
     default_source_path,
     resolve_source_path,
 )
@@ -197,18 +198,20 @@ def test_public_models_preserve_raw_json_privacy_by_default() -> None:
     assert CostTotals(actual_cost_usd=1.0, virtual_cost_usd=2.5).savings_usd == 1.5
 
 
-def test_public_harness_metadata_and_paths_include_codex_goose_and_droid(
+def test_public_harness_metadata_and_paths_include_harnessbridge(
     monkeypatch,
     tmp_path,
 ) -> None:
     codex_env_path = tmp_path / "codex-sessions"
     copilot_env_path = tmp_path / "copilot.jsonl"
     goose_env_path = tmp_path / "goose-sessions.db"
+    harnessbridge_env_path = tmp_path / "harnessbridge-sessions"
     droid_env_path = tmp_path / "factory-sessions"
     amp_env_path = tmp_path / "amp-threads"
     monkeypatch.setenv("TOKTRAIL_CODEX_SESSIONS", str(codex_env_path))
     monkeypatch.setenv("TOKTRAIL_COPILOT_FILE", str(copilot_env_path))
     monkeypatch.setenv("TOKTRAIL_GOOSE_SESSIONS", str(goose_env_path))
+    monkeypatch.setenv("TOKTRAIL_HARNESSBRIDGE_SESSIONS", str(harnessbridge_env_path))
     monkeypatch.setenv("TOKTRAIL_DROID_SESSIONS", str(droid_env_path))
     monkeypatch.setenv("TOKTRAIL_AMP_THREADS", str(amp_env_path))
 
@@ -216,11 +219,13 @@ def test_public_harness_metadata_and_paths_include_codex_goose_and_droid(
 
     assert "codex" in harness_names
     assert "goose" in harness_names
+    assert "harnessbridge" in harness_names
     assert "droid" in harness_names
     assert "amp" in harness_names
     assert default_source_path("amp") == default_amp_threads_path()
     assert default_source_path("codex") == Path.home() / ".codex" / "sessions"
     assert default_source_path("goose") == default_goose_sessions_db_path()
+    assert default_source_path("harnessbridge") == default_harnessbridge_sessions_path()
     assert default_source_path("droid") == default_droid_sessions_path()
     assert default_source_path("droid") == Path.home() / ".factory" / "sessions"
     assert resolve_source_path("codex", tmp_path / "explicit-codex") == (
@@ -231,6 +236,11 @@ def test_public_harness_metadata_and_paths_include_codex_goose_and_droid(
         tmp_path / "explicit-goose.db"
     )
     assert resolve_source_path("goose") == goose_env_path
+    assert resolve_source_path(
+        "harnessbridge",
+        tmp_path / "explicit-harnessbridge",
+    ) == (tmp_path / "explicit-harnessbridge")
+    assert resolve_source_path("harnessbridge") == harnessbridge_env_path
     assert resolve_source_path("droid", tmp_path / "explicit-droid") == (
         tmp_path / "explicit-droid"
     )
@@ -254,6 +264,7 @@ def test_harness_watch_metadata_all_importable_harnesses_support_watch() -> None
         "copilot",
         "codex",
         "goose",
+        "harnessbridge",
         "droid",
         "amp",
         "claude",

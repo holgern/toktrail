@@ -122,11 +122,11 @@ def test_docs_command_roots_exist() -> None:
 
 
 def test_docs_have_no_stale_root_start_stop_status_examples() -> None:
-    stale_prefixes = ("toktrail start", "toktrail stop", "toktrail status")
+    stale_pattern = re.compile(r"^toktrail (start|stop|status)(?:\s|$)")
     for doc_path in DOC_FILES:
         lines = doc_path.read_text(encoding="utf-8").splitlines()
         stale = [
-            line.strip() for line in lines if line.strip().startswith(stale_prefixes)
+            line.strip() for line in lines if stale_pattern.match(line.strip())
         ]
         assert not stale, f"Stale root command examples in {doc_path}: {stale}"
 
