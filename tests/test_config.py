@@ -8,6 +8,7 @@ from toktrail.config import (
     load_costing_config,
     load_pricing_config,
     load_resolved_costing_config,
+    load_runtime_config,
     load_toktrail_config,
     normalize_identity,
     parse_pricing_config,
@@ -86,6 +87,113 @@ def test_load_toktrail_config_parses_import_settings(tmp_path) -> None:
     assert config.imports.sources["amp"].name == "threads"
     assert config.imports.sources["claude"].name == "projects"
     assert config.imports.sources["vibe"].name == "session"
+
+
+def test_load_toktrail_config_exposes_statusline_defaults(tmp_path) -> None:
+    config_path = tmp_path / "toktrail.toml"
+    config_path.write_text(render_config_template(), encoding="utf-8")
+
+    config = load_toktrail_config(config_path)
+
+    assert config.statusline.default_harness == "auto"
+    assert config.statusline.basis == "virtual"
+    assert config.statusline.refresh == "auto"
+    assert config.statusline.max_width == 120
+    assert config.statusline.cache.output_cache_secs == 2
+    assert config.statusline.cache.stale_after_secs == 60
+    assert config.statusline.elements == (
+        "harness",
+        "model",
+        "tokens",
+        "cached",
+        "cost",
+        "quota",
+        "burn",
+        "unpriced",
+    )
+    assert config.context_windows == ()
+
+
+def test_load_runtime_config_parses_statusline_and_context_windows(tmp_path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        """
+config_version = 1
+
+[statusline]
+default_harness = "codex"
+basis = "source"
+refresh = "always"
+session = "latest"
+max_width = 90
+show_emojis = true
+color = "never"
+empty = "message"
+active_session_window_minutes = 15
+elements = ["harness", "model", "tokens", "context"]
+
+[statusline.cache]
+output_cache_secs = 4
+min_refresh_interval_secs = 8
+stale_after_secs = 75
+
+[statusline.thresholds]
+quota_warning_percent = 70
+quota_danger_percent = 95
+burn_warning_percent = 75
+burn_danger_percent = 110
+context_warning_percent = 60
+context_danger_percent = 85
+
+[[context_window]]
+provider = "openai"
+model = "gpt-5.3-codex"
+tokens = 272000
+""".strip(),
+        encoding="utf-8",
+    )
+
+    config = load_runtime_config(config_path)
+
+    assert config.statusline.default_harness == "codex"
+    assert config.statusline.basis == "source"
+    assert config.statusline.refresh == "always"
+    assert config.statusline.session == "latest"
+    assert config.statusline.max_width == 90
+    assert config.statusline.show_emojis is True
+    assert config.statusline.color == "never"
+    assert config.statusline.empty == "message"
+    assert config.statusline.active_session_window_minutes == 15
+    assert config.statusline.elements == ("harness", "model", "tokens", "context")
+    assert config.statusline.cache.output_cache_secs == 4
+    assert config.statusline.cache.min_refresh_interval_secs == 8
+    assert config.statusline.cache.stale_after_secs == 75
+    assert config.statusline.thresholds.quota_warning_percent == 70
+    assert config.statusline.thresholds.quota_danger_percent == 95
+    assert config.statusline.thresholds.burn_warning_percent == 75
+    assert config.statusline.thresholds.burn_danger_percent == 110
+    assert config.statusline.thresholds.context_warning_percent == 60
+    assert config.statusline.thresholds.context_danger_percent == 85
+    assert len(config.context_windows) == 1
+    assert config.context_windows[0].provider == "openai"
+    assert config.context_windows[0].model == "gpt-5.3-codex"
+    assert config.context_windows[0].tokens == 272000
+
+
+def test_load_runtime_config_rejects_invalid_statusline_element(tmp_path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        """
+config_version = 1
+
+[statusline]
+elements = ["harness", "bogus"]
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="statusline.elements\\[2\\]"):
+        load_runtime_config(config_path)
 
 
 def test_load_costing_config_parses_copilot_template(tmp_path) -> None:

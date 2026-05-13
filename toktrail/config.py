@@ -27,10 +27,24 @@ SubscriptionWindowPeriod = Literal["5h", "daily", "weekly", "monthly", "yearly"]
 SubscriptionWindowResetMode = Literal["fixed", "first_use"]
 SubscriptionFixedCostPeriod = Literal["daily", "weekly", "monthly", "yearly"]
 PriceContextBasis = Literal["prompt_like"]
+StatuslineRefreshMode = Literal["never", "auto", "always"]
+StatuslineSessionMode = Literal["auto", "latest", "none"]
+StatuslineColorMode = Literal["auto", "always", "never"]
+StatuslineEmptyMode = Literal["silent", "message"]
 
 CONFIG_VERSION = 1
 DEFAULT_TEMPLATE_NAME = "default"
 COPILOT_TEMPLATE_NAME = "copilot"
+_DEFAULT_STATUSLINE_ELEMENTS = (
+    "harness",
+    "model",
+    "tokens",
+    "cached",
+    "cost",
+    "quota",
+    "burn",
+    "unpriced",
+)
 _VALID_ACTUAL_COST_MODES = {"source", "zero", "pricing"}
 _VALID_VIRTUAL_COST_MODES = {"zero", "pricing"}
 _VALID_MISSING_PRICE_MODES = {"zero", "warn"}
@@ -40,6 +54,30 @@ _VALID_SUBSCRIPTION_WINDOW_PERIODS = {"5h", "daily", "weekly", "monthly", "yearl
 _VALID_SUBSCRIPTION_WINDOW_RESET_MODES = {"fixed", "first_use"}
 _VALID_SUBSCRIPTION_FIXED_COST_PERIODS = {"daily", "weekly", "monthly", "yearly"}
 _VALID_PRICE_CONTEXT_BASES = {"prompt_like"}
+_VALID_STATUSLINE_REFRESH_MODES = {"never", "auto", "always"}
+_VALID_STATUSLINE_SESSION_MODES = {"auto", "latest", "none"}
+_VALID_STATUSLINE_COLOR_MODES = {"auto", "always", "never"}
+_VALID_STATUSLINE_EMPTY_MODES = {"silent", "message"}
+_VALID_STATUSLINE_ELEMENTS = {
+    "harness",
+    "agent",
+    "provider",
+    "model",
+    "session",
+    "tokens",
+    "cached",
+    "reasoning",
+    "cost",
+    "savings",
+    "quota",
+    "reset",
+    "burn",
+    "context",
+    "cache_ratio",
+    "unpriced",
+    "stale",
+    "cwd",
+}
 _PRICE_FIELDS = {
     "provider",
     "model",
@@ -66,6 +104,34 @@ _COSTING_FIELDS = {
     "price_profile",
 }
 _PRICING_FIELDS = {"virtual", "actual"}
+_STATUSLINE_FIELDS = {
+    "default_harness",
+    "basis",
+    "refresh",
+    "session",
+    "max_width",
+    "show_emojis",
+    "color",
+    "empty",
+    "active_session_window_minutes",
+    "elements",
+    "cache",
+    "thresholds",
+}
+_STATUSLINE_CACHE_FIELDS = {
+    "output_cache_secs",
+    "min_refresh_interval_secs",
+    "stale_after_secs",
+}
+_STATUSLINE_THRESHOLDS_FIELDS = {
+    "quota_warning_percent",
+    "quota_danger_percent",
+    "burn_warning_percent",
+    "burn_danger_percent",
+    "context_warning_percent",
+    "context_danger_percent",
+}
+_CONTEXT_WINDOW_FIELDS = {"provider", "model", "tokens"}
 _SUBSCRIPTION_FIELDS = {
     "id",
     "display_name",
@@ -93,12 +159,16 @@ _ROOT_FIELDS = {
     "actual_cost",
     "pricing",
     "subscriptions",
+    "statusline",
+    "context_window",
 }
 _RUNTIME_CONFIG_ROOT_FIELDS = {
     "config_version",
     "imports",
     "costing",
     "actual_cost",
+    "statusline",
+    "context_window",
 }
 _PRICE_CONFIG_ROOT_FIELDS = {
     "config_version",
@@ -754,9 +824,53 @@ class ImportConfig:
 
 
 @dataclass(frozen=True)
+class StatuslineCacheConfig:
+    output_cache_secs: int = 2
+    min_refresh_interval_secs: int = 5
+    stale_after_secs: int = 60
+
+
+@dataclass(frozen=True)
+class StatuslineThresholdsConfig:
+    quota_warning_percent: int = 80
+    quota_danger_percent: int = 100
+    burn_warning_percent: int = 80
+    burn_danger_percent: int = 100
+    context_warning_percent: int = 70
+    context_danger_percent: int = 90
+
+
+@dataclass(frozen=True)
+class StatuslineConfig:
+    default_harness: str = "auto"
+    basis: SubscriptionCostBasis = "virtual"
+    refresh: StatuslineRefreshMode = "auto"
+    session: StatuslineSessionMode = "auto"
+    max_width: int = 120
+    show_emojis: bool = False
+    color: StatuslineColorMode = "auto"
+    empty: StatuslineEmptyMode = "silent"
+    active_session_window_minutes: int = 30
+    elements: tuple[str, ...] = _DEFAULT_STATUSLINE_ELEMENTS
+    cache: StatuslineCacheConfig = field(default_factory=StatuslineCacheConfig)
+    thresholds: StatuslineThresholdsConfig = field(
+        default_factory=StatuslineThresholdsConfig
+    )
+
+
+@dataclass(frozen=True)
+class ContextWindowConfig:
+    provider: str
+    model: str
+    tokens: int
+
+
+@dataclass(frozen=True)
 class ToktrailConfig:
     costing: CostingConfig
     imports: ImportConfig
+    statusline: StatuslineConfig = field(default_factory=StatuslineConfig)
+    context_windows: tuple[ContextWindowConfig, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -768,6 +882,8 @@ class RuntimeConfig:
     missing_price: MissingPriceMode = "warn"
     price_profile: str | None = None
     actual_rules: tuple[ActualCostRule, ...] = ()
+    statusline: StatuslineConfig = field(default_factory=StatuslineConfig)
+    context_windows: tuple[ContextWindowConfig, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -936,6 +1052,8 @@ def default_runtime_config() -> RuntimeConfig:
         missing_price=costing.missing_price,
         price_profile=costing.price_profile,
         actual_rules=costing.actual_rules,
+        statusline=StatuslineConfig(),
+        context_windows=(),
     )
 
 
@@ -1407,6 +1525,11 @@ def parse_runtime_config(data: object) -> RuntimeConfig:
         missing_price=cast(MissingPriceMode, missing_price),
         price_profile=price_profile,
         actual_rules=actual_rules,
+        statusline=_parse_statusline_config(
+            data.get("statusline"),
+            default_config.statusline,
+        ),
+        context_windows=_parse_context_windows(data.get("context_window")),
     )
 
 
@@ -1503,6 +1626,8 @@ def merge_configs(
             subscriptions=subscriptions.subscriptions,
         ),
         imports=runtime.imports,
+        statusline=runtime.statusline,
+        context_windows=runtime.context_windows,
     )
 
 
@@ -1796,6 +1921,270 @@ def _parse_import_config(
             context="imports.include_raw_json",
         ),
     )
+
+
+def _parse_statusline_config(
+    value: object,
+    default_config: StatuslineConfig,
+) -> StatuslineConfig:
+    table = _parse_optional_table(value, context="statusline")
+    _validate_allowed_keys(table, _STATUSLINE_FIELDS, context="statusline")
+    return StatuslineConfig(
+        default_harness=_parse_statusline_default_harness(
+            table.get("default_harness", default_config.default_harness),
+            context="statusline.default_harness",
+        ),
+        basis=cast(
+            SubscriptionCostBasis,
+            _parse_choice(
+                table.get("basis", default_config.basis),
+                valid=_VALID_SUBSCRIPTION_COST_BASES,
+                context="statusline.basis",
+            ),
+        ),
+        refresh=cast(
+            StatuslineRefreshMode,
+            _parse_choice(
+                table.get("refresh", default_config.refresh),
+                valid=_VALID_STATUSLINE_REFRESH_MODES,
+                context="statusline.refresh",
+            ),
+        ),
+        session=cast(
+            StatuslineSessionMode,
+            _parse_choice(
+                table.get("session", default_config.session),
+                valid=_VALID_STATUSLINE_SESSION_MODES,
+                context="statusline.session",
+            ),
+        ),
+        max_width=_parse_positive_int(
+            table.get("max_width", default_config.max_width),
+            context="statusline.max_width",
+        ),
+        show_emojis=_parse_bool(
+            table.get("show_emojis", default_config.show_emojis),
+            context="statusline.show_emojis",
+        ),
+        color=cast(
+            StatuslineColorMode,
+            _parse_choice(
+                table.get("color", default_config.color),
+                valid=_VALID_STATUSLINE_COLOR_MODES,
+                context="statusline.color",
+            ),
+        ),
+        empty=cast(
+            StatuslineEmptyMode,
+            _parse_choice(
+                table.get("empty", default_config.empty),
+                valid=_VALID_STATUSLINE_EMPTY_MODES,
+                context="statusline.empty",
+            ),
+        ),
+        active_session_window_minutes=_parse_positive_int(
+            table.get(
+                "active_session_window_minutes",
+                default_config.active_session_window_minutes,
+            ),
+            context="statusline.active_session_window_minutes",
+        ),
+        elements=_parse_statusline_elements(
+            table.get("elements", list(default_config.elements)),
+            context="statusline.elements",
+        ),
+        cache=_parse_statusline_cache_config(
+            table.get("cache"),
+            default_config.cache,
+        ),
+        thresholds=_parse_statusline_thresholds_config(
+            table.get("thresholds"),
+            default_config.thresholds,
+        ),
+    )
+
+
+def _parse_statusline_cache_config(
+    value: object,
+    default_config: StatuslineCacheConfig,
+) -> StatuslineCacheConfig:
+    table = _parse_optional_table(value, context="statusline.cache")
+    _validate_allowed_keys(
+        table,
+        _STATUSLINE_CACHE_FIELDS,
+        context="statusline.cache",
+    )
+    return StatuslineCacheConfig(
+        output_cache_secs=_parse_non_negative_int(
+            table.get("output_cache_secs", default_config.output_cache_secs),
+            context="statusline.cache.output_cache_secs",
+            required=True,
+        )
+        or 0,
+        min_refresh_interval_secs=_parse_non_negative_int(
+            table.get(
+                "min_refresh_interval_secs",
+                default_config.min_refresh_interval_secs,
+            ),
+            context="statusline.cache.min_refresh_interval_secs",
+            required=True,
+        )
+        or 0,
+        stale_after_secs=_parse_non_negative_int(
+            table.get("stale_after_secs", default_config.stale_after_secs),
+            context="statusline.cache.stale_after_secs",
+            required=True,
+        )
+        or 0,
+    )
+
+
+def _parse_statusline_thresholds_config(
+    value: object,
+    default_config: StatuslineThresholdsConfig,
+) -> StatuslineThresholdsConfig:
+    table = _parse_optional_table(value, context="statusline.thresholds")
+    _validate_allowed_keys(
+        table,
+        _STATUSLINE_THRESHOLDS_FIELDS,
+        context="statusline.thresholds",
+    )
+    return StatuslineThresholdsConfig(
+        quota_warning_percent=_parse_non_negative_int(
+            table.get(
+                "quota_warning_percent",
+                default_config.quota_warning_percent,
+            ),
+            context="statusline.thresholds.quota_warning_percent",
+            required=True,
+        )
+        or 0,
+        quota_danger_percent=_parse_non_negative_int(
+            table.get(
+                "quota_danger_percent",
+                default_config.quota_danger_percent,
+            ),
+            context="statusline.thresholds.quota_danger_percent",
+            required=True,
+        )
+        or 0,
+        burn_warning_percent=_parse_non_negative_int(
+            table.get(
+                "burn_warning_percent",
+                default_config.burn_warning_percent,
+            ),
+            context="statusline.thresholds.burn_warning_percent",
+            required=True,
+        )
+        or 0,
+        burn_danger_percent=_parse_non_negative_int(
+            table.get(
+                "burn_danger_percent",
+                default_config.burn_danger_percent,
+            ),
+            context="statusline.thresholds.burn_danger_percent",
+            required=True,
+        )
+        or 0,
+        context_warning_percent=_parse_non_negative_int(
+            table.get(
+                "context_warning_percent",
+                default_config.context_warning_percent,
+            ),
+            context="statusline.thresholds.context_warning_percent",
+            required=True,
+        )
+        or 0,
+        context_danger_percent=_parse_non_negative_int(
+            table.get(
+                "context_danger_percent",
+                default_config.context_danger_percent,
+            ),
+            context="statusline.thresholds.context_danger_percent",
+            required=True,
+        )
+        or 0,
+    )
+
+
+def _parse_statusline_default_harness(value: object, *, context: str) -> str:
+    if not isinstance(value, str):
+        msg = f"{context} must be a string."
+        raise ValueError(msg)
+    normalized = value.strip().lower()
+    if normalized == "auto":
+        return "auto"
+    return _parse_supported_harness(normalized, context=context)
+
+
+def _parse_statusline_elements(value: object, *, context: str) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        msg = f"{context} must be a list of element names."
+        raise ValueError(msg)
+    elements: list[str] = []
+    seen: set[str] = set()
+    for index, item in enumerate(value, start=1):
+        if not isinstance(item, str):
+            msg = f"{context}[{index}] must be a string."
+            raise ValueError(msg)
+        normalized = item.strip().lower()
+        if normalized not in _VALID_STATUSLINE_ELEMENTS:
+            msg = (
+                f"{context}[{index}] must be one of: "
+                f"{', '.join(sorted(_VALID_STATUSLINE_ELEMENTS))}."
+            )
+            raise ValueError(msg)
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        elements.append(normalized)
+    if not elements:
+        msg = f"{context} must contain at least one element."
+        raise ValueError(msg)
+    return tuple(elements)
+
+
+def _parse_context_windows(value: object) -> tuple[ContextWindowConfig, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, list):
+        msg = "context_window must be an array of tables."
+        raise ValueError(msg)
+    windows: list[ContextWindowConfig] = []
+    seen: set[tuple[str, str]] = set()
+    for index, raw_window in enumerate(value, start=1):
+        if not isinstance(raw_window, dict):
+            msg = f"context_window[{index}] must be a TOML table."
+            raise ValueError(msg)
+        _validate_allowed_keys(
+            raw_window,
+            _CONTEXT_WINDOW_FIELDS,
+            context=f"context_window[{index}]",
+        )
+        window = ContextWindowConfig(
+            provider=_parse_required_identity(
+                raw_window.get("provider"),
+                context=f"context_window[{index}].provider",
+            ),
+            model=_parse_required_identity(
+                raw_window.get("model"),
+                context=f"context_window[{index}].model",
+            ),
+            tokens=_parse_positive_int(
+                raw_window.get("tokens"),
+                context=f"context_window[{index}].tokens",
+            ),
+        )
+        key = (normalize_identity(window.provider), normalize_identity(window.model))
+        if key in seen:
+            msg = (
+                f"context_window[{index}] duplicates provider/model "
+                f"{window.provider}/{window.model}."
+            )
+            raise ValueError(msg)
+        seen.add(key)
+        windows.append(window)
+    return tuple(windows)
 
 
 def _parse_import_harnesses(value: object, *, context: str) -> tuple[str, ...]:
@@ -2102,6 +2491,15 @@ def _parse_non_negative_int(
         msg = f"{context} must be non-negative."
         raise ValueError(msg)
     return value
+
+
+def _parse_positive_int(value: object, *, context: str) -> int:
+    parsed = _parse_non_negative_int(value, context=context, required=True)
+    assert parsed is not None
+    if parsed <= 0:
+        msg = f"{context} must be positive."
+        raise ValueError(msg)
+    return parsed
 
 
 def _parse_positive_float(value: object, *, context: str) -> float | None:

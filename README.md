@@ -181,6 +181,56 @@ toktrail sync import toktrail-state.tar.gz
 toktrail sync import toktrail-state.tar.gz --dry-run --json
 ```
 
+## Statusline
+
+Render a compact prompt/status line from local toktrail state:
+
+```bash
+toktrail statusline --harness codex --no-refresh
+toktrail statusline --harness opencode --refresh auto --json
+toktrail statusline --session latest --harness pi --no-refresh
+toktrail statusline test --harness codex --no-refresh
+toktrail statusline install --target starship
+toktrail statusline install --target tmux
+toktrail statusline config show
+toktrail statusline config set elements harness,model,tokens,cached,cost,quota,burn
+toktrail usage statusline --no-refresh
+```
+
+`toktrail statusline` prefers the active scoped source session when one is known,
+otherwise the latest matching source session, then falls back to today totals.
+Use `--session auto|latest|none` to control that behavior. `--refresh
+never|auto|always` keeps prompt-time refresh conservative, and `--no-refresh`
+is the fastest state-only path. `toktrail usage statusline` remains as a
+compatibility alias.
+
+Safe install targets print ready-to-paste snippets for `starship`, `tmux`,
+`bash`, and `zsh`. Native harness targets (`pi`, `opencode`, `codex`) print
+instructions instead of editing unknown config files.
+
+Statusline config lives in `config.toml`:
+
+```toml
+[statusline]
+default_harness = "auto"
+basis = "virtual"
+refresh = "auto"
+session = "auto"
+max_width = 120
+active_session_window_minutes = 30
+elements = ["harness", "model", "tokens", "cached", "cost", "quota", "burn", "unpriced"]
+
+[statusline.cache]
+output_cache_secs = 2
+min_refresh_interval_secs = 5
+stale_after_secs = 60
+
+[[context_window]]
+provider = "openai"
+model = "gpt-5.3-codex"
+tokens = 272000
+```
+
 Stop the active tracking session:
 
 ```bash

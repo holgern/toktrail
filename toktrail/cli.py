@@ -30,21 +30,25 @@ from toktrail.api.imports import import_configured_usage as import_configured_us
 from toktrail.api.models import (
     ImportUsageResult,
     SessionCacheAnalysisReport,
+    StatuslineCache,
+    StatuslineReport,
 )
 from toktrail.api.models import (
     RunScope as PublicRunScope,
 )
 from toktrail.api.reports import stats_report as stats_report_api
-from toktrail.api.reports import usage_report as usage_report_api
 from toktrail.api.sessions import list_runs
 from toktrail.api.sources import capture_source_snapshot
+from toktrail.api.statusline import statusline_report as statusline_report_api
 from toktrail.cli_sync import sync_app
 from toktrail.config import (
     DEFAULT_TEMPLATE_NAME,
+    ContextWindowConfig,
     CostingConfig,
     LoadedCostingConfig,
     LoadedToktrailConfig,
     Price,
+    StatuslineConfig,
     load_resolved_costing_config,
     load_resolved_toktrail_config,
     normalize_identity,
@@ -104,6 +108,14 @@ from toktrail.reporting import (
 from toktrail.reporting import (
     RunReport as InternalRunReport,
 )
+from toktrail.statusline import (
+    StatuslineRequest,
+    load_statusline_cache_metadata,
+    load_statusline_output_cache,
+    statusline_cache_dir,
+    statusline_cache_key,
+    write_statusline_output_cache,
+)
 
 app = typer.Typer(help="Track harness token usage in local SQLite sessions.")
 sources_app = typer.Typer(
@@ -112,6 +124,11 @@ sources_app = typer.Typer(
 )
 run_app = typer.Typer(help="Manage toktrail tracking runs.")
 usage_app = typer.Typer(help="Report imported token and cost usage.")
+statusline_app = typer.Typer(
+    invoke_without_command=True,
+    help="Render compact session and quota status lines.",
+)
+statusline_config_app = typer.Typer(help="Inspect statusline configuration.")
 copilot_app = typer.Typer(help="Inspect and run GitHub Copilot CLI tracking.")
 config_app = typer.Typer(help="Inspect toktrail configuration files.")
 prices_app = typer.Typer(help="Inspect configured and used model pricing.")
@@ -122,6 +139,7 @@ stats_app = typer.Typer(help="Report aggregate usage and session statistics.")
 app.add_typer(run_app, name="run")
 app.add_typer(sources_app, name="sources")
 app.add_typer(usage_app, name="usage")
+app.add_typer(statusline_app, name="statusline")
 app.add_typer(copilot_app, name="copilot")
 app.add_typer(config_app, name="config")
 app.add_typer(prices_app, name="prices")
@@ -129,6 +147,7 @@ app.add_typer(subscriptions_app, name="subscriptions")
 app.add_typer(analyze_app, name="analyze")
 app.add_typer(stats_app, name="stats")
 app.add_typer(sync_app, name="sync")
+statusline_app.add_typer(statusline_config_app, name="config")
 
 _VALID_REPORT_PRICE_STATES = {"all", "priced", "unpriced"}
 _VALID_REPORT_SORTS = {
@@ -936,6 +955,177 @@ def _subscriptions_status_impl(
     )
 
 
+@statusline_app.callback(invoke_without_command=True)
+def statusline(
+    ctx: typer.Context,
+    json_output: JsonOption = False,
+    harness: HarnessOption = None,
+    provider_id: ProviderOption = None,
+    model_id: ModelOption = None,
+    source_session_id: SourceSessionOption = None,
+    session: Annotated[
+        str | None,
+        typer.Option("--session", help="Session selection: auto, latest, or none."),
+    ] = None,
+    basis: Annotated[
+        str | None,
+        typer.Option("--basis", help="Cost basis: source, actual, or virtual."),
+    ] = None,
+    refresh: Annotated[
+        str | None,
+        typer.Option("--refresh", help="Refresh policy: never, auto, or always."),
+    ] = None,
+    no_refresh: Annotated[bool, typer.Option("--no-refresh")] = False,
+    refresh_details: RefreshDetailsOption = False,
+    raw: RawModeOption = None,
+    max_width: Annotated[int | None, typer.Option("--max-width", min=1)] = None,
+    stale_after: Annotated[int | None, typer.Option("--stale-after", min=0)] = None,
+) -> None:
+    if ctx.invoked_subcommand is not None:
+        return
+    report, refresh_results, _payload, _elapsed_ms = _build_statusline_cli(
+        ctx,
+        harness=harness,
+        provider_id=provider_id,
+        model_id=model_id,
+        source_session_id=source_session_id,
+        session_mode=session,
+        basis=basis,
+        refresh=refresh,
+        no_refresh=no_refresh,
+        refresh_details=refresh_details,
+        raw=raw,
+        max_width=max_width,
+        stale_after=stale_after,
+    )
+    if json_output:
+        typer.echo(
+            json.dumps(
+                _wrap_refresh_json_payload(
+                    report.as_dict(),
+                    refresh_results=refresh_results,
+                    include_refresh=refresh_details,
+                ),
+                indent=2,
+            )
+        )
+        return
+    typer.echo(report.line)
+
+
+@statusline_app.command("test")
+def statusline_test(
+    ctx: typer.Context,
+    harness: HarnessOption = None,
+    provider_id: ProviderOption = None,
+    model_id: ModelOption = None,
+    source_session_id: SourceSessionOption = None,
+    session: Annotated[
+        str | None,
+        typer.Option("--session", help="Session selection: auto, latest, or none."),
+    ] = None,
+    basis: Annotated[
+        str | None,
+        typer.Option("--basis", help="Cost basis: source, actual, or virtual."),
+    ] = None,
+    refresh: Annotated[
+        str | None,
+        typer.Option("--refresh", help="Refresh policy: never, auto, or always."),
+    ] = None,
+    no_refresh: Annotated[bool, typer.Option("--no-refresh")] = False,
+    raw: RawModeOption = None,
+    max_width: Annotated[int | None, typer.Option("--max-width", min=1)] = None,
+    stale_after: Annotated[int | None, typer.Option("--stale-after", min=0)] = None,
+) -> None:
+    report, refresh_results, payload, elapsed_ms = _build_statusline_cli(
+        ctx,
+        harness=harness,
+        provider_id=provider_id,
+        model_id=model_id,
+        source_session_id=source_session_id,
+        session_mode=session,
+        basis=basis,
+        refresh=refresh,
+        no_refresh=no_refresh,
+        refresh_details=False,
+        raw=raw,
+        max_width=max_width,
+        stale_after=stale_after,
+    )
+    typer.echo(f"Source: {report.source_session_id or '(today fallback)'}")
+    typer.echo(
+        f"Model: {(report.provider_id or '-')} / {(report.model_id or '-')}"
+    )
+    typer.echo(f"Timing: {elapsed_ms}ms")
+    typer.echo("Output cache: miss")
+    typer.echo(
+        "Refresh: "
+        + ("none" if not refresh_results else f"{len(refresh_results)} source(s)")
+    )
+    typer.echo(f"Quota: {_render_statusline_quota_label(report)}")
+    if payload is not None:
+        typer.echo("Payload:")
+        typer.echo(json.dumps(payload, indent=2))
+    typer.echo("Line:")
+    typer.echo(report.line)
+
+
+@statusline_app.command("install")
+def statusline_install(
+    target: Annotated[str, typer.Option("--target")] = "starship",
+) -> None:
+    normalized = target.strip().lower()
+    typer.echo(_statusline_install_instructions(normalized))
+
+
+@statusline_config_app.command("show")
+def statusline_config_show(ctx: typer.Context) -> None:
+    loaded = _load_resolved_toktrail_config_or_exit(ctx)
+    statusline_config = loaded.config.statusline
+    typer.echo(f"config path:   {loaded.config_path}")
+    typer.echo(f"config exists: {'yes' if loaded.config_exists else 'no'}")
+    typer.echo(f"default harness: {statusline_config.default_harness}")
+    typer.echo(f"basis:         {statusline_config.basis}")
+    typer.echo(f"refresh:       {statusline_config.refresh}")
+    typer.echo(f"session:       {statusline_config.session}")
+    typer.echo(f"max width:     {statusline_config.max_width}")
+    typer.echo(f"stale after:   {statusline_config.cache.stale_after_secs}")
+    typer.echo(
+        "elements:      " + ", ".join(statusline_config.elements)
+    )
+    typer.echo(
+        f"context windows: {len(loaded.config.context_windows)}"
+    )
+
+
+@statusline_config_app.command("set")
+def statusline_config_set(
+    ctx: typer.Context,
+    key: Annotated[str, typer.Argument()],
+    value: Annotated[str, typer.Argument()],
+) -> None:
+    loaded = _load_resolved_toktrail_config_or_exit(ctx)
+    updated = _statusline_config_with_override(loaded.config.statusline, key, value)
+    config_path = loaded.config_path
+    existing_text = (
+        config_path.read_text(encoding="utf-8")
+        if config_path.exists()
+        else "config_version = 1\n"
+    )
+    stripped = _strip_statusline_sections(existing_text).strip()
+    rendered = _render_statusline_config_sections(
+        updated,
+        context_windows=loaded.config.context_windows,
+    )
+    output = stripped
+    if output:
+        output += "\n\n"
+    output += rendered + "\n"
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(output, encoding="utf-8")
+    typer.echo(f"Updated statusline config: {config_path}")
+
+
 @usage_app.command("statusline")
 def usage_statusline(
     ctx: typer.Context,
@@ -952,49 +1142,27 @@ def usage_statusline(
     timezone_name: TimezoneOption = None,
     utc: UtcOption = False,
 ) -> None:
-    if basis not in {"source", "actual", "virtual"}:
-        _exit_with_error("--basis must be one of: source, actual, virtual.")
-    refresh_results = _refresh_before_report(
+    _ = timezone_name, utc
+    report, refresh_results, _payload, _elapsed_ms = _build_statusline_cli(
         ctx,
-        enabled=refresh,
-        details=refresh_details,
-        json_output=json_output,
-        harness=harness,
-        include_raw_json=raw,
-    )
-    report = usage_report_api(
-        _resolve_state_db(ctx),
-        period="today",
-        timezone=timezone_name,
-        utc=utc,
         harness=harness,
         provider_id=provider_id,
-        config_path=_resolve_config_path(ctx),
+        model_id=None,
+        source_session_id=None,
+        session_mode="auto",
+        basis=basis,
+        refresh="auto" if refresh else "never",
+        no_refresh=False,
+        refresh_details=refresh_details,
+        raw=raw,
+        max_width=120,
+        stale_after=60,
     )
-    costs = report.totals.costs
-    cost = {
-        "source": costs.source_cost_usd,
-        "actual": costs.actual_cost_usd,
-        "virtual": costs.virtual_cost_usd,
-    }[basis]
-    payload = {
-        "period": "today",
-        "tokens_total": report.totals.tokens.total,
-        "source_usd": format(costs.source_cost_usd, "f"),
-        "actual_usd": format(costs.actual_cost_usd, "f"),
-        "virtual_usd": format(costs.virtual_cost_usd, "f"),
-        "savings_usd": format(costs.savings_usd, "f"),
-        "unpriced_count": costs.unpriced_count,
-    }
-    if provider_id is not None:
-        payload["provider"] = provider_id
-    if harness is not None:
-        payload["harness"] = harness
     if json_output:
         typer.echo(
             json.dumps(
                 _wrap_refresh_json_payload(
-                    payload,
+                    report.as_dict(),
                     refresh_results=refresh_results,
                     include_refresh=refresh_details,
                 ),
@@ -1002,15 +1170,7 @@ def usage_statusline(
             )
         )
         return
-    label = "today"
-    if provider_id is not None:
-        label += f" {provider_id}"
-    if harness is not None:
-        label += f" {harness}"
-    typer.echo(
-        f"{label}: {_format_int(report.totals.tokens.total)} tokens · "
-        f"{basis} {_format_cost(cost)} · savings {_format_cost(costs.savings_usd)}"
-    )
+    typer.echo(report.line)
 
 
 @stats_app.callback(invoke_without_command=True)
@@ -1048,10 +1208,19 @@ def stats(
         typer.echo(json.dumps(report.as_dict(), indent=2))
         return
     totals = report.totals
-    tokens = totals["tokens"]
+    token_payload = totals.get("tokens")
+    tokens = token_payload if isinstance(token_payload, dict) else {}
+    messages = totals.get("messages")
+    message_count = int(messages) if isinstance(messages, (int, float, str)) else 0
+    total_tokens_value = tokens.get("total")
+    total_tokens = (
+        int(total_tokens_value)
+        if isinstance(total_tokens_value, (int, float, str))
+        else 0
+    )
     typer.echo("Stats v1")
-    typer.echo(f"Messages: {_format_int(int(totals['messages']))}")
-    typer.echo(f"Tokens: {_format_int(int(tokens['total']))}")
+    typer.echo(f"Messages: {_format_int(message_count)}")
+    typer.echo(f"Tokens: {_format_int(total_tokens)}")
     typer.echo(f"Virtual cost: ${totals['virtual_usd']}")
     typer.echo(f"Unpriced models: {totals['unpriced_count']}")
 
@@ -3524,6 +3693,7 @@ def sources_skipped(
             "reason": "reason",
             "updated_at_ms": "updated at ms",
         },
+        rich_output=False,
     )
 
 
@@ -5644,6 +5814,528 @@ def _format_cost_or_dash(value: Decimal | None) -> str:
     if value is None:
         return "-"
     return _format_cost_precise(value)
+
+
+def _build_statusline_cli(
+    ctx: typer.Context,
+    *,
+    harness: str | None,
+    provider_id: str | None,
+    model_id: str | None,
+    source_session_id: str | None,
+    session_mode: str | None,
+    basis: str | None,
+    refresh: str | None,
+    no_refresh: bool,
+    refresh_details: bool,
+    raw: bool | None,
+    max_width: int | None,
+    stale_after: int | None,
+) -> tuple[
+    StatuslineReport,
+    tuple[ImportUsageResult, ...],
+    dict[str, object] | None,
+    int,
+]:
+    loaded_config = _load_resolved_toktrail_config_or_exit(ctx)
+    statusline_config = loaded_config.config.statusline
+    effective_harness = harness
+    if effective_harness is None and statusline_config.default_harness != "auto":
+        effective_harness = statusline_config.default_harness
+    effective_session_mode = _normalize_statusline_session_mode(
+        session_mode or statusline_config.session
+    )
+    effective_basis = basis or statusline_config.basis
+    requested_refresh = _normalize_statusline_refresh(
+        refresh=refresh or statusline_config.refresh,
+        no_refresh=no_refresh,
+    )
+    effective_max_width = max_width or statusline_config.max_width
+    effective_stale_after = (
+        stale_after
+        if stale_after is not None
+        else statusline_config.cache.stale_after_secs
+    )
+    payload = _read_statusline_stdin_payload()
+    request = StatuslineRequest(
+        harness=effective_harness,
+        provider_id=provider_id,
+        model_id=model_id,
+        source_session_id=source_session_id,
+        session_mode=effective_session_mode,
+        basis=effective_basis,
+        max_width=effective_max_width,
+        stale_after_seconds=effective_stale_after,
+        active_session_window_minutes=statusline_config.active_session_window_minutes,
+        elements=statusline_config.elements,
+        stdin_payload=payload,
+    )
+    state_db_path = _resolve_state_db(ctx)
+    resolved_source_path = _configured_statusline_source_path(
+        loaded_config,
+        effective_harness,
+    )
+    cache_dir = statusline_cache_dir()
+    cache_key = statusline_cache_key(
+        state_db_path,
+        request=request,
+        json_output=False,
+    )
+    cached = load_statusline_output_cache(
+        cache_dir=cache_dir,
+        cache_key=cache_key,
+        state_db_path=state_db_path,
+        config_path=loaded_config.config_path,
+        source_path=resolved_source_path,
+        max_age_seconds=statusline_config.cache.output_cache_secs,
+    )
+    if cached is not None:
+        return cached, (), payload, 0
+    effective_refresh = requested_refresh
+    if requested_refresh == "auto" and _should_skip_statusline_auto_refresh(
+        state_db_path=state_db_path,
+        source_path=resolved_source_path,
+        cache_metadata=load_statusline_cache_metadata(
+            cache_dir=cache_dir,
+            cache_key=cache_key,
+        ),
+        min_refresh_interval_secs=statusline_config.cache.min_refresh_interval_secs,
+    ):
+        effective_refresh = "never"
+    started = time.perf_counter()
+    refresh_results = _refresh_for_statusline(
+        ctx,
+        mode=effective_refresh,
+        harness=effective_harness,
+        details=refresh_details,
+        raw=raw,
+    )
+    report = statusline_report_api(
+        state_db_path,
+        harness=effective_harness,
+        provider_id=provider_id,
+        model_id=model_id,
+        source_session_id=source_session_id,
+        session_mode=effective_session_mode,
+        basis=effective_basis,
+        max_width=effective_max_width,
+        stale_after_seconds=effective_stale_after,
+        active_session_window_minutes=statusline_config.active_session_window_minutes,
+        elements=statusline_config.elements,
+        stdin_payload=payload,
+        config_path=loaded_config.config_path,
+    )
+    report = replace(
+        report,
+        cache=replace(
+            report.cache or StatuslineCache(cached_tokens=0, cache_reuse_ratio=None),
+            output_cache="miss",
+        ),
+    )
+    write_statusline_output_cache(
+        cache_dir=cache_dir,
+        cache_key=cache_key,
+        report=report,
+        state_db_path=state_db_path,
+        config_path=loaded_config.config_path,
+        source_path=resolved_source_path,
+    )
+    elapsed_ms = int((time.perf_counter() - started) * 1000)
+    return report, refresh_results, payload, elapsed_ms
+
+
+def _normalize_statusline_refresh(*, refresh: str, no_refresh: bool) -> str:
+    normalized = refresh.strip().lower()
+    if normalized not in {"never", "auto", "always"}:
+        _exit_with_error("--refresh must be one of: never, auto, always.")
+    if no_refresh and normalized != "auto":
+        _exit_with_error("Use either --refresh or --no-refresh, not both.")
+    if no_refresh:
+        return "never"
+    return normalized
+
+
+def _normalize_statusline_session_mode(session_mode: str) -> str:
+    normalized = session_mode.strip().lower()
+    if normalized not in {"auto", "latest", "none"}:
+        _exit_with_error("--session must be one of: auto, latest, none.")
+    return normalized
+
+
+def _read_statusline_stdin_payload() -> dict[str, object] | None:
+    stream = typer.get_text_stream("stdin")
+    if stream.isatty():
+        return None
+    text = stream.read()
+    if not text.strip():
+        return None
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError as exc:
+        _exit_with_error(f"Invalid JSON from stdin: {exc}")
+    if not isinstance(payload, dict):
+        _exit_with_error("Statusline stdin payload must be a JSON object.")
+    return cast(dict[str, object], payload)
+
+
+def _refresh_for_statusline(
+    ctx: typer.Context,
+    *,
+    mode: str,
+    harness: str | None,
+    details: bool,
+    raw: bool | None,
+) -> tuple[ImportUsageResult, ...]:
+    if mode == "never":
+        return ()
+    if mode == "auto" and harness is None:
+        return ()
+    try:
+        results = import_configured_usage_api(
+            _resolve_state_db(ctx),
+            harnesses=[harness] if harness is not None else None,
+            include_raw_json=raw,
+            config_path=_resolve_config_path(ctx),
+            refresh_mode="full" if mode == "always" else "quick",
+        )
+    except (OSError, ValueError, ToktrailError) as exc:
+        _exit_with_error(str(exc))
+    if details:
+        _print_configured_refresh_results(results)
+    return results
+
+
+def _render_statusline_quota_label(report: StatuslineReport) -> str:
+    quota = report.quota
+    if quota is None:
+        return "-"
+    if quota.over_limit_usd > 0:
+        return f"{quota.period} over ${float(quota.over_limit_usd):.2f}"
+    if quota.percent_used is None:
+        return quota.period
+    return f"{quota.period} {_format_percent(quota.percent_used)}"
+
+
+def _configured_statusline_source_path(
+    loaded_config: LoadedToktrailConfig,
+    harness: str | None,
+) -> Path | None:
+    if harness is None:
+        return None
+    sources = loaded_config.config.imports.sources or {}
+    configured = sources.get(harness)
+    if isinstance(configured, list):
+        return configured[0] if configured else None
+    return configured
+
+
+def _should_skip_statusline_auto_refresh(
+    *,
+    state_db_path: Path,
+    source_path: Path | None,
+    cache_metadata: dict[str, object] | None,
+    min_refresh_interval_secs: int,
+) -> bool:
+    if source_path is None or not source_path.exists() or source_path.is_dir():
+        return True
+    state_mtime_ns = _path_mtime_ns(state_db_path)
+    source_mtime_ns = _path_mtime_ns(source_path)
+    if (
+        state_mtime_ns is not None
+        and source_mtime_ns is not None
+        and source_mtime_ns <= state_mtime_ns
+    ):
+        return True
+    if cache_metadata is None:
+        return False
+    created_ms = cache_metadata.get("created_ms")
+    if not isinstance(created_ms, int):
+        return False
+    return int(time.time() * 1000) - created_ms < min_refresh_interval_secs * 1000
+
+
+def _path_mtime_ns(path: Path | None) -> int | None:
+    if path is None:
+        return None
+    try:
+        return path.stat().st_mtime_ns
+    except OSError:
+        return None
+
+
+def _statusline_install_instructions(target: str) -> str:
+    if target == "starship":
+        return (
+            '[custom.toktrail]\n'
+            'command = "toktrail statusline --no-refresh 2>/dev/null"\n'
+            'when = "true"\n'
+            'format = "[$output]($style) "\n'
+            'style = "dimmed"'
+        )
+    if target == "tmux":
+        return (
+            "set -g status-right "
+            "'#(toktrail statusline --no-refresh 2>/dev/null)'"
+        )
+    if target == "bash":
+        return (
+            "export PS1='$(toktrail statusline --no-refresh 2>/dev/null) "
+            "\\w $ '"
+        )
+    if target == "zsh":
+        return (
+            "precmd() { TOKTRAIL_STATUSLINE=$(toktrail statusline --no-refresh "
+            "2>/dev/null); }\nPROMPT='${TOKTRAIL_STATUSLINE} %~ %# '"
+        )
+    if target in {"codex", "opencode", "pi"}:
+        return (
+            f"Native {target} statusline installation is not auto-writing config yet.\n"
+            "Use a generic shell, tmux, or starship integration for now."
+        )
+    _exit_with_error(
+        "--target must be one of: starship, tmux, bash, zsh, "
+        "codex, opencode, pi."
+    )
+
+
+def _statusline_config_with_override(
+    config: StatuslineConfig,
+    key: str,
+    value: str,
+) -> StatuslineConfig:
+    normalized = key.strip().lower()
+    updated = _statusline_config_base_override(config, normalized, value)
+    if updated is not None:
+        return updated
+    updated = _statusline_config_cache_override(config, normalized, value)
+    if updated is not None:
+        return updated
+    _exit_with_error(
+        "Unsupported key. Use one of: basis, refresh, session, max-width, "
+        "show-emojis, color, empty, default-harness, active-session-window-minutes, "
+        "elements, cache.output-cache-secs, cache.min-refresh-interval-secs, "
+        "cache.stale-after-secs."
+    )
+
+
+def _statusline_config_base_override(
+    config: StatuslineConfig,
+    normalized: str,
+    value: str,
+) -> StatuslineConfig | None:
+    if normalized == "basis":
+        if value not in {"source", "actual", "virtual"}:
+            _exit_with_error("basis must be one of: source, actual, virtual.")
+        return replace(
+            config,
+            basis=cast(Literal["source", "actual", "virtual"], value),
+        )
+    if normalized == "refresh":
+        if value not in {"never", "auto", "always"}:
+            _exit_with_error("refresh must be one of: never, auto, always.")
+        return replace(
+            config,
+            refresh=cast(Literal["never", "auto", "always"], value),
+        )
+    if normalized == "session":
+        if value not in {"auto", "latest", "none"}:
+            _exit_with_error("session must be one of: auto, latest, none.")
+        return replace(
+            config,
+            session=cast(Literal["auto", "latest", "none"], value),
+        )
+    if normalized == "max-width":
+        return replace(config, max_width=_parse_positive_cli_int(value, "max-width"))
+    if normalized == "show-emojis":
+        return replace(config, show_emojis=_parse_bool_text(value, "show-emojis"))
+    if normalized == "color":
+        if value not in {"auto", "always", "never"}:
+            _exit_with_error("color must be one of: auto, always, never.")
+        return replace(
+            config,
+            color=cast(Literal["auto", "always", "never"], value),
+        )
+    if normalized == "empty":
+        if value not in {"silent", "message"}:
+            _exit_with_error("empty must be one of: silent, message.")
+        return replace(config, empty=cast(Literal["silent", "message"], value))
+    if normalized == "default-harness":
+        harness = value.strip().lower()
+        if harness != "auto" and harness not in {
+            "opencode",
+            "pi",
+            "copilot",
+            "codex",
+            "goose",
+            "droid",
+            "amp",
+            "claude",
+            "vibe",
+        }:
+            _exit_with_error("default-harness must be auto or a supported harness.")
+        return replace(config, default_harness=harness)
+    if normalized == "active-session-window-minutes":
+        return replace(
+            config,
+            active_session_window_minutes=_parse_positive_cli_int(
+                value,
+                "active-session-window-minutes",
+            ),
+        )
+    if normalized == "elements":
+        elements = tuple(
+            item.strip().lower() for item in value.split(",") if item.strip()
+        )
+        if not elements:
+            _exit_with_error(
+                "elements must contain at least one comma-separated value."
+            )
+        return replace(config, elements=elements)
+    return None
+
+
+def _statusline_config_cache_override(
+    config: StatuslineConfig,
+    normalized: str,
+    value: str,
+) -> StatuslineConfig | None:
+    if normalized == "cache.output-cache-secs":
+        return replace(
+            config,
+            cache=replace(
+                config.cache,
+                output_cache_secs=_parse_non_negative_cli_int(
+                    value,
+                    "cache.output-cache-secs",
+                ),
+            ),
+        )
+    if normalized == "cache.min-refresh-interval-secs":
+        return replace(
+            config,
+            cache=replace(
+                config.cache,
+                min_refresh_interval_secs=_parse_non_negative_cli_int(
+                    value,
+                    "cache.min-refresh-interval-secs",
+                ),
+            ),
+        )
+    if normalized == "cache.stale-after-secs":
+        return replace(
+            config,
+            cache=replace(
+                config.cache,
+                stale_after_secs=_parse_non_negative_cli_int(
+                    value,
+                    "cache.stale-after-secs",
+                ),
+            ),
+        )
+    return None
+
+
+def _parse_positive_cli_int(value: str, label: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError:
+        _exit_with_error(f"{label} must be an integer.")
+    if parsed <= 0:
+        _exit_with_error(f"{label} must be positive.")
+    return parsed
+
+
+def _parse_non_negative_cli_int(value: str, label: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError:
+        _exit_with_error(f"{label} must be an integer.")
+    if parsed < 0:
+        _exit_with_error(f"{label} must be non-negative.")
+    return parsed
+
+
+def _parse_bool_text(value: str, label: str) -> bool:
+    normalized = value.strip().lower()
+    if normalized in {"true", "1", "yes", "on"}:
+        return True
+    if normalized in {"false", "0", "no", "off"}:
+        return False
+    _exit_with_error(f"{label} must be true or false.")
+
+
+def _strip_statusline_sections(text: str) -> str:
+    lines = text.splitlines()
+    stripped: list[str] = []
+    skip_mode: str | None = None
+    statusline_section_headers = {
+        "[statusline]",
+        "[statusline.cache]",
+        "[statusline.thresholds]",
+    }
+    for line in lines:
+        stripped_line = line.strip()
+        if stripped_line in statusline_section_headers:
+            skip_mode = "statusline"
+            continue
+        if stripped_line == "[[context_window]]":
+            skip_mode = "context_window"
+            continue
+        if stripped_line.startswith("[") and skip_mode is not None:
+            skip_mode = None
+        if skip_mode is None:
+            stripped.append(line)
+    return "\n".join(stripped).strip()
+
+
+def _render_statusline_config_sections(
+    config: StatuslineConfig,
+    *,
+    context_windows: tuple[ContextWindowConfig, ...],
+) -> str:
+    lines = [
+        "[statusline]",
+        f'default_harness = "{config.default_harness}"',
+        f'basis = "{config.basis}"',
+        f'refresh = "{config.refresh}"',
+        f'session = "{config.session}"',
+        f"max_width = {config.max_width}",
+        f"show_emojis = {'true' if config.show_emojis else 'false'}",
+        f'color = "{config.color}"',
+        f'empty = "{config.empty}"',
+        f"active_session_window_minutes = {config.active_session_window_minutes}",
+        "elements = [",
+    ]
+    lines.extend(f'  "{element}",' for element in config.elements)
+    lines.extend(
+        [
+            "]",
+            "",
+            "[statusline.cache]",
+            f"output_cache_secs = {config.cache.output_cache_secs}",
+            f"min_refresh_interval_secs = {config.cache.min_refresh_interval_secs}",
+            f"stale_after_secs = {config.cache.stale_after_secs}",
+            "",
+            "[statusline.thresholds]",
+            f"quota_warning_percent = {config.thresholds.quota_warning_percent}",
+            f"quota_danger_percent = {config.thresholds.quota_danger_percent}",
+            f"burn_warning_percent = {config.thresholds.burn_warning_percent}",
+            f"burn_danger_percent = {config.thresholds.burn_danger_percent}",
+            f"context_warning_percent = {config.thresholds.context_warning_percent}",
+            f"context_danger_percent = {config.thresholds.context_danger_percent}",
+        ]
+    )
+    for window in context_windows:
+        lines.extend(
+            [
+                "",
+                "[[context_window]]",
+                f'provider = "{window.provider}"',
+                f'model = "{window.model}"',
+                f"tokens = {window.tokens}",
+            ]
+        )
+    return "\n".join(lines)
 
 
 def _refresh_before_report(

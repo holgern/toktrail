@@ -261,6 +261,225 @@ def create_amp_source(path: Path) -> None:
     )
 
 
+def test_cli_statusline_top_level_matches_usage_wrapper(tmp_path: Path) -> None:
+    state_db = tmp_path / "toktrail.db"
+    conn = connect(state_db)
+    try:
+        migrate(conn)
+        insert_usage_events(
+            conn,
+            None,
+            [
+                make_cli_usage_event(
+                    "statusline",
+                    created_ms=1_000,
+                    tokens=TokenBreakdown(input=1_200, output=300, cache_read=500),
+                )
+            ],
+        )
+    finally:
+        conn.close()
+
+    runner = CliRunner()
+    top_level = runner.invoke(
+        app,
+        ["--db", str(state_db), "statusline", "--no-refresh"],
+    )
+    legacy = runner.invoke(
+        app, ["--db", str(state_db), "usage", "statusline", "--no-refresh"]
+    )
+
+    assert top_level.exit_code == 0, top_level.output
+    assert legacy.exit_code == 0, legacy.output
+    assert top_level.output == legacy.output
+    assert "opencode" in top_level.output
+    assert "tok" in top_level.output
+
+
+def test_cli_statusline_json_shape(tmp_path: Path) -> None:
+    state_db = tmp_path / "toktrail.db"
+    conn = connect(state_db)
+    try:
+        migrate(conn)
+        insert_usage_events(
+            conn,
+            None,
+            [
+                make_cli_usage_event(
+                    "json",
+                    created_ms=1_000,
+                    tokens=TokenBreakdown(input=400, output=100, cache_read=200),
+                )
+            ],
+        )
+    finally:
+        conn.close()
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["--db", str(state_db), "statusline", "--no-refresh", "--json"]
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["type"] == "statusline"
+    assert payload["harness"] == "opencode"
+    assert payload["tokens"]["total"] == 500
+    assert "line" in payload
+    assert payload["cache"]["cached_tokens"] == 200
+
+
+def test_cli_statusline_shows_compact_unpriced_marker(tmp_path: Path) -> None:
+    state_db = tmp_path / "toktrail.db"
+    conn = connect(state_db)
+    try:
+        migrate(conn)
+        insert_usage_events(
+            conn,
+            None,
+            [
+                make_cli_usage_event(
+                    "unpriced",
+                    created_ms=1_000,
+                    tokens=TokenBreakdown(input=400, output=100),
+                )
+            ],
+        )
+    finally:
+        conn.close()
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["--db", str(state_db), "statusline", "--no-refresh"])
+
+    assert result.exit_code == 0, result.output
+    assert "?1" in result.output
+
+
+def test_cli_statusline_renders_stale_element_when_configured(tmp_path: Path) -> None:
+    state_db = tmp_path / "toktrail.db"
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        """
+config_version = 1
+
+[statusline]
+elements = ["harness", "stale", "tokens"]
+
+[statusline.cache]
+stale_after_secs = 60
+""".strip(),
+        encoding="utf-8",
+    )
+    conn = connect(state_db)
+    try:
+        migrate(conn)
+        insert_usage_events(
+            conn,
+            None,
+            [
+                make_cli_usage_event(
+                    "stale",
+                    created_ms=1_000,
+                    tokens=TokenBreakdown(input=400, output=100),
+                )
+            ],
+        )
+    finally:
+        conn.close()
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "--config",
+            str(config_path),
+            "statusline",
+            "--no-refresh",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "stale " in result.output
+    assert "opencode" in result.output
+
+
+def test_cli_statusline_test_outputs_diagnostics(tmp_path: Path) -> None:
+    state_db = tmp_path / "toktrail.db"
+    conn = connect(state_db)
+    try:
+        migrate(conn)
+        insert_usage_events(
+            conn,
+            None,
+            [
+                make_cli_usage_event(
+                    "diag",
+                    created_ms=1_000,
+                    tokens=TokenBreakdown(input=700, output=150, cache_read=50),
+                )
+            ],
+        )
+    finally:
+        conn.close()
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["--db", str(state_db), "statusline", "test", "--no-refresh"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Source:" in result.output
+    assert "Model:" in result.output
+    assert "Output cache: miss" in result.output
+    assert "Line:" in result.output
+
+
+def test_cli_statusline_install_starship_prints_snippet() -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(app, ["statusline", "install", "--target", "starship"])
+
+    assert result.exit_code == 0, result.output
+    assert "[custom.toktrail]" in result.output
+    assert "toktrail statusline --no-refresh" in result.output
+
+
+def test_cli_statusline_config_show_and_set(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    runner = CliRunner()
+
+    set_result = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config_path),
+            "statusline",
+            "config",
+            "set",
+            "basis",
+            "source",
+        ],
+    )
+    show_result = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config_path),
+            "statusline",
+            "config",
+            "show",
+        ],
+    )
+
+    assert set_result.exit_code == 0, set_result.output
+    assert 'basis = "source"' in config_path.read_text(encoding="utf-8")
+    assert show_result.exit_code == 0, show_result.output
+    assert "basis:         source" in show_result.output
+
+
 def create_thinking_source_db(path: Path) -> None:
     conn = create_opencode_db(path)
     high = _stamp_opencode_message(VALID_ASSISTANT)

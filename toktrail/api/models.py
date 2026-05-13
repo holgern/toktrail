@@ -740,6 +740,136 @@ class SubscriptionBillingPeriod:
 
 
 @dataclass(frozen=True)
+class StatuslineQuota:
+    subscription_id: str
+    display_name: str | None
+    period: str
+    status: str
+    reset_at: str
+    percent_used: Decimal | None
+    remaining_usd: Decimal
+    over_limit_usd: Decimal
+    reset_in_seconds: int | None
+    since_ms: int | None = None
+    until_ms: int | None = None
+    used_usd: Decimal = field(default_factory=lambda: Decimal(0))
+    limit_usd: Decimal = field(default_factory=lambda: Decimal(0))
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "subscription_id": self.subscription_id,
+            "display_name": self.display_name,
+            "period": self.period,
+            "status": self.status,
+            "reset_at": self.reset_at,
+            "percent_used": None
+            if self.percent_used is None
+            else str(self.percent_used),
+            "remaining_usd": str(self.remaining_usd),
+            "over_limit_usd": str(self.over_limit_usd),
+            "reset_in_seconds": self.reset_in_seconds,
+            "since_ms": self.since_ms,
+            "until_ms": self.until_ms,
+            "used_usd": str(self.used_usd),
+            "limit_usd": str(self.limit_usd),
+        }
+
+
+@dataclass(frozen=True)
+class StatuslineBurn:
+    ratio: float
+    label: str
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "ratio": self.ratio,
+            "label": self.label,
+        }
+
+
+@dataclass(frozen=True)
+class StatuslineContext:
+    used_tokens: int | None
+    limit_tokens: int | None
+    percentage: float
+    approximate: bool = False
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "used_tokens": self.used_tokens,
+            "limit_tokens": self.limit_tokens,
+            "percentage": self.percentage,
+            "approximate": self.approximate,
+        }
+
+
+@dataclass(frozen=True)
+class StatuslineCache:
+    cached_tokens: int
+    cache_reuse_ratio: float | None
+    output_cache: str | None = None
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "cached_tokens": self.cached_tokens,
+            "cache_reuse_ratio": self.cache_reuse_ratio,
+            "output_cache": self.output_cache,
+        }
+
+
+@dataclass(frozen=True)
+class StatuslineReport:
+    line: str
+    generated_at_ms: int
+    harness: str | None
+    source_session_id: str | None
+    source_path: Path | None
+    provider_id: str | None
+    model_id: str | None
+    agent: str | None
+    basis: str
+    message_count: int
+    tokens: TokenBreakdown
+    costs: CostTotals
+    quota: StatuslineQuota | None = None
+    burn: StatuslineBurn | None = None
+    context: StatuslineContext | None = None
+    cache: StatuslineCache | None = None
+    stale_seconds: int | None = None
+
+    @property
+    def unpriced_count(self) -> int:
+        return self.costs.unpriced_count
+
+    def as_dict(self) -> dict[str, object]:
+        payload: dict[str, object] = {
+            "type": "statusline",
+            "line": self.line,
+            "generated_at_ms": self.generated_at_ms,
+            "harness": self.harness,
+            "source_session_id": self.source_session_id,
+            "source_path": _path_text(self.source_path),
+            "provider_id": self.provider_id,
+            "model_id": self.model_id,
+            "agent": self.agent,
+            "basis": self.basis,
+            "message_count": self.message_count,
+            "tokens": self.tokens.as_dict(),
+            "costs": self.costs.as_dict(),
+            "stale_seconds": self.stale_seconds,
+        }
+        if self.quota is not None:
+            payload["quota"] = self.quota.as_dict()
+        if self.burn is not None:
+            payload["burn"] = self.burn.as_dict()
+        if self.context is not None:
+            payload["context"] = self.context.as_dict()
+        if self.cache is not None:
+            payload["cache"] = self.cache.as_dict()
+        return payload
+
+
+@dataclass(frozen=True)
 class SubscriptionUsageRow:
     subscription_id: str
     display_name: str
@@ -1205,6 +1335,11 @@ __all__ = [
     "SourceSessionDiff",
     "SourceSessionSnapshot",
     "SourceSessionSummary",
+    "StatuslineBurn",
+    "StatuslineCache",
+    "StatuslineContext",
+    "StatuslineQuota",
+    "StatuslineReport",
     "StateExportResult",
     "StateImportConflict",
     "StateImportResult",
