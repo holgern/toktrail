@@ -46,6 +46,7 @@ def make_statusline_event(
         raw_json=None,
     )
 
+
 def test_statusline_report_selects_latest_source_session(tmp_path: Path) -> None:
     state_db = tmp_path / "toktrail.db"
     conn = connect(state_db)
@@ -505,7 +506,7 @@ def test_statusline_output_cache_invalidates_on_config_change(tmp_path: Path) ->
         source_path=None,
     )
     config_path.write_text(
-        "config_version = 1\n\n[statusline]\nbasis = \"source\"\n",
+        'config_version = 1\n\n[statusline]\nbasis = "source"\n',
         encoding="utf-8",
     )
 

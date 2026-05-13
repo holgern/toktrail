@@ -67,11 +67,7 @@ def statusline_cache_dir() -> Path:
     runtime_dir = os.environ.get("XDG_RUNTIME_DIR")
     if runtime_dir:
         return Path(runtime_dir).expanduser() / "toktrail" / "statusline"
-    return (
-        Path(tempfile.gettempdir())
-        / f"toktrail-{os.getuid()}"
-        / "statusline"
-    )
+    return Path(tempfile.gettempdir()) / f"toktrail-{os.getuid()}" / "statusline"
 
 
 def statusline_cache_key(
@@ -359,14 +355,9 @@ def build_statusline_report(
         db_path,
         config_path=config_path,
         providers=tuple(
-            provider
-            for provider in (
-                (provider_id,) if provider_id is not None else ()
-            )
+            provider for provider in ((provider_id,) if provider_id is not None else ())
         )
-        or (
-            selected_session.providers if selected_session is not None else ()
-        ),
+        or (selected_session.providers if selected_session is not None else ()),
         now_ms=generated_at_ms,
     )
     burn = _build_burn(quota=quota, now_ms=generated_at_ms)
@@ -626,11 +617,7 @@ def _build_context(
             )
         used_tokens = _payload_int(context_payload, "used_tokens")
         limit_tokens = _payload_int(context_payload, "limit_tokens")
-        if (
-            used_tokens is not None
-            and limit_tokens is not None
-            and limit_tokens != 0
-        ):
+        if used_tokens is not None and limit_tokens is not None and limit_tokens != 0:
             return StatuslineContext(
                 used_tokens=used_tokens,
                 limit_tokens=limit_tokens,
@@ -742,10 +729,7 @@ def _render_element(
     if element == "unpriced" and report.unpriced_count > 0:
         return f"?{report.unpriced_count}"
     if element == "stale":
-        if (
-            report.stale_seconds is None
-            or report.stale_seconds < stale_after_seconds
-        ):
+        if report.stale_seconds is None or report.stale_seconds < stale_after_seconds:
             return None
         return f"stale {_format_duration(report.stale_seconds)}"
     return None
@@ -985,8 +969,6 @@ def _statusline_cache_from_dict(value: Mapping[str, object]) -> StatuslineCache:
     ratio = value.get("cache_reuse_ratio")
     return StatuslineCache(
         cached_tokens=_mapping_int(value, "cached_tokens") or 0,
-        cache_reuse_ratio=(
-            float(ratio) if isinstance(ratio, (int, float)) else None
-        ),
+        cache_reuse_ratio=(float(ratio) if isinstance(ratio, (int, float)) else None),
         output_cache=_mapping_string(value, "output_cache"),
     )

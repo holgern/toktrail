@@ -1053,9 +1053,7 @@ def statusline_test(
         stale_after=stale_after,
     )
     typer.echo(f"Source: {report.source_session_id or '(today fallback)'}")
-    typer.echo(
-        f"Model: {(report.provider_id or '-')} / {(report.model_id or '-')}"
-    )
+    typer.echo(f"Model: {(report.provider_id or '-')} / {(report.model_id or '-')}")
     typer.echo(f"Timing: {elapsed_ms}ms")
     typer.echo("Output cache: miss")
     typer.echo(
@@ -1090,12 +1088,8 @@ def statusline_config_show(ctx: typer.Context) -> None:
     typer.echo(f"session:       {statusline_config.session}")
     typer.echo(f"max width:     {statusline_config.max_width}")
     typer.echo(f"stale after:   {statusline_config.cache.stale_after_secs}")
-    typer.echo(
-        "elements:      " + ", ".join(statusline_config.elements)
-    )
-    typer.echo(
-        f"context windows: {len(loaded.config.context_windows)}"
-    )
+    typer.echo("elements:      " + ", ".join(statusline_config.elements))
+    typer.echo(f"context windows: {len(loaded.config.context_windows)}")
 
 
 @statusline_config_app.command("set")
@@ -6081,22 +6075,16 @@ def _path_mtime_ns(path: Path | None) -> int | None:
 def _statusline_install_instructions(target: str) -> str:
     if target == "starship":
         return (
-            '[custom.toktrail]\n'
+            "[custom.toktrail]\n"
             'command = "toktrail statusline --no-refresh 2>/dev/null"\n'
             'when = "true"\n'
             'format = "[$output]($style) "\n'
             'style = "dimmed"'
         )
     if target == "tmux":
-        return (
-            "set -g status-right "
-            "'#(toktrail statusline --no-refresh 2>/dev/null)'"
-        )
+        return "set -g status-right '#(toktrail statusline --no-refresh 2>/dev/null)'"
     if target == "bash":
-        return (
-            "export PS1='$(toktrail statusline --no-refresh 2>/dev/null) "
-            "\\w $ '"
-        )
+        return "export PS1='$(toktrail statusline --no-refresh 2>/dev/null) \\w $ '"
     if target == "zsh":
         return (
             "precmd() { TOKTRAIL_STATUSLINE=$(toktrail statusline --no-refresh "
@@ -6108,8 +6096,7 @@ def _statusline_install_instructions(target: str) -> str:
             "Use a generic shell, tmux, or starship integration for now."
         )
     _exit_with_error(
-        "--target must be one of: starship, tmux, bash, zsh, "
-        "codex, opencode, pi."
+        "--target must be one of: starship, tmux, bash, zsh, codex, opencode, pi."
     )
 
 

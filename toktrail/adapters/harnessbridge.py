@@ -253,9 +253,7 @@ def _parse_usage_row(
         or _as_str(row.get("id"))
         or source_row_id
     )
-    explicit_global_dedup_key = (
-        row.get("global_dedup_key") or row.get("dedup_key")
-    )
+    explicit_global_dedup_key = row.get("global_dedup_key") or row.get("dedup_key")
     created_ms = (
         _timestamp_ms_from_value(row.get("created_ms"))
         or _parse_rfc3339_ms(row.get("created_at"))
@@ -263,10 +261,10 @@ def _parse_usage_row(
         or header.started_ms
         or fallback_timestamp
     )
-    completed_ms = _timestamp_ms_from_value(
-        row.get("completed_ms")
-    ) or _parse_rfc3339_ms(row.get("completed_at")) or _parse_rfc3339_ms(
-        row.get("timestamp")
+    completed_ms = (
+        _timestamp_ms_from_value(row.get("completed_ms"))
+        or _parse_rfc3339_ms(row.get("completed_at"))
+        or _parse_rfc3339_ms(row.get("timestamp"))
     )
     if completed_ms is not None and completed_ms < created_ms:
         completed_ms = None
@@ -316,8 +314,10 @@ def _source_paths_by_session(source_path: Path) -> dict[str, list[Path]]:
     if not resolved_path.exists():
         return {}
 
-    file_paths = [resolved_path] if resolved_path.is_file() else sorted(
-        path for path in resolved_path.rglob("*.jsonl") if path.is_file()
+    file_paths = (
+        [resolved_path]
+        if resolved_path.is_file()
+        else sorted(path for path in resolved_path.rglob("*.jsonl") if path.is_file())
     )
     grouped: dict[str, list[Path]] = {}
     for file_path in file_paths:
@@ -347,7 +347,7 @@ def _global_dedup_key(
 def _strip_provider_prefix(model_id: str, provider_id: str) -> str:
     prefix = f"{provider_id}/"
     if model_id.lower().startswith(prefix.lower()):
-        stripped = model_id[len(prefix):]
+        stripped = model_id[len(prefix) :]
         return stripped or model_id
     return model_id
 

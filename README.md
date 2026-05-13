@@ -216,8 +216,7 @@ toktrail usage statusline --no-refresh
 
 `toktrail statusline` prefers the active scoped source session when one is known,
 otherwise the latest matching source session, then falls back to today totals.
-Use `--session auto|latest|none` to control that behavior. `--refresh
-never|auto|always` keeps prompt-time refresh conservative, and `--no-refresh`
+Use `--session auto|latest|none` to control that behavior. `--refresh never|auto|always` keeps prompt-time refresh conservative, and `--no-refresh`
 is the fastest state-only path. `toktrail usage statusline` remains as a
 compatibility alias.
 
