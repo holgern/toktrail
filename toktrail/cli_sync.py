@@ -12,9 +12,24 @@ from toktrail.api.sync import (
     export_state_archive,
     import_state_archive,
 )
+from toktrail.config import RuntimeConfig, load_runtime_config
+from toktrail.git_sync import (
+    DEFAULT_ARCHIVE_DIR,
+    DEFAULT_BRANCH,
+    DEFAULT_REMOTE,
+    ensure_git_repo,
+    export_repo_archive,
+    git_pull,
+    git_sync_status,
+    import_repo_archives,
+)
 from toktrail.paths import resolve_toktrail_config_path, resolve_toktrail_db_path
+from toktrail.sync import ConflictMode as SyncConflictMode
+from toktrail.sync import RemoteActiveMode as SyncRemoteActiveMode
 
 sync_app = typer.Typer(help="Export and import toktrail state archives.")
+sync_git_app = typer.Typer(help="Sync toktrail state through a Git repository.")
+sync_app.add_typer(sync_git_app, name="git")
 
 JsonOption = Annotated[bool, typer.Option("--json")]
 RefreshOption = Annotated[
@@ -30,6 +45,10 @@ RefreshDetailsOption = Annotated[
         "--refresh-details",
         help="Print a compact refresh summary before export output.",
     ),
+]
+RepoOption = Annotated[
+    Path | None,
+    typer.Option("--repo", help="Path to the Git sync repository."),
 ]
 
 
@@ -49,9 +68,46 @@ def _resolve_config_path(ctx: typer.Context) -> Path:
     return resolve_toktrail_config_path(config_path)
 
 
+def _load_runtime_sync_config(ctx: typer.Context) -> RuntimeConfig:
+    return load_runtime_config(_resolve_config_path(ctx))
+
+
+def _resolve_git_repo(
+    ctx: typer.Context,
+    repo: Path | None,
+    runtime_config: RuntimeConfig,
+) -> Path:
+    if repo is not None:
+        return repo.expanduser()
+    configured = runtime_config.sync_git.repo
+    if configured:
+        return Path(configured).expanduser()
+    return Path("~/.local/share/toktrail/git-sync").expanduser()
+
+
 def _exit_with_error(message: str) -> None:
     typer.echo(f"Error: {message}", err=True)
     raise typer.Exit(1)
+
+
+def _parse_sync_conflict_mode(value: str) -> SyncConflictMode:
+    if value == "fail":
+        return "fail"
+    if value == "skip":
+        return "skip"
+    msg = "--on-conflict must be one of: fail, skip."
+    raise ValueError(msg)
+
+
+def _parse_sync_remote_active_mode(value: str) -> SyncRemoteActiveMode:
+    if value == "fail":
+        return "fail"
+    if value == "close-at-export":
+        return "close-at-export"
+    if value == "keep":
+        return "keep"
+    msg = "--remote-active must be one of: fail, close-at-export, keep."
+    raise ValueError(msg)
 
 
 def _print_refresh_summary(results: tuple[object, ...]) -> None:
@@ -183,3 +239,248 @@ def sync_import(
     typer.echo(f"  usage events: {skip_verb} {result.usage_events_skipped}")
     typer.echo(f"  run links: inserted {result.run_events_inserted}")
     typer.echo(f"  conflicts: {len(result.conflicts)}")
+
+
+@sync_git_app.command("init")
+def sync_git_init(
+    ctx: typer.Context,
+    repo: RepoOption = None,
+    remote_url: Annotated[str | None, typer.Option("--remote")] = None,
+    branch: Annotated[str | None, typer.Option("--branch")] = None,
+    json_output: JsonOption = False,
+) -> None:
+    runtime = _load_runtime_sync_config(ctx)
+    repo_path = _resolve_git_repo(ctx, repo, runtime)
+    branch_name = branch or runtime.sync_git.branch or DEFAULT_BRANCH
+    try:
+        ensure_git_repo(repo_path, remote_url=remote_url, branch=branch_name)
+        status = git_sync_status(
+            _resolve_state_db(ctx),
+            repo_path,
+            archive_dir=runtime.sync_git.archive_dir or DEFAULT_ARCHIVE_DIR,
+            remote=runtime.sync_git.remote or DEFAULT_REMOTE,
+        )
+    except (OSError, ValueError) as exc:
+        _exit_with_error(str(exc))
+
+    if json_output:
+        typer.echo(json.dumps(status.as_dict(), indent=2))
+        return
+
+    typer.echo("Git sync repository initialized:")
+    typer.echo(f"  repo: {status.repo_path}")
+    typer.echo(f"  branch: {status.branch or 'unknown'}")
+    typer.echo(f"  remote: {status.remote or 'not configured'}")
+    if status.state_db_paths:
+        typer.echo("  warning: live sqlite files found in repo:")
+        for relpath in status.state_db_paths:
+            typer.echo(f"    - {relpath}")
+
+
+@sync_git_app.command("status")
+def sync_git_status(
+    ctx: typer.Context,
+    repo: RepoOption = None,
+    json_output: JsonOption = False,
+) -> None:
+    runtime = _load_runtime_sync_config(ctx)
+    repo_path = _resolve_git_repo(ctx, repo, runtime)
+    try:
+        status = git_sync_status(
+            _resolve_state_db(ctx),
+            repo_path,
+            archive_dir=runtime.sync_git.archive_dir or DEFAULT_ARCHIVE_DIR,
+            remote=runtime.sync_git.remote or DEFAULT_REMOTE,
+        )
+    except (OSError, ValueError) as exc:
+        _exit_with_error(str(exc))
+
+    if json_output:
+        typer.echo(json.dumps(status.as_dict(), indent=2))
+        return
+
+    typer.echo("Git sync status")
+    typer.echo(f"  repo: {status.repo_path}")
+    typer.echo(f"  branch: {status.branch or 'unknown'}")
+    typer.echo(f"  remote: {status.remote or 'not configured'}")
+    typer.echo(f"  dirty: {'yes' if status.dirty else 'no'}")
+    ahead_text = "?" if status.ahead is None else str(status.ahead)
+    behind_text = "?" if status.behind is None else str(status.behind)
+    typer.echo(f"  ahead/behind: {ahead_text}/{behind_text}")
+    typer.echo(f"  archives: {status.archive_count}")
+    typer.echo(f"  pending imports: {status.pending_import_count}")
+    if status.state_db_paths:
+        typer.echo("  warning: live sqlite files found in repo:")
+        for relpath in status.state_db_paths:
+            typer.echo(f"    - {relpath}")
+
+
+@sync_git_app.command("pull")
+def sync_git_pull(
+    ctx: typer.Context,
+    repo: RepoOption = None,
+    dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
+    on_conflict: Annotated[str | None, typer.Option("--on-conflict")] = None,
+    remote_active: Annotated[str | None, typer.Option("--remote-active")] = None,
+    json_output: JsonOption = False,
+) -> None:
+    runtime = _load_runtime_sync_config(ctx)
+    repo_path = _resolve_git_repo(ctx, repo, runtime)
+    remote_name = runtime.sync_git.remote or DEFAULT_REMOTE
+    branch_name = runtime.sync_git.branch or DEFAULT_BRANCH
+    conflict_mode = on_conflict or runtime.sync_git.on_conflict
+    remote_active_mode = remote_active or runtime.sync_git.remote_active
+    try:
+        git_pull(repo_path, remote=remote_name, branch=branch_name)
+        result = import_repo_archives(
+            _resolve_state_db(ctx),
+            repo_path,
+            dry_run=dry_run,
+            archive_dir=runtime.sync_git.archive_dir or DEFAULT_ARCHIVE_DIR,
+            on_conflict=_parse_sync_conflict_mode(conflict_mode),
+            remote_active=_parse_sync_remote_active_mode(remote_active_mode),
+        )
+    except (OSError, ValueError) as exc:
+        _exit_with_error(str(exc))
+
+    if json_output:
+        typer.echo(json.dumps(result.as_dict(), indent=2))
+        return
+
+    heading = "Dry-run git pull/import:" if dry_run else "Git pull/import:"
+    typer.echo(heading)
+    typer.echo(f"  repo: {result.repo_path}")
+    typer.echo(f"  archives: seen {result.archives_seen}")
+    typer.echo(f"  archives: imported {result.archives_imported}")
+    typer.echo(f"  archives: skipped {result.archives_skipped}")
+
+
+@sync_git_app.command("push")
+def sync_git_push(
+    ctx: typer.Context,
+    repo: RepoOption = None,
+    refresh: RefreshOption = True,
+    message: Annotated[str | None, typer.Option("--message")] = None,
+    allow_dirty: Annotated[bool, typer.Option("--allow-dirty")] = False,
+    json_output: JsonOption = False,
+) -> None:
+    runtime = _load_runtime_sync_config(ctx)
+    repo_path = _resolve_git_repo(ctx, repo, runtime)
+    try:
+        _refresh_for_export(
+            ctx,
+            enabled=refresh,
+            details=False,
+            json_output=json_output,
+        )
+        result = export_repo_archive(
+            _resolve_state_db(ctx),
+            repo_path,
+            archive_dir=runtime.sync_git.archive_dir or DEFAULT_ARCHIVE_DIR,
+            config_path=_resolve_config_path(ctx),
+            include_config=runtime.sync_git.include_config,
+            redact_raw_json=runtime.sync_git.redact_raw_json,
+            commit_message=message,
+            remote=runtime.sync_git.remote or DEFAULT_REMOTE,
+            branch=runtime.sync_git.branch or DEFAULT_BRANCH,
+            push=True,
+            allow_dirty=allow_dirty,
+        )
+    except (OSError, ValueError) as exc:
+        _exit_with_error(str(exc))
+
+    if json_output:
+        typer.echo(json.dumps(result.as_dict(), indent=2))
+        return
+
+    typer.echo("Git push/export:")
+    typer.echo(f"  repo: {result.repo_path}")
+    typer.echo(f"  archive: {result.archive_path}")
+    typer.echo(f"  committed: {'yes' if result.committed else 'no'}")
+    typer.echo(f"  commit: {result.commit_hash or 'none'}")
+    typer.echo(f"  pushed: {'yes' if result.pushed else 'no'}")
+
+
+@sync_git_app.command("sync")
+def sync_git_sync(
+    ctx: typer.Context,
+    repo: RepoOption = None,
+    refresh: RefreshOption = True,
+    dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
+    allow_dirty: Annotated[bool, typer.Option("--allow-dirty")] = False,
+    on_conflict: Annotated[str | None, typer.Option("--on-conflict")] = None,
+    remote_active: Annotated[str | None, typer.Option("--remote-active")] = None,
+    message: Annotated[str | None, typer.Option("--message")] = None,
+    json_output: JsonOption = False,
+) -> None:
+    runtime = _load_runtime_sync_config(ctx)
+    repo_path = _resolve_git_repo(ctx, repo, runtime)
+    remote_name = runtime.sync_git.remote or DEFAULT_REMOTE
+    branch_name = runtime.sync_git.branch or DEFAULT_BRANCH
+    conflict_mode = on_conflict or runtime.sync_git.on_conflict
+    remote_active_mode = remote_active or runtime.sync_git.remote_active
+    try:
+        git_pull(repo_path, remote=remote_name, branch=branch_name)
+        pull_result = import_repo_archives(
+            _resolve_state_db(ctx),
+            repo_path,
+            dry_run=dry_run,
+            archive_dir=runtime.sync_git.archive_dir or DEFAULT_ARCHIVE_DIR,
+            on_conflict=_parse_sync_conflict_mode(conflict_mode),
+            remote_active=_parse_sync_remote_active_mode(remote_active_mode),
+        )
+        push_result = None
+        if not dry_run:
+            _refresh_for_export(
+                ctx,
+                enabled=refresh,
+                details=False,
+                json_output=json_output,
+            )
+            push_result = export_repo_archive(
+                _resolve_state_db(ctx),
+                repo_path,
+                archive_dir=runtime.sync_git.archive_dir or DEFAULT_ARCHIVE_DIR,
+                config_path=_resolve_config_path(ctx),
+                include_config=runtime.sync_git.include_config,
+                redact_raw_json=runtime.sync_git.redact_raw_json,
+                commit_message=message,
+                remote=remote_name,
+                branch=branch_name,
+                push=True,
+                allow_dirty=allow_dirty,
+            )
+    except (OSError, ValueError) as exc:
+        _exit_with_error(str(exc))
+
+    if json_output:
+        payload: dict[str, object] = {
+            "repo_path": str(repo_path),
+            "pull": {
+                "archives_seen": pull_result.archives_seen,
+                "archives_imported": pull_result.archives_imported,
+                "archives_skipped": pull_result.archives_skipped,
+            },
+            "push": None if push_result is None else {
+                "archive_path": str(push_result.archive_path),
+                "committed": push_result.committed,
+                "pushed": push_result.pushed,
+                "commit_hash": push_result.commit_hash,
+            },
+        }
+        typer.echo(json.dumps(payload, indent=2))
+        return
+
+    typer.echo("Git sync")
+    typer.echo(f"  repo: {repo_path}")
+    typer.echo(f"  branch: {branch_name}")
+    typer.echo("  pulled: yes")
+    typer.echo(
+        f"  archives: seen {pull_result.archives_seen}, "
+        f"imported {pull_result.archives_imported}, "
+        f"skipped {pull_result.archives_skipped}"
+    )
+    if push_result is not None:
+        typer.echo(f"  export: {push_result.archive_path}")
+        typer.echo(f"  commit: {push_result.commit_hash or 'none'}")
+        typer.echo(f"  pushed: {'yes' if push_result.pushed else 'no'}")

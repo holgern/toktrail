@@ -271,6 +271,7 @@ toktrail analyze cache opencode --last
 toktrail usage today
 toktrail run list
 toktrail subscriptions status
+toktrail sync git sync
 toktrail sync export --out toktrail-state.tar.gz
 toktrail run stop
 ```
@@ -302,6 +303,28 @@ Session terminology:
 
 `toktrail sync import` validates archive paths, manifest checksums, schema
 version, and usage-event fingerprints before merging.
+
+## Git sync
+
+Use `toktrail sync git` to exchange immutable state archives through a Git repo.
+The live SQLite DB remains local; toktrail imports archives idempotently into
+local state.
+
+```bash
+toktrail sync git init --repo ~/toktrail-state --remote git@github.com:me/toktrail-state.git
+toktrail sync git sync
+```
+
+On another machine:
+
+```bash
+toktrail sync git init --repo ~/toktrail-state --remote git@github.com:me/toktrail-state.git
+toktrail sync git pull
+```
+
+By default Git sync exports with raw JSON redaction and stores archives under
+`archives/<machine_id>/...tar.gz`. Do not commit live sqlite files
+(`toktrail.db`, `toktrail.db-wal`, `toktrail.db-shm`) into the sync repo.
 
 Use `toktrail refresh` for explicit/manual refresh operations. It reads enabled
 harnesses and source paths from `config.toml`:
@@ -390,6 +413,8 @@ toktrail run stop
 toktrail run stop 3
 toktrail run list
 toktrail subscriptions status
+toktrail sync git status --repo ~/toktrail-state
+toktrail sync git sync --repo ~/toktrail-state
 toktrail sync export --out toktrail-state.tar.gz
 toktrail sync import toktrail-state.tar.gz --dry-run --json
 toktrail sources sessions pi

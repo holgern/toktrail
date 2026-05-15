@@ -22,9 +22,11 @@ from toktrail.db import (
     end_tracking_session,
     get_active_tracking_session,
     get_tracking_session,
+    has_imported_sync_archive,
     insert_usage_events,
     list_tracking_sessions,
     migrate,
+    record_imported_sync_archive,
     summarize_subscription_usage,
     summarize_tracking_session,
     summarize_usage,
@@ -146,8 +148,9 @@ def test_migrate_creates_tables_and_is_idempotent(tmp_path: Path) -> None:
         "run_events",
         "state_metadata",
         "import_sources",
+        "sync_imports",
     } <= table_names
-    assert user_version == 8
+    assert user_version == 9
 
 
 def test_migrate_v3_to_v4_idempotent_with_existing_column(tmp_path: Path) -> None:
@@ -163,7 +166,46 @@ def test_migrate_v3_to_v4_idempotent_with_existing_column(tmp_path: Path) -> Non
     # Re-running migrate must not crash on duplicate column.
     migrate(conn)
 
-    assert int(conn.execute("PRAGMA user_version").fetchone()[0]) == 8
+    assert int(conn.execute("PRAGMA user_version").fetchone()[0]) == 9
+
+
+def test_sync_import_registry_records_archive_hashes(tmp_path: Path) -> None:
+    conn = connect(tmp_path / "toktrail.db")
+    migrate(conn)
+
+    assert has_imported_sync_archive(conn, "abc123") is False
+
+    record_imported_sync_archive(
+        conn,
+        archive_sha256="abc123",
+        source_machine_id="machine-a",
+        exported_at_ms=1_000,
+        archive_path="archives/machine-a/state.tar.gz",
+        result_json='{"ok":true}',
+    )
+    conn.commit()
+
+    assert has_imported_sync_archive(conn, "abc123") is True
+
+    row = conn.execute(
+        """
+        SELECT
+            archive_key,
+            archive_sha256,
+            source_machine_id,
+            exported_at_ms,
+            archive_path
+        FROM sync_imports
+        WHERE archive_key = ?
+        """,
+        ("abc123",),
+    ).fetchone()
+    assert row is not None
+    assert row["archive_key"] == "abc123"
+    assert row["archive_sha256"] == "abc123"
+    assert row["source_machine_id"] == "machine-a"
+    assert row["exported_at_ms"] == 1_000
+    assert row["archive_path"] == "archives/machine-a/state.tar.gz"
 
 
 def test_source_costs_are_stored_and_aggregated_as_exact_decimals(

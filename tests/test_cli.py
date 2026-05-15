@@ -9,6 +9,7 @@ from copy import deepcopy
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
+from shutil import which
 
 import pytest
 from typer.testing import CliRunner
@@ -31,6 +32,7 @@ from toktrail.db import (
 from toktrail.models import TokenBreakdown, UsageEvent
 
 ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
+HAS_GIT = which("git") is not None
 
 
 def _toml_path_value(path: Path) -> str:
@@ -114,6 +116,21 @@ def create_source_db(path: Path) -> None:
     )
     conn.commit()
     conn.close()
+
+
+def _run_git(cwd: Path, *args: str) -> None:
+    subprocess.run(
+        ["git", *args],
+        cwd=cwd,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+def _configure_git_identity(repo_path: Path) -> None:
+    _run_git(repo_path, "config", "user.name", "Toktrail Tests")
+    _run_git(repo_path, "config", "user.email", "toktrail-tests@example.com")
 
 
 def _rich_is_available() -> bool:
@@ -5583,6 +5600,321 @@ def test_cli_sync_export_and_import_dry_run_json_shape(tmp_path) -> None:
     assert "usage_events_skipped" in payload
     assert "run_events_inserted" in payload
     assert "conflicts" in payload
+
+
+@pytest.mark.skipif(not HAS_GIT, reason="git executable is required")
+def test_cli_sync_git_init_status(tmp_path: Path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    repo = tmp_path / "toktrail-state"
+
+    init_result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "sync",
+            "git",
+            "init",
+            "--repo",
+            str(repo),
+        ],
+    )
+    assert init_result.exit_code == 0, init_result.output
+
+    status_result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "sync",
+            "git",
+            "status",
+            "--repo",
+            str(repo),
+        ],
+    )
+    assert status_result.exit_code == 0, status_result.output
+    assert "Git sync status" in status_result.output
+    assert "pending imports:" in status_result.output
+    assert (repo / "meta" / "format.json").exists()
+
+
+@pytest.mark.skipif(not HAS_GIT, reason="git executable is required")
+def test_cli_sync_git_sync_json_shape(tmp_path: Path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    source_db = tmp_path / "opencode.db"
+    repo = tmp_path / "toktrail-state"
+    remote = tmp_path / "remote.git"
+    create_source_db(source_db)
+    _run_git(tmp_path, "init", "--bare", str(remote))
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    refresh_result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "refresh",
+            "--no-run",
+            "--harness",
+            "opencode",
+            "--source",
+            str(source_db),
+        ],
+    )
+    assert refresh_result.exit_code == 0, refresh_result.output
+
+    init_result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "sync",
+            "git",
+            "init",
+            "--repo",
+            str(repo),
+            "--remote",
+            str(remote),
+            "--branch",
+            "main",
+        ],
+    )
+    assert init_result.exit_code == 0, init_result.output
+    _configure_git_identity(repo)
+
+    sync_result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "sync",
+            "git",
+            "sync",
+            "--repo",
+            str(repo),
+            "--no-refresh",
+            "--json",
+        ],
+    )
+    assert sync_result.exit_code == 0, sync_result.output
+    payload = json.loads(sync_result.output)
+    assert payload["repo_path"] == str(repo)
+    assert set(payload["pull"]) == {
+        "archives_seen",
+        "archives_imported",
+        "archives_skipped",
+    }
+    assert payload["push"] is not None
+    assert set(payload["push"]) == {
+        "archive_path",
+        "committed",
+        "pushed",
+        "commit_hash",
+    }
+
+
+@pytest.mark.skipif(not HAS_GIT, reason="git executable is required")
+def test_cli_sync_git_push_no_refresh(tmp_path: Path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    source_db = tmp_path / "opencode.db"
+    repo = tmp_path / "toktrail-state"
+    remote = tmp_path / "remote.git"
+    create_source_db(source_db)
+    _run_git(tmp_path, "init", "--bare", str(remote))
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "refresh",
+            "--no-run",
+            "--harness",
+            "opencode",
+            "--source",
+            str(source_db),
+        ],
+    )
+    runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "sync",
+            "git",
+            "init",
+            "--repo",
+            str(repo),
+            "--remote",
+            str(remote),
+            "--branch",
+            "main",
+        ],
+    )
+    _configure_git_identity(repo)
+
+    result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "sync",
+            "git",
+            "push",
+            "--repo",
+            str(repo),
+            "--no-refresh",
+            "--json",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["committed"] is True
+    assert payload["pushed"] is True
+    assert "archives" in payload["archive_path"]
+
+
+@pytest.mark.skipif(not HAS_GIT, reason="git executable is required")
+def test_cli_sync_git_pull_dry_run_does_not_record_imports(tmp_path: Path) -> None:
+    runner = CliRunner()
+    producer_db = tmp_path / "producer.db"
+    consumer_db = tmp_path / "consumer.db"
+    source_db = tmp_path / "opencode.db"
+    producer_repo = tmp_path / "repo-producer"
+    consumer_repo = tmp_path / "repo-consumer"
+    remote = tmp_path / "remote.git"
+    create_source_db(source_db)
+    _run_git(tmp_path, "init", "--bare", str(remote))
+
+    runner.invoke(app, ["--db", str(producer_db), "init"])
+    runner.invoke(
+        app,
+        [
+            "--db",
+            str(producer_db),
+            "refresh",
+            "--no-run",
+            "--harness",
+            "opencode",
+            "--source",
+            str(source_db),
+        ],
+    )
+    runner.invoke(
+        app,
+        [
+            "--db",
+            str(producer_db),
+            "sync",
+            "git",
+            "init",
+            "--repo",
+            str(producer_repo),
+            "--remote",
+            str(remote),
+            "--branch",
+            "main",
+        ],
+    )
+    _configure_git_identity(producer_repo)
+    push_result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(producer_db),
+            "sync",
+            "git",
+            "push",
+            "--repo",
+            str(producer_repo),
+            "--no-refresh",
+        ],
+    )
+    assert push_result.exit_code == 0, push_result.output
+
+    runner.invoke(
+        app,
+        [
+            "--db",
+            str(consumer_db),
+            "sync",
+            "git",
+            "init",
+            "--repo",
+            str(consumer_repo),
+            "--remote",
+            str(remote),
+            "--branch",
+            "main",
+        ],
+    )
+
+    first_pull = runner.invoke(
+        app,
+        [
+            "--db",
+            str(consumer_db),
+            "sync",
+            "git",
+            "pull",
+            "--repo",
+            str(consumer_repo),
+            "--dry-run",
+            "--json",
+        ],
+    )
+    second_pull = runner.invoke(
+        app,
+        [
+            "--db",
+            str(consumer_db),
+            "sync",
+            "git",
+            "pull",
+            "--repo",
+            str(consumer_repo),
+            "--dry-run",
+            "--json",
+        ],
+    )
+    assert first_pull.exit_code == 0, first_pull.output
+    assert second_pull.exit_code == 0, second_pull.output
+    first_payload = json.loads(first_pull.output)
+    second_payload = json.loads(second_pull.output)
+    assert first_payload["archives_imported"] >= 1
+    assert second_payload["archives_imported"] >= 1
+
+
+def test_cli_sync_git_rejects_missing_git_binary(tmp_path: Path, monkeypatch) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    repo = tmp_path / "repo"
+
+    def _raise_missing(*args, **kwargs):
+        raise FileNotFoundError("git")
+
+    monkeypatch.setattr("toktrail.git_sync.subprocess.run", _raise_missing)
+
+    result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "sync",
+            "git",
+            "init",
+            "--repo",
+            str(repo),
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "git executable not found in PATH." in result.output
 
 
 def test_cli_usage_sessions_human_output(tmp_path) -> None:

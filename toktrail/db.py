@@ -62,7 +62,7 @@ from toktrail.reporting import (
     UsageSessionsReport,
 )
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 _PERIOD_SORT: dict[str, int] = {
     "5h": 0,
     "daily": 1,
@@ -192,6 +192,9 @@ def migrate(conn: sqlite3.Connection) -> None:
     if current_version == 7:
         _migrate_v7_to_v8(conn)
         current_version = 8
+    if current_version == 8:
+        _migrate_v8_to_v9(conn)
+        current_version = 9
 
     _ensure_machine_id(conn)
     conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
@@ -517,6 +520,21 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             updated_at_ms INTEGER NOT NULL,
             PRIMARY KEY (harness, source_path, source_session_key)
         );
+
+        CREATE TABLE IF NOT EXISTS sync_imports (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            archive_key TEXT NOT NULL UNIQUE,
+            archive_sha256 TEXT NOT NULL,
+            source_machine_id TEXT,
+            exported_at_ms INTEGER,
+            archive_path TEXT,
+            imported_at_ms INTEGER NOT NULL,
+            dry_run INTEGER NOT NULL DEFAULT 0,
+            result_json TEXT NOT NULL DEFAULT '{}'
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_sync_imports_exported
+        ON sync_imports(exported_at_ms);
         """
     )
 
@@ -733,6 +751,10 @@ def _migrate_v7_to_v8(conn: sqlite3.Connection) -> None:
     _create_skipped_sources_table(conn)
 
 
+def _migrate_v8_to_v9(conn: sqlite3.Connection) -> None:
+    _create_sync_imports_table(conn)
+
+
 def _migrate_v6_to_v7(conn: sqlite3.Connection) -> None:
     _add_column_if_missing(
         conn,
@@ -782,6 +804,81 @@ def _migrate_v6_to_v7(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_runs_active_archived_started
         ON runs(ended_at_ms, archived_at_ms, started_at_ms)
         """
+    )
+
+
+def _create_sync_imports_table(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS sync_imports (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            archive_key TEXT NOT NULL UNIQUE,
+            archive_sha256 TEXT NOT NULL,
+            source_machine_id TEXT,
+            exported_at_ms INTEGER,
+            archive_path TEXT,
+            imported_at_ms INTEGER NOT NULL,
+            dry_run INTEGER NOT NULL DEFAULT 0,
+            result_json TEXT NOT NULL DEFAULT '{}'
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_sync_imports_exported
+        ON sync_imports(exported_at_ms)
+        """
+    )
+
+
+def has_imported_sync_archive(
+    conn: sqlite3.Connection, archive_sha256: str
+) -> bool:
+    row = conn.execute(
+        """
+        SELECT 1
+        FROM sync_imports
+        WHERE archive_key = ?
+        LIMIT 1
+        """,
+        (archive_sha256,),
+    ).fetchone()
+    return row is not None
+
+
+def record_imported_sync_archive(
+    conn: sqlite3.Connection,
+    *,
+    archive_sha256: str,
+    source_machine_id: str | None,
+    exported_at_ms: int | None,
+    archive_path: str,
+    result_json: str,
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO sync_imports (
+            archive_key,
+            archive_sha256,
+            source_machine_id,
+            exported_at_ms,
+            archive_path,
+            imported_at_ms,
+            dry_run,
+            result_json
+        )
+        VALUES (?, ?, ?, ?, ?, ?, 0, ?)
+        ON CONFLICT(archive_key) DO NOTHING
+        """,
+        (
+            archive_sha256,
+            archive_sha256,
+            source_machine_id,
+            exported_at_ms,
+            archive_path,
+            _now_ms(),
+            result_json,
+        ),
     )
 
 

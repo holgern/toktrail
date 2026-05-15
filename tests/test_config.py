@@ -139,6 +139,105 @@ code = "~/.code/sessions"
     assert config.imports.sources["code"].as_posix().endswith("/.code/sessions")
 
 
+def test_load_runtime_config_sync_git_defaults(tmp_path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("config_version = 1\n", encoding="utf-8")
+
+    config = load_runtime_config(config_path)
+
+    assert config.sync_git.repo is None
+    assert config.sync_git.remote == "origin"
+    assert config.sync_git.branch == "main"
+    assert config.sync_git.archive_dir == "archives"
+    assert config.sync_git.redact_raw_json is True
+    assert config.sync_git.include_config is False
+    assert config.sync_git.remote_active == "close-at-export"
+    assert config.sync_git.on_conflict == "fail"
+
+
+def test_load_runtime_config_parses_sync_git_table(tmp_path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        """
+config_version = 1
+
+[sync.git]
+repo = "~/toktrail-state"
+remote = "origin"
+branch = "main"
+archive_dir = "archives"
+auto_pull = true
+auto_push = false
+redact_raw_json = true
+include_config = false
+remote_active = "keep"
+on_conflict = "skip"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    config = load_runtime_config(config_path)
+
+    assert config.sync_git.repo == "~/toktrail-state"
+    assert config.sync_git.remote == "origin"
+    assert config.sync_git.branch == "main"
+    assert config.sync_git.archive_dir == "archives"
+    assert config.sync_git.auto_pull is True
+    assert config.sync_git.auto_push is False
+    assert config.sync_git.redact_raw_json is True
+    assert config.sync_git.include_config is False
+    assert config.sync_git.remote_active == "keep"
+    assert config.sync_git.on_conflict == "skip"
+
+
+def test_load_runtime_config_rejects_sync_git_unknown_key(tmp_path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        """
+config_version = 1
+
+[sync.git]
+bogus = 1
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="sync.git has unsupported keys"):
+        load_runtime_config(config_path)
+
+
+def test_load_runtime_config_rejects_sync_git_invalid_remote_active(tmp_path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        """
+config_version = 1
+
+[sync.git]
+remote_active = "invalid"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="sync.git.remote_active"):
+        load_runtime_config(config_path)
+
+
+def test_load_runtime_config_rejects_sync_git_invalid_on_conflict(tmp_path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        """
+config_version = 1
+
+[sync.git]
+on_conflict = "invalid"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="sync.git.on_conflict"):
+        load_runtime_config(config_path)
+
+
 def test_load_toktrail_config_exposes_statusline_defaults(tmp_path) -> None:
     config_path = tmp_path / "toktrail.toml"
     config_path.write_text(render_config_template(), encoding="utf-8")

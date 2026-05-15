@@ -317,6 +317,10 @@ exported = export_state_archive(Path(".toktrail/toktrail.db"), archive)
 preview = import_state_archive(Path(".toktrail/other.db"), archive, dry_run=True)
 ```
 
+Git-backed multi-machine transport (`toktrail sync git ...`) is currently a CLI
+workflow built on top of these same archive APIs. The stable public API surface
+for sync remains `toktrail.api.sync`.
+
 Import validates archive member paths, manifest checksums, schema version, and
 usage-event fingerprint conflicts before merge.
 

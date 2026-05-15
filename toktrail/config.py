@@ -22,6 +22,8 @@ ActualCostMode = Literal["source", "zero", "pricing"]
 VirtualCostMode = Literal["zero", "pricing"]
 MissingPriceMode = Literal["zero", "warn"]
 ImportMissingSourceMode = Literal["warn", "error", "skip"]
+GitSyncConflictMode = Literal["fail", "skip"]
+GitSyncRemoteActiveMode = Literal["fail", "close-at-export", "keep"]
 SubscriptionCostBasis = Literal["source", "actual", "virtual"]
 SubscriptionWindowPeriod = Literal["5h", "daily", "weekly", "monthly", "yearly"]
 SubscriptionWindowResetMode = Literal["fixed", "first_use"]
@@ -49,6 +51,8 @@ _VALID_ACTUAL_COST_MODES = {"source", "zero", "pricing"}
 _VALID_VIRTUAL_COST_MODES = {"zero", "pricing"}
 _VALID_MISSING_PRICE_MODES = {"zero", "warn"}
 _VALID_IMPORT_MISSING_SOURCE_MODES = {"warn", "error", "skip"}
+_VALID_GIT_SYNC_CONFLICT_MODES = {"fail", "skip"}
+_VALID_GIT_SYNC_REMOTE_ACTIVE_MODES = {"fail", "close-at-export", "keep"}
 _VALID_SUBSCRIPTION_COST_BASES = {"source", "actual", "virtual"}
 _VALID_SUBSCRIPTION_WINDOW_PERIODS = {"5h", "daily", "weekly", "monthly", "yearly"}
 _VALID_SUBSCRIPTION_WINDOW_RESET_MODES = {"fixed", "first_use"}
@@ -97,6 +101,19 @@ _PRICE_FIELDS = {
 }
 _ACTUAL_COST_RULE_FIELDS = {"harness", "provider", "model", "mode"}
 _IMPORT_FIELDS = {"harnesses", "sources", "missing_source", "include_raw_json"}
+_SYNC_FIELDS = {"git"}
+_SYNC_GIT_FIELDS = {
+    "repo",
+    "remote",
+    "branch",
+    "archive_dir",
+    "auto_pull",
+    "auto_push",
+    "redact_raw_json",
+    "include_config",
+    "remote_active",
+    "on_conflict",
+}
 _COSTING_FIELDS = {
     "default_actual_mode",
     "default_virtual_mode",
@@ -155,6 +172,7 @@ _SUBSCRIPTION_WINDOW_FIELDS = {
 _ROOT_FIELDS = {
     "config_version",
     "imports",
+    "sync",
     "costing",
     "actual_cost",
     "pricing",
@@ -165,6 +183,7 @@ _ROOT_FIELDS = {
 _RUNTIME_CONFIG_ROOT_FIELDS = {
     "config_version",
     "imports",
+    "sync",
     "costing",
     "actual_cost",
     "statusline",
@@ -220,6 +239,18 @@ droid = "~/.factory/sessions"
 amp = "~/.local/share/amp/threads"
 claude = "~/.claude/projects"
 vibe = "~/.vibe/logs/session"
+
+[sync.git]
+# repo = "~/.local/share/toktrail/git-sync"
+# remote = "origin"
+# branch = "main"
+# archive_dir = "archives"
+# auto_pull = true
+# auto_push = true
+# redact_raw_json = true
+# include_config = false
+# remote_active = "close-at-export"
+# on_conflict = "fail"
 
 [costing]
 default_actual_mode = "source"
@@ -861,6 +892,20 @@ class ImportConfig:
 
 
 @dataclass(frozen=True)
+class GitSyncConfig:
+    repo: str | None = None
+    remote: str = "origin"
+    branch: str = "main"
+    archive_dir: str = "archives"
+    auto_pull: bool = True
+    auto_push: bool = True
+    redact_raw_json: bool = True
+    include_config: bool = False
+    remote_active: GitSyncRemoteActiveMode = "close-at-export"
+    on_conflict: GitSyncConflictMode = "fail"
+
+
+@dataclass(frozen=True)
 class StatuslineCacheConfig:
     output_cache_secs: int = 2
     min_refresh_interval_secs: int = 5
@@ -914,6 +959,7 @@ class ToktrailConfig:
 class RuntimeConfig:
     config_version: int = CONFIG_VERSION
     imports: ImportConfig = field(default_factory=ImportConfig)
+    sync_git: GitSyncConfig = field(default_factory=GitSyncConfig)
     default_actual_mode: ActualCostMode = "source"
     default_virtual_mode: VirtualCostMode = "pricing"
     missing_price: MissingPriceMode = "warn"
@@ -1096,6 +1142,7 @@ def default_runtime_config() -> RuntimeConfig:
     return RuntimeConfig(
         config_version=costing.config_version,
         imports=default_import_config(),
+        sync_git=GitSyncConfig(),
         default_actual_mode=costing.default_actual_mode,
         default_virtual_mode=costing.default_virtual_mode,
         missing_price=costing.missing_price,
@@ -1569,6 +1616,7 @@ def parse_runtime_config(data: object) -> RuntimeConfig:
     return RuntimeConfig(
         config_version=config_version,
         imports=_parse_import_config(data.get("imports"), default_config.imports),
+        sync_git=_parse_sync_config(data.get("sync"), default_config.sync_git),
         default_actual_mode=cast(ActualCostMode, default_actual_mode),
         default_virtual_mode=cast(VirtualCostMode, default_virtual_mode),
         missing_price=cast(MissingPriceMode, missing_price),
@@ -1968,6 +2016,60 @@ def _parse_import_config(
         include_raw_json=_parse_bool(
             imports_table.get("include_raw_json", default_config.include_raw_json),
             context="imports.include_raw_json",
+        ),
+    )
+
+
+def _parse_sync_config(value: object, default_config: GitSyncConfig) -> GitSyncConfig:
+    sync_table = _parse_optional_table(value, context="sync")
+    _validate_allowed_keys(sync_table, _SYNC_FIELDS, context="sync")
+    git_table = _parse_optional_table(sync_table.get("git"), context="sync.git")
+    _validate_allowed_keys(git_table, _SYNC_GIT_FIELDS, context="sync.git")
+    return GitSyncConfig(
+        repo=_parse_optional_string(git_table.get("repo"), context="sync.git.repo"),
+        remote=_parse_string(
+            git_table.get("remote", default_config.remote),
+            context="sync.git.remote",
+        ),
+        branch=_parse_string(
+            git_table.get("branch", default_config.branch),
+            context="sync.git.branch",
+        ),
+        archive_dir=_parse_string(
+            git_table.get("archive_dir", default_config.archive_dir),
+            context="sync.git.archive_dir",
+        ),
+        auto_pull=_parse_bool(
+            git_table.get("auto_pull", default_config.auto_pull),
+            context="sync.git.auto_pull",
+        ),
+        auto_push=_parse_bool(
+            git_table.get("auto_push", default_config.auto_push),
+            context="sync.git.auto_push",
+        ),
+        redact_raw_json=_parse_bool(
+            git_table.get("redact_raw_json", default_config.redact_raw_json),
+            context="sync.git.redact_raw_json",
+        ),
+        include_config=_parse_bool(
+            git_table.get("include_config", default_config.include_config),
+            context="sync.git.include_config",
+        ),
+        remote_active=cast(
+            GitSyncRemoteActiveMode,
+            _parse_choice(
+                git_table.get("remote_active", default_config.remote_active),
+                valid=_VALID_GIT_SYNC_REMOTE_ACTIVE_MODES,
+                context="sync.git.remote_active",
+            ),
+        ),
+        on_conflict=cast(
+            GitSyncConflictMode,
+            _parse_choice(
+                git_table.get("on_conflict", default_config.on_conflict),
+                valid=_VALID_GIT_SYNC_CONFLICT_MODES,
+                context="sync.git.on_conflict",
+            ),
         ),
     )
 

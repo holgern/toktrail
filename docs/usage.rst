@@ -18,6 +18,7 @@ The preferred CLI workflow is:
    toktrail run status
    toktrail usage today
    toktrail subscriptions status
+   toktrail sync git sync
    toktrail sync export --out toktrail-state.tar.gz
    toktrail run list
    toktrail run list --archived
@@ -56,6 +57,27 @@ Use ``--refresh-details`` to show a compact refresh summary before the report.
 
 ``toktrail sync import`` validates archive paths, manifest checksums, schema
 version, and usage-event fingerprints before merging.
+
+Git sync
+--------
+
+Use ``toktrail sync git`` to exchange immutable state archives through a Git
+repository while keeping the live sqlite state database local:
+
+.. code-block:: bash
+
+   toktrail sync git init --repo ~/toktrail-state --remote git@github.com:me/toktrail-state.git
+   toktrail sync git sync
+
+On another machine:
+
+.. code-block:: bash
+
+   toktrail sync git init --repo ~/toktrail-state --remote git@github.com:me/toktrail-state.git
+   toktrail sync git pull
+
+Do not commit live sqlite files (``toktrail.db``, ``toktrail.db-wal``,
+``toktrail.db-shm``) into the sync repository.
 
 Use ``toktrail refresh`` for explicit/manual refresh operation. It reads enabled
 harnesses and source paths from ``config.toml``:
@@ -96,6 +118,8 @@ Core commands
    toktrail usage today
    toktrail usage last-week --utc --json
    toktrail subscriptions status --provider opencode-go --json
+   toktrail sync git status --repo ~/toktrail-state
+   toktrail sync git sync --repo ~/toktrail-state
    toktrail sync export --out toktrail-state.tar.gz --no-refresh
    toktrail sync import toktrail-state.tar.gz --dry-run --json
    toktrail run list
