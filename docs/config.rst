@@ -8,6 +8,25 @@ toktrail uses four user config files:
 - ``prices/`` for generated provider files such as ``prices/openai.toml``
 - ``subscriptions.toml`` for ``[[subscriptions]]`` plans and windows
 
+Git-backed prices/subscriptions
+-------------------------------
+
+Keep ``config.toml`` local and opt into shared costing files via Git sync:
+
+.. code-block:: toml
+
+   [sync.git]
+   repo = "~/toktrail-state"
+   track = ["prices", "provider-prices", "subscriptions"]
+
+With this setting, toktrail reads/writes:
+
+- ``<repo>/config/prices.toml``
+- ``<repo>/config/prices/*.toml``
+- ``<repo>/config/subscriptions.toml``
+
+CLI/env overrides still take precedence over tracked paths.
+
 Use ``toktrail config init`` to create all four files.
 
 Report commands use ``[imports]`` as their automatic refresh policy by default.

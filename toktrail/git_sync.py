@@ -278,13 +278,19 @@ def export_repo_archive(
     branch: str,
     push: bool,
     allow_dirty: bool,
+    tracked_config_paths: tuple[Path, ...] = (),
 ) -> GitSyncExportResult:
     resolved_repo = _require_repo(repo_path)
     _write_repo_layout(resolved_repo)
     _fail_if_contains_state_db_files(resolved_repo)
+    tracked_relpaths, tracked_prefixes = _repo_relative_tracked_paths(
+        resolved_repo,
+        tracked_config_paths,
+    )
     if not allow_dirty and _has_uncommitted_disallowed_changes(
         resolved_repo,
-        allowed_prefixes=("README.md", ".gitignore", "meta/"),
+        allowed_prefixes=("README.md", ".gitignore", "meta/", *tracked_prefixes),
+        allowed_relpaths=set(tracked_relpaths),
     ):
         msg = (
             "Git sync repo has uncommitted changes. Commit or stash them, or rerun "
@@ -325,6 +331,10 @@ def export_repo_archive(
 
     _run_git(resolved_repo, "add", str(final_archive.relative_to(resolved_repo)))
     _run_git(resolved_repo, "add", "meta/format.json", ".gitignore", "README.md")
+    for relpath in tracked_relpaths:
+        _run_git(resolved_repo, "add", "-A", relpath)
+    for relpath in tracked_prefixes:
+        _run_git(resolved_repo, "add", "-A", relpath.rstrip("/"))
 
     committed = False
     commit_hash: str | None = None
@@ -499,10 +509,57 @@ def _repo_is_dirty(repo_path: Path) -> bool:
     return bool(status.strip())
 
 
+def _repo_relative_tracked_paths(
+    repo_path: Path,
+    paths: tuple[Path, ...],
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    relpaths: list[str] = []
+    prefixes: list[str] = []
+    parent_prefixes: list[str] = []
+    resolved_repo = repo_path.resolve()
+
+    def _record_parent_prefixes(path_text: str) -> None:
+        parent = Path(path_text).parent
+        while str(parent) not in {"", "."}:
+            parent_prefixes.append(f"{parent.as_posix().rstrip('/')}/")
+            parent = parent.parent
+
+    for path in paths:
+        expanded = path.expanduser()
+        resolved = expanded.resolve()
+        if resolved_repo != resolved and resolved_repo not in resolved.parents:
+            continue
+        relpath = str(resolved.relative_to(resolved_repo))
+        if expanded.exists():
+            if expanded.is_dir():
+                prefix = f"{relpath.rstrip('/')}/"
+                prefixes.append(prefix)
+                _record_parent_prefixes(prefix.rstrip("/"))
+            else:
+                relpaths.append(relpath)
+                _record_parent_prefixes(relpath)
+            continue
+        if expanded.suffix.lower() == ".toml":
+            relpaths.append(relpath)
+            _record_parent_prefixes(relpath)
+            continue
+        prefix = f"{relpath.rstrip('/')}/"
+        prefixes.append(prefix)
+        _record_parent_prefixes(prefix.rstrip("/"))
+    return tuple(dict.fromkeys(relpaths)), tuple(
+        dict.fromkeys((*prefixes, *parent_prefixes))
+    )
+
+
 def _has_uncommitted_disallowed_changes(
-    repo_path: Path, *, allowed_prefixes: tuple[str, ...]
+    repo_path: Path,
+    *,
+    allowed_prefixes: tuple[str, ...],
+    allowed_relpaths: set[str] | frozenset[str] = frozenset(),
 ) -> bool:
     for relpath in _dirty_paths(repo_path):
+        if relpath in allowed_relpaths:
+            continue
         if any(
             relpath == prefix or relpath.startswith(prefix)
             for prefix in allowed_prefixes

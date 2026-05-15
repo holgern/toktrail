@@ -8,6 +8,7 @@ from toktrail.config import (
     load_costing_config,
     load_pricing_config,
     load_resolved_costing_config,
+    load_resolved_toktrail_config,
     load_runtime_config,
     load_toktrail_config,
     normalize_identity,
@@ -153,6 +154,7 @@ def test_load_runtime_config_sync_git_defaults(tmp_path) -> None:
     assert config.sync_git.include_config is False
     assert config.sync_git.remote_active == "close-at-export"
     assert config.sync_git.on_conflict == "fail"
+    assert config.sync_git.track == ()
 
 
 def test_load_runtime_config_parses_sync_git_table(tmp_path) -> None:
@@ -172,6 +174,7 @@ redact_raw_json = true
 include_config = false
 remote_active = "keep"
 on_conflict = "skip"
+track = ["prices", "provider-prices", "subscriptions"]
 """.strip(),
         encoding="utf-8",
     )
@@ -188,6 +191,44 @@ on_conflict = "skip"
     assert config.sync_git.include_config is False
     assert config.sync_git.remote_active == "keep"
     assert config.sync_git.on_conflict == "skip"
+    assert config.sync_git.track == ("prices", "provider-prices", "subscriptions")
+
+
+def test_load_runtime_config_parses_sync_git_track_all(tmp_path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        """
+config_version = 1
+
+[sync.git]
+track = ["all", "prices"]
+""".strip(),
+        encoding="utf-8",
+    )
+
+    config = load_runtime_config(config_path)
+    assert config.sync_git.track == (
+        "config",
+        "prices",
+        "provider-prices",
+        "subscriptions",
+    )
+
+
+def test_load_runtime_config_rejects_sync_git_invalid_track(tmp_path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        """
+config_version = 1
+
+[sync.git]
+track = ["bogus"]
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="sync.git.track"):
+        load_runtime_config(config_path)
 
 
 def test_load_runtime_config_rejects_sync_git_unknown_key(tmp_path) -> None:
@@ -1218,6 +1259,87 @@ output_usd_per_1m = 4.4
         ("openai", "gpt-5.5"),
         ("zai", "glm-5.1"),
     }
+
+
+def test_load_resolved_toktrail_config_uses_git_repo_for_tracked_costing_files(
+    tmp_path,
+) -> None:
+    config_path = tmp_path / "config.toml"
+    repo = tmp_path / "toktrail-state"
+    config_path.write_text(
+        f"""
+config_version = 1
+
+[sync.git]
+repo = "{repo}"
+track = ["prices", "provider-prices", "subscriptions"]
+""".strip(),
+        encoding="utf-8",
+    )
+
+    loaded = load_resolved_toktrail_config(config_cli_value=config_path)
+    assert loaded.prices_path == repo / "config" / "prices.toml"
+    assert loaded.prices_dir == repo / "config" / "prices"
+    assert loaded.subscriptions_path == repo / "config" / "subscriptions.toml"
+
+
+def test_load_resolved_toktrail_config_env_overrides_git_tracked_paths(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    config_path = tmp_path / "config.toml"
+    repo = tmp_path / "toktrail-state"
+    env_prices = tmp_path / "env-prices.toml"
+    env_prices_dir = tmp_path / "env-prices"
+    env_subscriptions = tmp_path / "env-subscriptions.toml"
+    config_path.write_text(
+        f"""
+config_version = 1
+
+[sync.git]
+repo = "{repo}"
+track = ["prices", "provider-prices", "subscriptions"]
+""".strip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("TOKTRAIL_PRICES", str(env_prices))
+    monkeypatch.setenv("TOKTRAIL_PRICES_DIR", str(env_prices_dir))
+    monkeypatch.setenv("TOKTRAIL_SUBSCRIPTIONS", str(env_subscriptions))
+
+    loaded = load_resolved_toktrail_config(config_cli_value=config_path)
+    assert loaded.prices_path == env_prices
+    assert loaded.prices_dir == env_prices_dir
+    assert loaded.subscriptions_path == env_subscriptions
+
+
+def test_load_resolved_toktrail_config_cli_overrides_git_tracked_paths(
+    tmp_path,
+) -> None:
+    config_path = tmp_path / "config.toml"
+    repo = tmp_path / "toktrail-state"
+    cli_prices = tmp_path / "cli-prices.toml"
+    cli_prices_dir = tmp_path / "cli-prices"
+    cli_subscriptions = tmp_path / "cli-subscriptions.toml"
+    config_path.write_text(
+        f"""
+config_version = 1
+
+[sync.git]
+repo = "{repo}"
+track = ["prices", "provider-prices", "subscriptions"]
+""".strip(),
+        encoding="utf-8",
+    )
+
+    loaded = load_resolved_toktrail_config(
+        config_cli_value=config_path,
+        prices_cli_value=cli_prices,
+        prices_dir_cli_value=cli_prices_dir,
+        subscriptions_cli_value=cli_subscriptions,
+    )
+    assert loaded.prices_path == cli_prices
+    assert loaded.prices_dir == cli_prices_dir
+    assert loaded.subscriptions_path == cli_subscriptions
 
 
 def test_manual_prices_override_provider_prices(tmp_path) -> None:

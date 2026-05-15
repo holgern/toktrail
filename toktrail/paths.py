@@ -100,6 +100,10 @@ def resolve_toktrail_prices_path(cli_value: Path | None = None) -> Path:
     return default_toktrail_prices_path()
 
 
+def toktrail_prices_env_is_set() -> bool:
+    return bool(os.environ.get(TOKTRAIL_PRICES_ENV))
+
+
 def resolve_toktrail_prices_dir(cli_value: Path | None = None) -> Path:
     if cli_value is not None:
         return cli_value.expanduser()
@@ -107,6 +111,10 @@ def resolve_toktrail_prices_dir(cli_value: Path | None = None) -> Path:
     if env_value:
         return Path(env_value).expanduser()
     return default_toktrail_prices_dir()
+
+
+def toktrail_prices_dir_env_is_set() -> bool:
+    return bool(os.environ.get(TOKTRAIL_PRICES_DIR_ENV))
 
 
 def resolve_provider_prices_path(
@@ -124,6 +132,10 @@ def resolve_toktrail_subscriptions_path(cli_value: Path | None = None) -> Path:
     if env_value:
         return Path(env_value).expanduser()
     return default_toktrail_subscriptions_path()
+
+
+def toktrail_subscriptions_env_is_set() -> bool:
+    return bool(os.environ.get(TOKTRAIL_SUBSCRIPTIONS_ENV))
 
 
 def default_opencode_db_path() -> Path:

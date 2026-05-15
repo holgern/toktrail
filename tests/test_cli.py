@@ -128,6 +128,16 @@ def _run_git(cwd: Path, *args: str) -> None:
     )
 
 
+def _git_output(cwd: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", *args],
+        cwd=cwd,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+
+
 def _configure_git_identity(repo_path: Path) -> None:
     _run_git(repo_path, "config", "user.name", "Toktrail Tests")
     _run_git(repo_path, "config", "user.email", "toktrail-tests@example.com")
@@ -2754,6 +2764,80 @@ reset_at = "2026-05-01T00:00:00+00:00"
     )
     assert show_result.exit_code == 0, show_result.output
     assert f"subs path:       {subscriptions_path}" in show_result.output
+
+
+def test_cli_config_show_uses_git_tracked_costing_paths(tmp_path) -> None:
+    runner = CliRunner()
+    config_path = tmp_path / "config.toml"
+    repo = tmp_path / "toktrail-state"
+    config_path.write_text(
+        f"""
+config_version = 1
+
+[imports]
+harnesses = ["opencode"]
+missing_source = "warn"
+include_raw_json = false
+
+[sync.git]
+repo = "{_toml_path_value(repo)}"
+track = ["prices", "provider-prices", "subscriptions"]
+""".strip(),
+        encoding="utf-8",
+    )
+
+    show_result = runner.invoke(
+        app,
+        ["--config", str(config_path), "config", "show"],
+    )
+
+    assert show_result.exit_code == 0, show_result.output
+    assert f"prices path:     {repo / 'config' / 'prices.toml'}" in show_result.output
+    assert f"prices dir:      {repo / 'config' / 'prices'}" in show_result.output
+    assert (
+        f"subs path:       {repo / 'config' / 'subscriptions.toml'}"
+        in show_result.output
+    )
+
+
+def test_cli_prices_parse_uses_git_tracked_provider_prices_dir(tmp_path) -> None:
+    runner = CliRunner()
+    config_path = tmp_path / "config.toml"
+    repo = tmp_path / "toktrail-state"
+    input_path = tmp_path / "openai-pricing.jsx"
+    config_path.write_text(
+        f"""
+config_version = 1
+
+[sync.git]
+repo = "{_toml_path_value(repo)}"
+track = ["provider-prices"]
+""".strip(),
+        encoding="utf-8",
+    )
+    input_path.write_text(
+        'TextTokenPricingTables tier="standard" rows={[ ["gpt-5.5", 5, 0.5, 30] ]}',
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config_path),
+            "prices",
+            "parse",
+            "--provider",
+            "openai",
+            "--input",
+            str(input_path),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    provider_path = repo / "config" / "prices" / "openai.toml"
+    assert provider_path.exists()
+    assert 'provider = "openai"' in provider_path.read_text(encoding="utf-8")
 
 
 def test_cli_pricing_parse_openai_standard_to_stdout(tmp_path) -> None:
@@ -5777,6 +5861,92 @@ def test_cli_sync_git_push_no_refresh(tmp_path: Path) -> None:
     assert payload["committed"] is True
     assert payload["pushed"] is True
     assert "archives" in payload["archive_path"]
+
+
+@pytest.mark.skipif(not HAS_GIT, reason="git executable is required")
+def test_cli_sync_git_push_stages_tracked_config_files(tmp_path: Path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    source_db = tmp_path / "opencode.db"
+    config_path = tmp_path / "config.toml"
+    repo = tmp_path / "toktrail-state"
+    remote = tmp_path / "remote.git"
+    create_source_db(source_db)
+    _run_git(tmp_path, "init", "--bare", str(remote))
+    config_path.write_text(
+        f"""
+config_version = 1
+
+[imports]
+harnesses = ["opencode"]
+missing_source = "warn"
+include_raw_json = false
+
+[imports.sources]
+opencode = "{_toml_path_value(source_db)}"
+
+[sync.git]
+repo = "{_toml_path_value(repo)}"
+remote = "origin"
+branch = "main"
+track = ["prices", "provider-prices", "subscriptions"]
+""".strip(),
+        encoding="utf-8",
+    )
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "--config",
+            str(config_path),
+            "sync",
+            "git",
+            "init",
+            "--remote",
+            str(remote),
+            "--branch",
+            "main",
+        ],
+    )
+    _configure_git_identity(repo)
+
+    (repo / "config").mkdir(parents=True, exist_ok=True)
+    (repo / "config" / "prices.toml").write_text(
+        "config_version = 1\n",
+        encoding="utf-8",
+    )
+    (repo / "config" / "subscriptions.toml").write_text(
+        "config_version = 1\n",
+        encoding="utf-8",
+    )
+    (repo / "config" / "prices").mkdir(parents=True, exist_ok=True)
+    (repo / "config" / "prices" / "openai.toml").write_text(
+        "config_version = 1\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "--config",
+            str(config_path),
+            "sync",
+            "git",
+            "push",
+            "--no-refresh",
+            "--json",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    tracked = set(_git_output(repo, "ls-files").splitlines())
+    assert "config/prices.toml" in tracked
+    assert "config/subscriptions.toml" in tracked
+    assert "config/prices/openai.toml" in tracked
 
 
 @pytest.mark.skipif(not HAS_GIT, reason="git executable is required")

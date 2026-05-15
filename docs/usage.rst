@@ -79,6 +79,17 @@ On another machine:
 Do not commit live sqlite files (``toktrail.db``, ``toktrail.db-wal``,
 ``toktrail.db-shm``) into the sync repository.
 
+To share costing files across machines while keeping import paths local:
+
+.. code-block:: toml
+
+   [sync.git]
+   repo = "~/toktrail-state"
+   track = ["prices", "provider-prices", "subscriptions"]
+
+toktrail then uses ``<repo>/config/prices.toml``, ``<repo>/config/prices/*.toml``,
+and ``<repo>/config/subscriptions.toml``.
+
 Use ``toktrail refresh`` for explicit/manual refresh operation. It reads enabled
 harnesses and source paths from ``config.toml``:
 
@@ -186,6 +197,9 @@ Pricing parser
 
 Use ``toktrail prices parse`` to convert provider pricing text into provider
 price files under ``prices/<provider>.toml`` by default:
+
+When ``[sync.git].track`` includes ``"provider-prices"``, default output is
+``<repo>/config/prices/<provider>.toml``.
 
 .. code-block:: bash
 

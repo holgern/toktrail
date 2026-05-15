@@ -41,6 +41,16 @@ def _git(cwd: Path, *args: str) -> None:
     )
 
 
+def _git_output(cwd: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", *args],
+        cwd=cwd,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+
+
 def _configure_git_identity(repo_path: Path) -> None:
     _git(repo_path, "config", "user.name", "Toktrail Tests")
     _git(repo_path, "config", "user.email", "toktrail-tests@example.com")
@@ -351,3 +361,81 @@ def test_git_sync_list_archives_returns_sorted_paths(tmp_path: Path) -> None:
     paths = list_archives(repo)
 
     assert [path.name for path in paths] == ["a.tar.gz", "b.tar.gz"]
+
+
+def test_git_sync_export_stages_tracked_config_files(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    db_path = tmp_path / "toktrail.db"
+    config_path = tmp_path / "config.toml"
+    prices_file = repo / "config" / "prices.toml"
+    subscriptions_file = repo / "config" / "subscriptions.toml"
+    provider_dir = repo / "config" / "prices"
+    provider_file = provider_dir / "openai.toml"
+    nested_provider_file = provider_dir / "tiers" / "zai.toml"
+    config_path.write_text("config_version = 1\n", encoding="utf-8")
+
+    ensure_git_repo(repo, remote_url=None, branch="main")
+    _configure_git_identity(repo)
+    _seed_db(db_path, event=_event("1", created_ms=1_777_801_200_000))
+
+    prices_file.parent.mkdir(parents=True, exist_ok=True)
+    provider_dir.mkdir(parents=True, exist_ok=True)
+    prices_file.write_text("config_version = 1\n", encoding="utf-8")
+    subscriptions_file.write_text("config_version = 1\n", encoding="utf-8")
+    provider_file.write_text("config_version = 1\n", encoding="utf-8")
+    nested_provider_file.parent.mkdir(parents=True, exist_ok=True)
+    nested_provider_file.write_text("config_version = 1\n", encoding="utf-8")
+
+    export_repo_archive(
+        db_path,
+        repo,
+        archive_dir="archives",
+        config_path=config_path,
+        include_config=False,
+        redact_raw_json=True,
+        commit_message="sync",
+        remote="origin",
+        branch="main",
+        push=False,
+        allow_dirty=False,
+        tracked_config_paths=(prices_file, subscriptions_file, provider_dir),
+    )
+
+    tracked = set(_git_output(repo, "ls-files").splitlines())
+    assert "config/prices.toml" in tracked
+    assert "config/subscriptions.toml" in tracked
+    assert "config/prices/openai.toml" in tracked
+    assert "config/prices/tiers/zai.toml" in tracked
+
+
+def test_git_sync_export_still_rejects_untracked_dirty_changes(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    db_path = tmp_path / "toktrail.db"
+    config_path = tmp_path / "config.toml"
+    provider_dir = repo / "config" / "prices"
+    provider_file = provider_dir / "openai.toml"
+    config_path.write_text("config_version = 1\n", encoding="utf-8")
+
+    ensure_git_repo(repo, remote_url=None, branch="main")
+    _configure_git_identity(repo)
+    _seed_db(db_path, event=_event("1", created_ms=1_777_801_200_000))
+
+    provider_dir.mkdir(parents=True, exist_ok=True)
+    provider_file.write_text("config_version = 1\n", encoding="utf-8")
+    (repo / "scratch.txt").write_text("dirty\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="uncommitted changes"):
+        export_repo_archive(
+            db_path,
+            repo,
+            archive_dir="archives",
+            config_path=config_path,
+            include_config=False,
+            redact_raw_json=True,
+            commit_message="sync",
+            remote="origin",
+            branch="main",
+            push=False,
+            allow_dirty=False,
+            tracked_config_paths=(provider_dir,),
+        )

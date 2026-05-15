@@ -12,7 +12,7 @@ from toktrail.api.sync import (
     export_state_archive,
     import_state_archive,
 )
-from toktrail.config import RuntimeConfig, load_runtime_config
+from toktrail.config import LoadedToktrailConfig, load_resolved_toktrail_config
 from toktrail.git_sync import (
     DEFAULT_ARCHIVE_DIR,
     DEFAULT_BRANCH,
@@ -23,7 +23,10 @@ from toktrail.git_sync import (
     git_sync_status,
     import_repo_archives,
 )
-from toktrail.paths import resolve_toktrail_config_path, resolve_toktrail_db_path
+from toktrail.paths import (
+    resolve_toktrail_config_path,
+    resolve_toktrail_db_path,
+)
 from toktrail.sync import ConflictMode as SyncConflictMode
 from toktrail.sync import RemoteActiveMode as SyncRemoteActiveMode
 
@@ -53,36 +56,87 @@ RepoOption = Annotated[
 
 
 def _resolve_state_db(ctx: typer.Context) -> Path:
-    db_path = None if not isinstance(ctx.obj, dict) else ctx.obj.get("db_path")
+    root_obj = ctx.find_root().obj or {}
+    db_path = root_obj.get("db_path")
     if db_path is not None and not isinstance(db_path, Path):
         msg = f"Invalid --db value: {db_path!r}"
         raise ValueError(msg)
     return resolve_toktrail_db_path(db_path)
 
 
-def _resolve_config_path(ctx: typer.Context) -> Path:
-    config_path = None if not isinstance(ctx.obj, dict) else ctx.obj.get("config_path")
+def _config_cli_path(ctx: typer.Context) -> Path | None:
+    root_obj = ctx.find_root().obj or {}
+    config_path = root_obj.get("config_path")
     if config_path is not None and not isinstance(config_path, Path):
         msg = f"Invalid --config value: {config_path!r}"
         raise ValueError(msg)
-    return resolve_toktrail_config_path(config_path)
+    return config_path
 
 
-def _load_runtime_sync_config(ctx: typer.Context) -> RuntimeConfig:
-    return load_runtime_config(_resolve_config_path(ctx))
+def _prices_cli_path(ctx: typer.Context) -> Path | None:
+    root_obj = ctx.find_root().obj or {}
+    prices_path = root_obj.get("prices_path")
+    if prices_path is not None and not isinstance(prices_path, Path):
+        msg = f"Invalid --prices value: {prices_path!r}"
+        raise ValueError(msg)
+    return prices_path
+
+
+def _prices_dir_cli_path(ctx: typer.Context) -> Path | None:
+    root_obj = ctx.find_root().obj or {}
+    prices_dir_path = root_obj.get("prices_dir_path")
+    if prices_dir_path is not None and not isinstance(prices_dir_path, Path):
+        msg = f"Invalid --prices-dir value: {prices_dir_path!r}"
+        raise ValueError(msg)
+    return prices_dir_path
+
+
+def _subscriptions_cli_path(ctx: typer.Context) -> Path | None:
+    root_obj = ctx.find_root().obj or {}
+    subscriptions_path = root_obj.get("subscriptions_path")
+    if subscriptions_path is not None and not isinstance(subscriptions_path, Path):
+        msg = f"Invalid --subscriptions value: {subscriptions_path!r}"
+        raise ValueError(msg)
+    return subscriptions_path
+
+
+def _resolve_config_path(ctx: typer.Context) -> Path:
+    return resolve_toktrail_config_path(_config_cli_path(ctx))
+
+
+def _load_resolved_sync_config(ctx: typer.Context) -> LoadedToktrailConfig:
+    return load_resolved_toktrail_config(
+        config_cli_value=_config_cli_path(ctx),
+        prices_cli_value=_prices_cli_path(ctx),
+        prices_dir_cli_value=_prices_dir_cli_path(ctx),
+        subscriptions_cli_value=_subscriptions_cli_path(ctx),
+    )
 
 
 def _resolve_git_repo(
-    ctx: typer.Context,
     repo: Path | None,
-    runtime_config: RuntimeConfig,
+    loaded_config: LoadedToktrailConfig,
 ) -> Path:
     if repo is not None:
         return repo.expanduser()
-    configured = runtime_config.sync_git.repo
+    configured = loaded_config.runtime.sync_git.repo
     if configured:
         return Path(configured).expanduser()
     return Path("~/.local/share/toktrail/git-sync").expanduser()
+
+
+def _tracked_config_paths(loaded: LoadedToktrailConfig) -> tuple[Path, ...]:
+    track = set(loaded.runtime.sync_git.track)
+    paths: list[Path] = []
+    if "config" in track:
+        paths.append(loaded.config_path)
+    if "prices" in track:
+        paths.append(loaded.prices_path)
+    if "provider-prices" in track:
+        paths.append(loaded.prices_dir)
+    if "subscriptions" in track:
+        paths.append(loaded.subscriptions_path)
+    return tuple(paths)
 
 
 def _exit_with_error(message: str) -> None:
@@ -249,8 +303,9 @@ def sync_git_init(
     branch: Annotated[str | None, typer.Option("--branch")] = None,
     json_output: JsonOption = False,
 ) -> None:
-    runtime = _load_runtime_sync_config(ctx)
-    repo_path = _resolve_git_repo(ctx, repo, runtime)
+    loaded = _load_resolved_sync_config(ctx)
+    runtime = loaded.runtime
+    repo_path = _resolve_git_repo(repo, loaded)
     branch_name = branch or runtime.sync_git.branch or DEFAULT_BRANCH
     try:
         ensure_git_repo(repo_path, remote_url=remote_url, branch=branch_name)
@@ -283,8 +338,9 @@ def sync_git_status(
     repo: RepoOption = None,
     json_output: JsonOption = False,
 ) -> None:
-    runtime = _load_runtime_sync_config(ctx)
-    repo_path = _resolve_git_repo(ctx, repo, runtime)
+    loaded = _load_resolved_sync_config(ctx)
+    runtime = loaded.runtime
+    repo_path = _resolve_git_repo(repo, loaded)
     try:
         status = git_sync_status(
             _resolve_state_db(ctx),
@@ -324,8 +380,9 @@ def sync_git_pull(
     remote_active: Annotated[str | None, typer.Option("--remote-active")] = None,
     json_output: JsonOption = False,
 ) -> None:
-    runtime = _load_runtime_sync_config(ctx)
-    repo_path = _resolve_git_repo(ctx, repo, runtime)
+    loaded = _load_resolved_sync_config(ctx)
+    runtime = loaded.runtime
+    repo_path = _resolve_git_repo(repo, loaded)
     remote_name = runtime.sync_git.remote or DEFAULT_REMOTE
     branch_name = runtime.sync_git.branch or DEFAULT_BRANCH
     conflict_mode = on_conflict or runtime.sync_git.on_conflict
@@ -364,8 +421,9 @@ def sync_git_push(
     allow_dirty: Annotated[bool, typer.Option("--allow-dirty")] = False,
     json_output: JsonOption = False,
 ) -> None:
-    runtime = _load_runtime_sync_config(ctx)
-    repo_path = _resolve_git_repo(ctx, repo, runtime)
+    loaded = _load_resolved_sync_config(ctx)
+    runtime = loaded.runtime
+    repo_path = _resolve_git_repo(repo, loaded)
     try:
         _refresh_for_export(
             ctx,
@@ -377,7 +435,7 @@ def sync_git_push(
             _resolve_state_db(ctx),
             repo_path,
             archive_dir=runtime.sync_git.archive_dir or DEFAULT_ARCHIVE_DIR,
-            config_path=_resolve_config_path(ctx),
+            config_path=loaded.config_path,
             include_config=runtime.sync_git.include_config,
             redact_raw_json=runtime.sync_git.redact_raw_json,
             commit_message=message,
@@ -385,6 +443,7 @@ def sync_git_push(
             branch=runtime.sync_git.branch or DEFAULT_BRANCH,
             push=True,
             allow_dirty=allow_dirty,
+            tracked_config_paths=_tracked_config_paths(loaded),
         )
     except (OSError, ValueError) as exc:
         _exit_with_error(str(exc))
@@ -413,8 +472,9 @@ def sync_git_sync(
     message: Annotated[str | None, typer.Option("--message")] = None,
     json_output: JsonOption = False,
 ) -> None:
-    runtime = _load_runtime_sync_config(ctx)
-    repo_path = _resolve_git_repo(ctx, repo, runtime)
+    loaded = _load_resolved_sync_config(ctx)
+    runtime = loaded.runtime
+    repo_path = _resolve_git_repo(repo, loaded)
     remote_name = runtime.sync_git.remote or DEFAULT_REMOTE
     branch_name = runtime.sync_git.branch or DEFAULT_BRANCH
     conflict_mode = on_conflict or runtime.sync_git.on_conflict
@@ -441,7 +501,7 @@ def sync_git_sync(
                 _resolve_state_db(ctx),
                 repo_path,
                 archive_dir=runtime.sync_git.archive_dir or DEFAULT_ARCHIVE_DIR,
-                config_path=_resolve_config_path(ctx),
+                config_path=loaded.config_path,
                 include_config=runtime.sync_git.include_config,
                 redact_raw_json=runtime.sync_git.redact_raw_json,
                 commit_message=message,
@@ -449,6 +509,7 @@ def sync_git_sync(
                 branch=branch_name,
                 push=True,
                 allow_dirty=allow_dirty,
+                tracked_config_paths=_tracked_config_paths(loaded),
             )
     except (OSError, ValueError) as exc:
         _exit_with_error(str(exc))

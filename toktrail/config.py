@@ -16,6 +16,9 @@ from toktrail.paths import (
     resolve_toktrail_prices_dir,
     resolve_toktrail_prices_path,
     resolve_toktrail_subscriptions_path,
+    toktrail_prices_dir_env_is_set,
+    toktrail_prices_env_is_set,
+    toktrail_subscriptions_env_is_set,
 )
 
 ActualCostMode = Literal["source", "zero", "pricing"]
@@ -24,6 +27,12 @@ MissingPriceMode = Literal["zero", "warn"]
 ImportMissingSourceMode = Literal["warn", "error", "skip"]
 GitSyncConflictMode = Literal["fail", "skip"]
 GitSyncRemoteActiveMode = Literal["fail", "close-at-export", "keep"]
+GitSyncTrackedFile = Literal[
+    "config",
+    "prices",
+    "provider-prices",
+    "subscriptions",
+]
 SubscriptionCostBasis = Literal["source", "actual", "virtual"]
 SubscriptionWindowPeriod = Literal["5h", "daily", "weekly", "monthly", "yearly"]
 SubscriptionWindowResetMode = Literal["fixed", "first_use"]
@@ -53,6 +62,18 @@ _VALID_MISSING_PRICE_MODES = {"zero", "warn"}
 _VALID_IMPORT_MISSING_SOURCE_MODES = {"warn", "error", "skip"}
 _VALID_GIT_SYNC_CONFLICT_MODES = {"fail", "skip"}
 _VALID_GIT_SYNC_REMOTE_ACTIVE_MODES = {"fail", "close-at-export", "keep"}
+_VALID_GIT_SYNC_TRACKED_FILES = {
+    "config",
+    "prices",
+    "provider-prices",
+    "subscriptions",
+}
+_ALL_GIT_SYNC_TRACKED_FILES: tuple[GitSyncTrackedFile, ...] = (
+    "config",
+    "prices",
+    "provider-prices",
+    "subscriptions",
+)
 _VALID_SUBSCRIPTION_COST_BASES = {"source", "actual", "virtual"}
 _VALID_SUBSCRIPTION_WINDOW_PERIODS = {"5h", "daily", "weekly", "monthly", "yearly"}
 _VALID_SUBSCRIPTION_WINDOW_RESET_MODES = {"fixed", "first_use"}
@@ -113,6 +134,7 @@ _SYNC_GIT_FIELDS = {
     "include_config",
     "remote_active",
     "on_conflict",
+    "track",
 }
 _COSTING_FIELDS = {
     "default_actual_mode",
@@ -215,6 +237,11 @@ _SUPPORTED_HARNESSES = {
 _SEPARATOR_RE = re.compile(r"[/_\s]+")
 _INVALID_IDENTITY_CHARS_RE = re.compile(r"[^a-z0-9.-]+")
 _DASH_RE = re.compile(r"-+")
+_GIT_CONFIG_DIR = "config"
+_GIT_CONFIG_FILE = "config.toml"
+_GIT_PRICES_FILE = "prices.toml"
+_GIT_PRICES_DIR = "prices"
+_GIT_SUBSCRIPTIONS_FILE = "subscriptions.toml"
 
 DEFAULT_CONFIG_TEXT = """\
 config_version = 1
@@ -251,6 +278,7 @@ vibe = "~/.vibe/logs/session"
 # include_config = false
 # remote_active = "close-at-export"
 # on_conflict = "fail"
+# track = ["prices", "provider-prices", "subscriptions"]
 
 [costing]
 default_actual_mode = "source"
@@ -903,6 +931,7 @@ class GitSyncConfig:
     include_config: bool = False
     remote_active: GitSyncRemoteActiveMode = "close-at-export"
     on_conflict: GitSyncConflictMode = "fail"
+    track: tuple[GitSyncTrackedFile, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -1026,6 +1055,7 @@ class LoadedToktrailConfig:
     manual_prices_exists: bool
     provider_prices_exists: bool
     subscriptions_exists: bool
+    runtime: RuntimeConfig
     config: ToktrailConfig
 
 
@@ -1253,6 +1283,69 @@ def load_resolved_costing_config(
     )
 
 
+def _git_sync_repo_path(sync_git: GitSyncConfig) -> Path | None:
+    if not sync_git.repo:
+        return None
+    return Path(sync_git.repo).expanduser()
+
+
+def _resolve_effective_prices_path(
+    *,
+    config_path: Path,
+    config_cli_value: Path | None,
+    cli_value: Path | None,
+    repo_path: Path | None,
+    tracked: set[GitSyncTrackedFile],
+) -> Path:
+    if cli_value is not None:
+        return resolve_toktrail_prices_path(cli_value)
+    if toktrail_prices_env_is_set():
+        return resolve_toktrail_prices_path(None)
+    if repo_path is not None and "prices" in tracked:
+        return repo_path / _GIT_CONFIG_DIR / _GIT_PRICES_FILE
+    if config_cli_value is not None:
+        return config_path.with_name("prices.toml")
+    return resolve_toktrail_prices_path(None)
+
+
+def _resolve_effective_prices_dir(
+    *,
+    config_path: Path,
+    config_cli_value: Path | None,
+    cli_value: Path | None,
+    repo_path: Path | None,
+    tracked: set[GitSyncTrackedFile],
+) -> Path:
+    if cli_value is not None:
+        return resolve_toktrail_prices_dir(cli_value)
+    if toktrail_prices_dir_env_is_set():
+        return resolve_toktrail_prices_dir(None)
+    if repo_path is not None and "provider-prices" in tracked:
+        return repo_path / _GIT_CONFIG_DIR / _GIT_PRICES_DIR
+    if config_cli_value is not None:
+        return config_path.with_name("prices")
+    return resolve_toktrail_prices_dir(None)
+
+
+def _resolve_effective_subscriptions_path(
+    *,
+    config_path: Path,
+    config_cli_value: Path | None,
+    cli_value: Path | None,
+    repo_path: Path | None,
+    tracked: set[GitSyncTrackedFile],
+) -> Path:
+    if cli_value is not None:
+        return resolve_toktrail_subscriptions_path(cli_value)
+    if toktrail_subscriptions_env_is_set():
+        return resolve_toktrail_subscriptions_path(None)
+    if repo_path is not None and "subscriptions" in tracked:
+        return repo_path / _GIT_CONFIG_DIR / _GIT_SUBSCRIPTIONS_FILE
+    if config_cli_value is not None:
+        return config_path.with_name("subscriptions.toml")
+    return resolve_toktrail_subscriptions_path(None)
+
+
 def load_resolved_toktrail_config(
     config_cli_value: Path | None = None,
     prices_cli_value: Path | None = None,
@@ -1260,21 +1353,6 @@ def load_resolved_toktrail_config(
     subscriptions_cli_value: Path | None = None,
 ) -> LoadedToktrailConfig:
     config_path = resolve_toktrail_config_path(config_cli_value)
-    prices_path = (
-        config_path.with_name("prices.toml")
-        if config_cli_value is not None and prices_cli_value is None
-        else resolve_toktrail_prices_path(prices_cli_value)
-    )
-    prices_dir = (
-        config_path.with_name("prices")
-        if config_cli_value is not None and prices_dir_cli_value is None
-        else resolve_toktrail_prices_dir(prices_dir_cli_value)
-    )
-    subscriptions_path = (
-        config_path.with_name("subscriptions.toml")
-        if config_cli_value is not None and subscriptions_cli_value is None
-        else resolve_toktrail_subscriptions_path(subscriptions_cli_value)
-    )
     legacy_data = _load_optional_toml(config_path, context="toktrail config")
     use_legacy_monolithic = (
         config_path.name != "config.toml"
@@ -1287,6 +1365,26 @@ def load_resolved_toktrail_config(
     if use_legacy_monolithic:
         assert legacy_data is not None
         runtime_defaults = default_runtime_config()
+        imports = _parse_import_config(
+            legacy_data.get("imports"),
+            runtime_defaults.imports,
+        )
+        runtime_config = RuntimeConfig(imports=imports)
+        prices_path = (
+            config_path.with_name("prices.toml")
+            if config_cli_value is not None and prices_cli_value is None
+            else resolve_toktrail_prices_path(prices_cli_value)
+        )
+        prices_dir = (
+            config_path.with_name("prices")
+            if config_cli_value is not None and prices_dir_cli_value is None
+            else resolve_toktrail_prices_dir(prices_dir_cli_value)
+        )
+        subscriptions_path = (
+            config_path.with_name("subscriptions.toml")
+            if config_cli_value is not None and subscriptions_cli_value is None
+            else resolve_toktrail_subscriptions_path(subscriptions_cli_value)
+        )
         provider_paths = (
             tuple(sorted(prices_dir.glob("*.toml"))) if prices_dir.is_dir() else ()
         )
@@ -1305,14 +1403,36 @@ def load_resolved_toktrail_config(
             manual_prices_exists=manual_prices_exists,
             provider_prices_exists=prices_dir.exists(),
             subscriptions_exists=subscriptions_path.exists(),
+            runtime=runtime_config,
             config=ToktrailConfig(
                 costing=_parse_legacy_costing_config(legacy_data),
-                imports=_parse_import_config(
-                    legacy_data.get("imports"),
-                    runtime_defaults.imports,
-                ),
+                imports=imports,
             ),
         )
+    runtime_config = load_runtime_config(config_path)
+    repo_path = _git_sync_repo_path(runtime_config.sync_git)
+    tracked = set(runtime_config.sync_git.track)
+    prices_path = _resolve_effective_prices_path(
+        config_path=config_path,
+        config_cli_value=config_cli_value,
+        cli_value=prices_cli_value,
+        repo_path=repo_path,
+        tracked=tracked,
+    )
+    prices_dir = _resolve_effective_prices_dir(
+        config_path=config_path,
+        config_cli_value=config_cli_value,
+        cli_value=prices_dir_cli_value,
+        repo_path=repo_path,
+        tracked=tracked,
+    )
+    subscriptions_path = _resolve_effective_subscriptions_path(
+        config_path=config_path,
+        config_cli_value=config_cli_value,
+        cli_value=subscriptions_cli_value,
+        repo_path=repo_path,
+        tracked=tracked,
+    )
     loaded_pricing = load_pricing_configs(
         manual_path=prices_path,
         provider_dir=prices_dir,
@@ -1328,8 +1448,9 @@ def load_resolved_toktrail_config(
         manual_prices_exists=loaded_pricing.manual_exists,
         provider_prices_exists=loaded_pricing.provider_dir_exists,
         subscriptions_exists=subscriptions_path.exists(),
+        runtime=runtime_config,
         config=merge_configs(
-            load_runtime_config(config_path),
+            runtime_config,
             loaded_pricing.config,
             load_subscriptions_config(subscriptions_path),
         ),
@@ -2071,7 +2192,39 @@ def _parse_sync_config(value: object, default_config: GitSyncConfig) -> GitSyncC
                 context="sync.git.on_conflict",
             ),
         ),
+        track=_parse_sync_git_track(
+            git_table.get("track"),
+            context="sync.git.track",
+        ),
     )
+
+
+def _parse_sync_git_track(
+    value: object,
+    *,
+    context: str,
+) -> tuple[GitSyncTrackedFile, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, list):
+        msg = f"{context} must be a list."
+        raise ValueError(msg)
+
+    result: list[GitSyncTrackedFile] = []
+    seen: set[str] = set()
+    for index, item in enumerate(value, start=1):
+        text = _parse_string(item, context=f"{context}[{index}]").strip().lower()
+        values = _ALL_GIT_SYNC_TRACKED_FILES if text == "all" else (text,)
+        for value_text in values:
+            if value_text not in _VALID_GIT_SYNC_TRACKED_FILES:
+                allowed = ", ".join(sorted(_VALID_GIT_SYNC_TRACKED_FILES | {"all"}))
+                msg = f"{context}[{index}] must be one of: {allowed}."
+                raise ValueError(msg)
+            if value_text in seen:
+                continue
+            seen.add(value_text)
+            result.append(cast(GitSyncTrackedFile, value_text))
+    return tuple(result)
 
 
 def _parse_statusline_config(

@@ -58,6 +58,21 @@ toktrail uses these configuration files:
 - `prices/` for generated provider files like `prices/openai.toml`
 - `subscriptions.toml` for `[[subscriptions]]` plans/windows
 
+You can optionally keep pricing/subscription files in your Git sync repo while
+keeping local bootstrap config machine-specific:
+
+```toml
+[sync.git]
+repo = "~/toktrail-state"
+track = ["prices", "provider-prices", "subscriptions"]
+```
+
+With `track` enabled, toktrail resolves:
+
+- `<repo>/config/prices.toml`
+- `<repo>/config/prices/*.toml`
+- `<repo>/config/subscriptions.toml`
+
 Initialize them together:
 
 ```bash
@@ -326,6 +341,27 @@ By default Git sync exports with raw JSON redaction and stores archives under
 `archives/<machine_id>/...tar.gz`. Do not commit live sqlite files
 (`toktrail.db`, `toktrail.db-wal`, `toktrail.db-shm`) into the sync repo.
 
+### Git-backed prices and subscriptions
+
+Keep `config.toml` local, then opt into shared costing files:
+
+```toml
+[sync.git]
+repo = "~/toktrail-state"
+track = ["prices", "provider-prices", "subscriptions"]
+```
+
+toktrail then reads/writes:
+
+- `<repo>/config/prices.toml`
+- `<repo>/config/prices/*.toml`
+- `<repo>/config/subscriptions.toml`
+
+Run `toktrail sync git sync` to pull remote changes and commit local archive +
+tracked config updates. CLI/env overrides still win over tracked paths:
+`--prices`, `--prices-dir`, `--subscriptions`, `TOKTRAIL_PRICES`,
+`TOKTRAIL_PRICES_DIR`, `TOKTRAIL_SUBSCRIPTIONS`.
+
 Use `toktrail refresh` for explicit/manual refresh operations. It reads enabled
 harnesses and source paths from `config.toml`:
 
@@ -356,6 +392,9 @@ live in `prices/<provider>.toml`. toktrail loads provider files first and
 `prices.toml` last, so manual rows override generated rows.
 
 You can generate provider files directly from provider docs text:
+
+When `[sync.git].track` includes `"provider-prices"`, default output moves to
+`<repo>/config/prices/<provider>.toml`.
 
 ```bash
 toktrail prices parse --provider openai --tier standard --input openai-pricing.jsx

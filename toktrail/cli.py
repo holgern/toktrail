@@ -85,9 +85,6 @@ from toktrail.paths import (
     new_copilot_otel_file_path,
     resolve_toktrail_config_path,
     resolve_toktrail_db_path,
-    resolve_toktrail_prices_dir,
-    resolve_toktrail_prices_path,
-    resolve_toktrail_subscriptions_path,
 )
 from toktrail.periods import resolve_time_range
 from toktrail.price_parser import (
@@ -6464,13 +6461,7 @@ def _config_cli_path(ctx: typer.Context) -> Path | None:
 
 
 def _resolve_prices_path(ctx: typer.Context) -> Path:
-    cli_value = _prices_cli_path(ctx)
-    if cli_value is not None:
-        return resolve_toktrail_prices_path(cli_value)
-    config_path = _config_cli_path(ctx)
-    if config_path is not None:
-        return config_path.with_name("prices.toml")
-    return resolve_toktrail_prices_path(None)
+    return _load_resolved_toktrail_config_for_paths(ctx).prices_path
 
 
 def _prices_cli_path(ctx: typer.Context) -> Path | None:
@@ -6483,13 +6474,7 @@ def _prices_cli_path(ctx: typer.Context) -> Path | None:
 
 
 def _resolve_prices_dir(ctx: typer.Context) -> Path:
-    cli_value = _prices_dir_cli_path(ctx)
-    if cli_value is not None:
-        return resolve_toktrail_prices_dir(cli_value)
-    config_path = _config_cli_path(ctx)
-    if config_path is not None:
-        return config_path.with_name("prices")
-    return resolve_toktrail_prices_dir(None)
+    return _load_resolved_toktrail_config_for_paths(ctx).prices_dir
 
 
 def _prices_dir_cli_path(ctx: typer.Context) -> Path | None:
@@ -6502,13 +6487,7 @@ def _prices_dir_cli_path(ctx: typer.Context) -> Path | None:
 
 
 def _resolve_subscriptions_path(ctx: typer.Context) -> Path:
-    cli_value = _subscriptions_cli_path(ctx)
-    if cli_value is not None:
-        return resolve_toktrail_subscriptions_path(cli_value)
-    config_path = _config_cli_path(ctx)
-    if config_path is not None:
-        return config_path.with_name("subscriptions.toml")
-    return resolve_toktrail_subscriptions_path(None)
+    return _load_resolved_toktrail_config_for_paths(ctx).subscriptions_path
 
 
 def _subscriptions_cli_path(ctx: typer.Context) -> Path | None:
@@ -6530,6 +6509,12 @@ def _load_resolved_costing_config_or_exit(ctx: typer.Context) -> LoadedCostingCo
         )
     except ValueError as exc:
         _exit_with_error(str(exc))
+
+
+def _load_resolved_toktrail_config_for_paths(
+    ctx: typer.Context,
+) -> LoadedToktrailConfig:
+    return _load_resolved_toktrail_config_or_exit(ctx)
 
 
 def _load_resolved_toktrail_config_or_exit(ctx: typer.Context) -> LoadedToktrailConfig:
