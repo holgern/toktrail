@@ -590,6 +590,12 @@ def test_usage_sessions_report_json_shape(tmp_path: Path) -> None:
     assert "area_sync_id" in session
     assert "area_path" in session
     assert "area_name" in session
+    assert "source_paths" in session
+    assert "cwd" in session
+    assert "source_dir" in session
+    assert "git_root" in session
+    assert "git_remote" in session
+    assert "session_title" in session
     assert "tokens" in session
     assert "costs" in session
     # costs serialized as strings

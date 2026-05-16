@@ -3,7 +3,11 @@ from __future__ import annotations
 from dataclasses import replace
 from pathlib import Path
 
-from toktrail.adapters.base import ScanResult, SourceSessionSummary
+from toktrail.adapters.base import (
+    ScanResult,
+    SourceSessionMetadata,
+    SourceSessionSummary,
+)
 from toktrail.adapters.codex import (
     CODEX_PARSER_VERSION,
     _make_fingerprint,
@@ -86,6 +90,9 @@ def _as_code_scan(scan: ScanResult) -> CodeScanResult:
         rows_seen=scan.rows_seen,
         rows_skipped=scan.rows_skipped,
         events=[_as_code_event(event) for event in scan.events],
+        session_metadata=tuple(
+            _as_code_session_metadata(metadata) for metadata in scan.session_metadata
+        ),
     )
 
 
@@ -96,6 +103,12 @@ def _as_code_event(event: UsageEvent) -> UsageEvent:
         global_dedup_key=f"{CODE_HARNESS}:{event.source_session_id}:{event.source_dedup_key}",
     )
     return replace(remapped, fingerprint_hash=_make_fingerprint(remapped))
+
+
+def _as_code_session_metadata(
+    metadata: SourceSessionMetadata,
+) -> SourceSessionMetadata:
+    return replace(metadata, harness=CODE_HARNESS)
 
 
 def _code_source_paths_by_session(source_path: Path) -> dict[str, list[Path]]:

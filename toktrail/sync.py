@@ -259,6 +259,11 @@ def import_state_archive(
                     imported,
                     run_id_map=run_id_map,
                 )
+                _metadata_inserted, _metadata_updated = _merge_source_session_metadata(
+                    target,
+                    imported,
+                    imported_at_ms=imported_at_ms,
+                )
                 (
                     usage_id_map,
                     usage_inserted,
@@ -352,6 +357,7 @@ def _read_counts(snapshot_path: Path) -> dict[str, int]:
         return {
             "runs": _query_count(conn, "runs"),
             "source_sessions": _query_count(conn, "source_sessions"),
+            "source_session_metadata": _query_count(conn, "source_session_metadata"),
             "usage_events": _query_count(conn, "usage_events"),
             "run_events": _query_count(conn, "run_events"),
             "areas": _query_count(conn, "areas"),
@@ -834,6 +840,183 @@ def _merge_source_sessions(
         source_id_map[int(row["id"])] = int(local["id"])
         updated += 1
     return source_id_map, inserted, updated
+
+
+def _merge_source_session_metadata(
+    target: sqlite3.Connection,
+    imported: sqlite3.Connection,
+    *,
+    imported_at_ms: int,
+) -> tuple[int, int]:
+    inserted = 0
+    updated = 0
+    rows = imported.execute(
+        """
+        SELECT
+            origin_machine_id,
+            harness,
+            source_session_id,
+            source_paths_json,
+            cwd,
+            source_dir,
+            git_root,
+            git_remote,
+            session_title,
+            started_ms,
+            last_seen_ms,
+            created_at_ms,
+            updated_at_ms,
+            imported_at_ms
+        FROM source_session_metadata
+        ORDER BY origin_machine_id, harness, source_session_id
+        """
+    ).fetchall()
+    for row in rows:
+        key = (
+            str(row["origin_machine_id"]),
+            str(row["harness"]),
+            str(row["source_session_id"]),
+        )
+        local = target.execute(
+            """
+            SELECT
+                source_paths_json,
+                cwd,
+                source_dir,
+                git_root,
+                git_remote,
+                session_title,
+                started_ms,
+                last_seen_ms,
+                created_at_ms,
+                updated_at_ms,
+                imported_at_ms
+            FROM source_session_metadata
+            WHERE origin_machine_id = ?
+              AND harness = ?
+              AND source_session_id = ?
+            """,
+            key,
+        ).fetchone()
+        imported_paths = _source_paths_json_to_set(row["source_paths_json"])
+        if local is None:
+            target.execute(
+                """
+                INSERT INTO source_session_metadata (
+                    origin_machine_id,
+                    harness,
+                    source_session_id,
+                    source_paths_json,
+                    cwd,
+                    source_dir,
+                    git_root,
+                    git_remote,
+                    session_title,
+                    started_ms,
+                    last_seen_ms,
+                    created_at_ms,
+                    updated_at_ms,
+                    imported_at_ms
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    *key,
+                    _encode_source_paths_json(imported_paths),
+                    _optional_str_value(row["cwd"]),
+                    _optional_str_value(row["source_dir"]),
+                    _optional_str_value(row["git_root"]),
+                    _optional_str_value(row["git_remote"]),
+                    _optional_str_value(row["session_title"]),
+                    _optional_int_value(row["started_ms"]),
+                    _optional_int_value(row["last_seen_ms"]),
+                    int(row["created_at_ms"]),
+                    int(row["updated_at_ms"]),
+                    _max_optional_int_value(
+                        _optional_int_value(row["imported_at_ms"]),
+                        imported_at_ms,
+                    ),
+                ),
+            )
+            inserted += 1
+            continue
+
+        local_paths = _source_paths_json_to_set(local["source_paths_json"])
+        merged_paths = local_paths | imported_paths
+        local_updated = int(local["updated_at_ms"])
+        imported_updated = int(row["updated_at_ms"])
+        imported_is_newer = imported_updated >= local_updated
+        merged_updated = max(local_updated, imported_updated)
+        merged_created = min(int(local["created_at_ms"]), int(row["created_at_ms"]))
+        merged_imported = _max_optional_int_value(
+            _max_optional_int_value(
+                _optional_int_value(local["imported_at_ms"]),
+                _optional_int_value(row["imported_at_ms"]),
+            ),
+            imported_at_ms,
+        )
+
+        target.execute(
+            """
+            UPDATE source_session_metadata
+            SET source_paths_json = ?,
+                cwd = ?,
+                source_dir = ?,
+                git_root = ?,
+                git_remote = ?,
+                session_title = ?,
+                started_ms = ?,
+                last_seen_ms = ?,
+                created_at_ms = ?,
+                updated_at_ms = ?,
+                imported_at_ms = ?
+            WHERE origin_machine_id = ?
+              AND harness = ?
+              AND source_session_id = ?
+            """,
+            (
+                _encode_source_paths_json(merged_paths),
+                _merge_nullable_scalar_text(
+                    local["cwd"],
+                    row["cwd"],
+                    imported_is_newer=imported_is_newer,
+                ),
+                _merge_nullable_scalar_text(
+                    local["source_dir"],
+                    row["source_dir"],
+                    imported_is_newer=imported_is_newer,
+                ),
+                _merge_nullable_scalar_text(
+                    local["git_root"],
+                    row["git_root"],
+                    imported_is_newer=imported_is_newer,
+                ),
+                _merge_nullable_scalar_text(
+                    local["git_remote"],
+                    row["git_remote"],
+                    imported_is_newer=imported_is_newer,
+                ),
+                _merge_nullable_scalar_text(
+                    local["session_title"],
+                    row["session_title"],
+                    imported_is_newer=imported_is_newer,
+                ),
+                _min_optional_int_value(
+                    _optional_int_value(local["started_ms"]),
+                    _optional_int_value(row["started_ms"]),
+                ),
+                _max_optional_int_value(
+                    _optional_int_value(local["last_seen_ms"]),
+                    _optional_int_value(row["last_seen_ms"]),
+                ),
+                merged_created,
+                merged_updated,
+                merged_imported,
+                *key,
+            ),
+        )
+        updated += 1
+    return inserted, updated
 
 
 def _merge_areas(
@@ -1498,6 +1681,53 @@ def _optional_int_value(value: object) -> int | None:
         msg = f"Expected nullable integer value, got {value!r}"
         raise ValueError(msg)
     return value
+
+
+def _optional_str_value(value: object) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        msg = f"Expected nullable string value, got {value!r}"
+        raise ValueError(msg)
+    stripped = value.strip()
+    return stripped or None
+
+
+def _source_paths_json_to_set(value: object) -> set[str]:
+    if not isinstance(value, str):
+        return set()
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return set()
+    if not isinstance(parsed, list):
+        return set()
+    normalized: set[str] = set()
+    for item in parsed:
+        if isinstance(item, str):
+            stripped = item.strip()
+            if stripped:
+                normalized.add(stripped)
+    return normalized
+
+
+def _encode_source_paths_json(values: set[str]) -> str:
+    return json.dumps(sorted(values), separators=(",", ":"))
+
+
+def _merge_nullable_scalar_text(
+    local_value: object,
+    imported_value: object,
+    *,
+    imported_is_newer: bool,
+) -> str | None:
+    imported_text = _optional_str_value(imported_value)
+    local_text = _optional_str_value(local_value)
+    if imported_is_newer and imported_text is not None:
+        return imported_text
+    if local_text is not None:
+        return local_text
+    return imported_text
 
 
 def _scope_json_has_values(value: object) -> bool:

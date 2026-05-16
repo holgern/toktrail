@@ -4,6 +4,7 @@ import json
 import socket
 import sqlite3
 import uuid
+from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
 from decimal import Decimal
 from hashlib import sha256
@@ -11,7 +12,12 @@ from pathlib import Path
 from time import time
 from typing import Any, cast
 
-from toktrail.adapters.base import ImportSourceState
+from toktrail.adapters.base import (
+    ImportSourceState,
+)
+from toktrail.adapters.base import (
+    SourceSessionMetadata as AdapterSourceSessionMetadata,
+)
 from toktrail.config import (
     CostingConfig,
     MachineConfig,
@@ -67,7 +73,7 @@ from toktrail.reporting import (
     UsageSessionsReport,
 )
 
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 _PERIOD_SORT: dict[str, int] = {
     "5h": 0,
     "daily": 1,
@@ -129,6 +135,21 @@ class AreaSessionAssignment:
     assigned_at_ms: int
     updated_at_ms: int
     imported_at_ms: int | None = None
+
+
+@dataclass(frozen=True)
+class SourceSessionMetadata:
+    origin_machine_id: str
+    harness: str
+    source_session_id: str
+    source_paths: tuple[str, ...] = ()
+    cwd: str | None = None
+    source_dir: str | None = None
+    git_root: str | None = None
+    git_remote: str | None = None
+    session_title: str | None = None
+    started_ms: int | None = None
+    last_seen_ms: int | None = None
 
 
 @dataclass(frozen=True)
@@ -299,6 +320,9 @@ def migrate(conn: sqlite3.Connection) -> None:
     if current_version == 12:
         _migrate_v12_to_v13(conn)
         current_version = 13
+    if current_version == 13:
+        _migrate_v13_to_v14(conn)
+        current_version = 14
 
     _ensure_machine_id(conn)
     conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
@@ -585,6 +609,30 @@ def _create_schema(conn: sqlite3.Connection) -> None:
 
         CREATE UNIQUE INDEX IF NOT EXISTS idx_source_sessions_sync_id
         ON source_sessions(sync_id);
+
+        CREATE TABLE IF NOT EXISTS source_session_metadata (
+            origin_machine_id TEXT NOT NULL,
+            harness TEXT NOT NULL,
+            source_session_id TEXT NOT NULL,
+            source_paths_json TEXT NOT NULL DEFAULT '[]',
+            cwd TEXT,
+            source_dir TEXT,
+            git_root TEXT,
+            git_remote TEXT,
+            session_title TEXT,
+            started_ms INTEGER,
+            last_seen_ms INTEGER,
+            created_at_ms INTEGER NOT NULL,
+            updated_at_ms INTEGER NOT NULL,
+            imported_at_ms INTEGER,
+            PRIMARY KEY (origin_machine_id, harness, source_session_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_source_session_metadata_harness_session
+        ON source_session_metadata(harness, source_session_id);
+
+        CREATE INDEX IF NOT EXISTS idx_source_session_metadata_source_dir
+        ON source_session_metadata(source_dir);
 
         CREATE TABLE IF NOT EXISTS usage_events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1162,6 +1210,42 @@ def _create_area_session_assignments_table(conn: sqlite3.Connection) -> None:
         """
         CREATE INDEX IF NOT EXISTS idx_area_session_area
         ON area_session_assignments(area_id)
+        """
+    )
+
+
+def _migrate_v13_to_v14(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS source_session_metadata (
+            origin_machine_id TEXT NOT NULL,
+            harness TEXT NOT NULL,
+            source_session_id TEXT NOT NULL,
+            source_paths_json TEXT NOT NULL DEFAULT '[]',
+            cwd TEXT,
+            source_dir TEXT,
+            git_root TEXT,
+            git_remote TEXT,
+            session_title TEXT,
+            started_ms INTEGER,
+            last_seen_ms INTEGER,
+            created_at_ms INTEGER NOT NULL,
+            updated_at_ms INTEGER NOT NULL,
+            imported_at_ms INTEGER,
+            PRIMARY KEY (origin_machine_id, harness, source_session_id)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_source_session_metadata_harness_session
+        ON source_session_metadata(harness, source_session_id)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_source_session_metadata_source_dir
+        ON source_session_metadata(source_dir)
         """
     )
 
@@ -2617,6 +2701,372 @@ def _source_session_has_usage_events(
         (origin_machine_id, harness, source_session_id),
     ).fetchone()
     return row is not None
+
+
+def upsert_source_session_metadata(
+    conn: sqlite3.Connection,
+    *,
+    origin_machine_id: str,
+    harness: str,
+    source_session_id: str,
+    source_paths: Iterable[str] = (),
+    cwd: str | None = None,
+    source_dir: str | None = None,
+    git_root: str | None = None,
+    git_remote: str | None = None,
+    session_title: str | None = None,
+    started_ms: int | None = None,
+    last_seen_ms: int | None = None,
+    imported_at_ms: int | None = None,
+) -> None:
+    now_ms = _now_ms()
+    normalized_paths = _normalize_source_paths(source_paths)
+    existing = conn.execute(
+        """
+        SELECT
+            source_paths_json,
+            cwd,
+            source_dir,
+            git_root,
+            git_remote,
+            session_title,
+            started_ms,
+            last_seen_ms,
+            created_at_ms,
+            imported_at_ms
+        FROM source_session_metadata
+        WHERE origin_machine_id = ?
+          AND harness = ?
+          AND source_session_id = ?
+        """,
+        (origin_machine_id, harness, source_session_id),
+    ).fetchone()
+
+    if existing is None:
+        conn.execute(
+            """
+            INSERT INTO source_session_metadata (
+                origin_machine_id,
+                harness,
+                source_session_id,
+                source_paths_json,
+                cwd,
+                source_dir,
+                git_root,
+                git_remote,
+                session_title,
+                started_ms,
+                last_seen_ms,
+                created_at_ms,
+                updated_at_ms,
+                imported_at_ms
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                origin_machine_id,
+                harness,
+                source_session_id,
+                json.dumps(list(normalized_paths), separators=(",", ":")),
+                cwd,
+                source_dir,
+                git_root,
+                git_remote,
+                session_title,
+                started_ms,
+                last_seen_ms,
+                now_ms,
+                now_ms,
+                imported_at_ms,
+            ),
+        )
+        return
+
+    existing_paths = _source_paths_from_json(existing["source_paths_json"])
+    merged_paths = tuple(sorted(set(existing_paths) | set(normalized_paths)))
+    merged_started = _min_optional_int(
+        _optional_int(existing["started_ms"]),
+        started_ms,
+    )
+    merged_last = _max_optional_int(
+        _optional_int(existing["last_seen_ms"]),
+        last_seen_ms,
+    )
+    merged_imported_at = _max_optional_int(
+        _optional_int(existing["imported_at_ms"]),
+        imported_at_ms,
+    )
+    conn.execute(
+        """
+        UPDATE source_session_metadata
+        SET source_paths_json = ?,
+            cwd = ?,
+            source_dir = ?,
+            git_root = ?,
+            git_remote = ?,
+            session_title = ?,
+            started_ms = ?,
+            last_seen_ms = ?,
+            updated_at_ms = ?,
+            imported_at_ms = ?
+        WHERE origin_machine_id = ?
+          AND harness = ?
+          AND source_session_id = ?
+        """,
+        (
+            json.dumps(list(merged_paths), separators=(",", ":")),
+            cwd or _optional_str(existing["cwd"]),
+            source_dir or _optional_str(existing["source_dir"]),
+            git_root or _optional_str(existing["git_root"]),
+            git_remote or _optional_str(existing["git_remote"]),
+            session_title or _optional_str(existing["session_title"]),
+            merged_started,
+            merged_last,
+            now_ms,
+            merged_imported_at,
+            origin_machine_id,
+            harness,
+            source_session_id,
+        ),
+    )
+
+
+def persist_source_session_metadata(
+    conn: sqlite3.Connection,
+    *,
+    source_path: Path,
+    scan_session_metadata: Iterable[AdapterSourceSessionMetadata],
+    events: Iterable[UsageEvent],
+    origin_machine_id: str | None = None,
+) -> None:
+    event_list = list(events)
+    local_machine_id = get_local_machine_id(conn)
+    target_machine_id = origin_machine_id or local_machine_id
+    imported_at_ms = _now_ms()
+    metadata_by_key: dict[tuple[str, str], AdapterSourceSessionMetadata] = {}
+    for metadata in scan_session_metadata:
+        key = (metadata.harness, metadata.source_session_id)
+        metadata_by_key[key] = _merge_adapter_source_session_metadata(
+            metadata_by_key.get(key),
+            metadata,
+        )
+    session_keys = set(metadata_by_key.keys())
+    session_keys.update(
+        (event.harness, event.source_session_id) for event in event_list
+    )
+    with conn:
+        for harness, source_session_id in sorted(session_keys):
+            metadata = metadata_by_key.get((harness, source_session_id))
+            session_events = [
+                event
+                for event in event_list
+                if event.harness == harness
+                and event.source_session_id == source_session_id
+            ]
+            source_paths = _derive_source_paths_for_session(
+                metadata=metadata,
+                events=session_events,
+                fallback_source_path=source_path,
+            )
+            started_ms = metadata.started_ms if metadata is not None else None
+            if started_ms is None:
+                started_ms = min(
+                    (event.created_ms for event in session_events),
+                    default=None,
+                )
+            last_seen_ms = metadata.last_seen_ms if metadata is not None else None
+            if last_seen_ms is None:
+                last_seen_ms = max(
+                    (event.created_ms for event in session_events),
+                    default=None,
+                )
+            cwd = metadata.cwd if metadata is not None else None
+            source_dir = _derive_source_dir(
+                metadata=metadata,
+                source_paths=source_paths,
+                fallback_source_path=source_path,
+            )
+            upsert_source_session_metadata(
+                conn,
+                origin_machine_id=target_machine_id,
+                harness=harness,
+                source_session_id=source_session_id,
+                source_paths=source_paths,
+                cwd=cwd,
+                source_dir=source_dir,
+                git_root=metadata.git_root if metadata is not None else None,
+                git_remote=metadata.git_remote if metadata is not None else None,
+                session_title=metadata.session_title if metadata is not None else None,
+                started_ms=started_ms,
+                last_seen_ms=last_seen_ms,
+                imported_at_ms=imported_at_ms,
+            )
+
+
+def list_source_session_metadata(
+    conn: sqlite3.Connection,
+) -> tuple[SourceSessionMetadata, ...]:
+    rows = conn.execute(
+        """
+        SELECT
+            origin_machine_id,
+            harness,
+            source_session_id,
+            source_paths_json,
+            cwd,
+            source_dir,
+            git_root,
+            git_remote,
+            session_title,
+            started_ms,
+            last_seen_ms
+        FROM source_session_metadata
+        """
+    ).fetchall()
+    return tuple(
+        SourceSessionMetadata(
+            origin_machine_id=str(row["origin_machine_id"]),
+            harness=str(row["harness"]),
+            source_session_id=str(row["source_session_id"]),
+            source_paths=_source_paths_from_json(row["source_paths_json"]),
+            cwd=_optional_str(row["cwd"]),
+            source_dir=_optional_str(row["source_dir"]),
+            git_root=_optional_str(row["git_root"]),
+            git_remote=_optional_str(row["git_remote"]),
+            session_title=_optional_str(row["session_title"]),
+            started_ms=_optional_int(row["started_ms"]),
+            last_seen_ms=_optional_int(row["last_seen_ms"]),
+        )
+        for row in rows
+    )
+
+
+def _merge_adapter_source_session_metadata(
+    current: AdapterSourceSessionMetadata | None,
+    incoming: AdapterSourceSessionMetadata,
+) -> AdapterSourceSessionMetadata:
+    if current is None:
+        return incoming
+    return AdapterSourceSessionMetadata(
+        harness=incoming.harness,
+        source_session_id=incoming.source_session_id,
+        source_paths=tuple(
+            sorted(set(current.source_paths) | set(incoming.source_paths))
+        ),
+        cwd=current.cwd or incoming.cwd,
+        source_dir=current.source_dir or incoming.source_dir,
+        git_root=current.git_root or incoming.git_root,
+        git_remote=current.git_remote or incoming.git_remote,
+        session_title=current.session_title or incoming.session_title,
+        started_ms=_min_optional_int(current.started_ms, incoming.started_ms),
+        last_seen_ms=_max_optional_int(current.last_seen_ms, incoming.last_seen_ms),
+    )
+
+
+def _normalize_source_paths(values: Iterable[str]) -> tuple[str, ...]:
+    normalized: list[str] = []
+    for value in values:
+        candidate = value.strip()
+        if not candidate:
+            continue
+        normalized.append(candidate)
+    return tuple(sorted(set(normalized)))
+
+
+def _source_paths_from_json(value: object) -> tuple[str, ...]:
+    if not isinstance(value, str):
+        return ()
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return ()
+    if not isinstance(parsed, list):
+        return ()
+    normalized: list[str] = []
+    for item in parsed:
+        if isinstance(item, str):
+            candidate = item.strip()
+            if candidate:
+                normalized.append(candidate)
+    return tuple(sorted(set(normalized)))
+
+
+def _derive_source_paths_for_session(
+    *,
+    metadata: AdapterSourceSessionMetadata | None,
+    events: Iterable[UsageEvent],
+    fallback_source_path: Path,
+) -> tuple[str, ...]:
+    if metadata is not None and metadata.source_paths:
+        return _normalize_source_paths(metadata.source_paths)
+    derived: set[str] = set()
+    for event in events:
+        parsed = _source_path_from_row_id(event.source_row_id)
+        if parsed is not None:
+            derived.add(parsed)
+    if derived:
+        return tuple(sorted(derived))
+    return (str(fallback_source_path),)
+
+
+def _derive_source_dir(
+    *,
+    metadata: AdapterSourceSessionMetadata | None,
+    source_paths: tuple[str, ...],
+    fallback_source_path: Path,
+) -> str:
+    if metadata is not None:
+        if metadata.cwd:
+            return metadata.cwd
+        if metadata.source_dir:
+            return metadata.source_dir
+        if metadata.git_root:
+            return metadata.git_root
+    if len(source_paths) == 1:
+        parent = _source_parent_path(source_paths[0])
+        if parent is not None:
+            return parent
+    if fallback_source_path.is_file():
+        return str(fallback_source_path.parent)
+    return str(fallback_source_path)
+
+
+def _source_parent_path(value: str) -> str | None:
+    stripped = value.strip()
+    if not stripped:
+        return None
+    if "/" not in stripped and "\\" not in stripped:
+        return None
+    normalized = stripped.replace("\\", "/")
+    parts = normalized.rsplit("/", 1)
+    if len(parts) != 2:
+        return None
+    parent = parts[0].strip()
+    return parent or None
+
+
+def _source_path_from_row_id(value: str | None) -> str | None:
+    if value is None:
+        return None
+    stripped = value.strip()
+    if not stripped:
+        return None
+    if ":" in stripped:
+        prefix, suffix = stripped.rsplit(":", 1)
+        if suffix.isdigit() and _looks_like_path(prefix):
+            return prefix
+    if _looks_like_path(stripped):
+        return stripped
+    return None
+
+
+def _looks_like_path(value: str) -> bool:
+    candidate = value.strip()
+    if not candidate:
+        return False
+    if candidate.startswith("~"):
+        return True
+    return "/" in candidate or "\\" in candidate
 
 
 def _areas_by_id(conn: sqlite3.Connection) -> dict[int, Area]:
@@ -4430,6 +4880,42 @@ def summarize_usage_sessions(
         )
         for row in session_area_rows
     }
+    metadata_lookup = {
+        (row.origin_machine_id, row.harness, row.source_session_id): row
+        for row in list_source_session_metadata(conn)
+    }
+    where = _usage_where_parts(usage_filters, alias="ue")
+    source_query = """
+        SELECT
+            ue.origin_machine_id,
+            ue.harness,
+            ue.source_session_id,
+            ue.source_row_id
+        """ + where.source_clause
+    if where.where_clause:
+        source_query += where.where_clause + " AND ue.source_row_id IS NOT NULL"
+    else:
+        source_query += " WHERE ue.source_row_id IS NOT NULL"
+    source_rows = conn.execute(
+        source_query,
+        where.params,
+    ).fetchall()
+    derived_source_paths: dict[tuple[str, str, str], set[str]] = {}
+    for source_row in source_rows:
+        origin = source_row["origin_machine_id"]
+        if origin is None:
+            continue
+        key = (
+            str(origin),
+            str(source_row["harness"]),
+            str(source_row["source_session_id"]),
+        )
+        parsed_path = _source_path_from_row_id(
+            _optional_str(source_row["source_row_id"])
+        )
+        if parsed_path is None:
+            continue
+        derived_source_paths.setdefault(key, set()).add(parsed_path)
 
     # Per-session aggregation keyed by (origin_machine_id, harness, source_session_id).
     session_atoms: dict[tuple[str, str, str], list[_SessionAtom]] = {}
@@ -4503,12 +4989,37 @@ def summarize_usage_sessions(
         area_sync_id: str | None = None
         area_path: str | None = None
         area_name: str | None = None
+        source_paths: tuple[str, ...] = ()
+        cwd: str | None = None
+        source_dir: str | None = None
+        git_root: str | None = None
+        git_remote: str | None = None
+        session_title: str | None = None
         if origin_machine_id is not None:
             area_entry = session_area_lookup.get(
                 (origin_machine_id, harness, source_session_id)
             )
             if area_entry is not None:
                 area_id, area_sync_id, area_path, area_name = area_entry
+            metadata_entry = metadata_lookup.get(
+                (origin_machine_id, harness, source_session_id)
+            )
+            if metadata_entry is not None:
+                source_paths = metadata_entry.source_paths
+                cwd = metadata_entry.cwd
+                source_dir = metadata_entry.source_dir
+                git_root = metadata_entry.git_root
+                git_remote = metadata_entry.git_remote
+                session_title = metadata_entry.session_title
+            else:
+                source_paths = tuple(
+                    sorted(
+                        derived_source_paths.get(
+                            (origin_machine_id, harness, source_session_id),
+                            set(),
+                        )
+                    )
+                )
 
         for sa in atoms:
             tokens = _add_tokens(tokens, sa.atom.tokens)
@@ -4558,6 +5069,12 @@ def summarize_usage_sessions(
                 costs=costs,
                 models=tuple(sorted(models)),
                 providers=tuple(sorted(providers)),
+                source_paths=source_paths,
+                cwd=cwd,
+                source_dir=source_dir,
+                git_root=git_root,
+                git_remote=git_remote,
+                session_title=session_title,
                 by_model=tuple(by_model_list),
             )
         )
@@ -5151,6 +5668,16 @@ def _optional_int(value: object) -> int | None:
     if value is None:
         return None
     return _required_int(value)
+
+
+def _optional_str(value: object) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        msg = f"Expected str value, got {value!r}"
+        raise TypeError(msg)
+    stripped = value.strip()
+    return stripped or None
 
 
 def _required_float(value: object) -> float:

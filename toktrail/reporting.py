@@ -723,6 +723,12 @@ class UsageSessionRow:
     costs: CostTotals
     models: tuple[str, ...] = ()
     providers: tuple[str, ...] = ()
+    source_paths: tuple[str, ...] = ()
+    cwd: str | None = None
+    source_dir: str | None = None
+    git_root: str | None = None
+    git_remote: str | None = None
+    session_title: str | None = None
     by_model: tuple[ModelSummaryRow, ...] = ()
 
     def as_dict(self) -> dict[str, object]:
@@ -742,6 +748,12 @@ class UsageSessionRow:
             "message_count": self.message_count,
             "providers": list(self.providers),
             "models": list(self.models),
+            "source_paths": list(self.source_paths),
+            "cwd": self.cwd,
+            "source_dir": self.source_dir,
+            "git_root": self.git_root,
+            "git_remote": self.git_remote,
+            "session_title": self.session_title,
             "tokens": self.tokens.as_dict(),
             "costs": self.costs.as_dict(),
         }

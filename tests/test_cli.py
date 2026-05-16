@@ -842,6 +842,41 @@ def create_codex_session_file(path: Path) -> None:
     )
 
 
+def create_codex_session_file_with_cwd(path: Path, cwd: str) -> None:
+    future_iso = (
+        datetime.fromtimestamp(_future_ms() / 1000, tz=timezone.utc)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+    write_jsonl_rows(
+        path,
+        [
+            {
+                "type": "turn_context",
+                "payload": {
+                    "model": "gpt-5.2-codex",
+                    "working_directory": cwd,
+                },
+            },
+            {
+                "timestamp": future_iso,
+                "type": "event_msg",
+                "payload": {
+                    "type": "token_count",
+                    "info": {
+                        "last_token_usage": {
+                            "input_tokens": 120,
+                            "cached_input_tokens": 20,
+                            "output_tokens": 30,
+                            "reasoning_output_tokens": 5,
+                        },
+                    },
+                },
+            },
+        ],
+    )
+
+
 def create_pi_session_file(path: Path) -> None:
     future = datetime.fromtimestamp(_future_ms() / 1000, tz=timezone.utc)
     session_ts = future.isoformat().replace("+00:00", "Z")
@@ -6570,6 +6605,8 @@ def test_cli_usage_sessions_human_output(tmp_path) -> None:
     )
     assert result.exit_code == 0, result.output
     assert "toktrail usage sessions" in result.output
+    assert "Area:" in result.output
+    assert "Source:" in result.output
     assert "Token usage:" in result.output
     assert "Costs:" in result.output
 
@@ -6715,6 +6752,35 @@ def test_cli_usage_sessions_filters_harness_and_source_session(
     )
     assert result.exit_code == 0, result.output
     assert "ses-1" in result.output
+
+
+def test_cli_usage_sessions_human_output_shows_cwd_when_available(tmp_path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    source_file = tmp_path / "codex" / "session.jsonl"
+    create_codex_session_file_with_cwd(source_file, "/tmp/project")
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "refresh",
+            "--harness",
+            "codex",
+            "--source",
+            str(source_file),
+        ],
+    )
+
+    result = runner.invoke(
+        app,
+        ["--db", str(state_db), "usage", "sessions", "--no-refresh"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "CWD:  /tmp/project" in result.output
 
 
 def test_cli_usage_sessions_no_refresh_uses_existing_state_only(

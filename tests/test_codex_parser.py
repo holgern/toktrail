@@ -132,6 +132,36 @@ def test_model_info_slug_from_turn_context(tmp_path) -> None:
     assert event.model_id == "o3-pro"
 
 
+def test_scan_codex_file_exposes_turn_context_cwd(tmp_path) -> None:
+    session_file = write_codex_rows(
+        tmp_path / "cwd.jsonl",
+        [
+            {
+                "type": "turn_context",
+                "payload": {
+                    "working_directory": "/tmp/project",
+                    "git_root": "/tmp/project",
+                    "git_remote": "git@github.com:company/project.git",
+                    "session_title": "Planning",
+                },
+            },
+            _token_count_row(last={"input_tokens": 10}),
+        ],
+    )
+
+    scan = scan_codex_file(session_file)
+
+    assert len(scan.session_metadata) == 1
+    metadata = scan.session_metadata[0]
+    assert metadata.harness == "codex"
+    assert metadata.source_session_id == session_file.stem
+    assert metadata.cwd == "/tmp/project"
+    assert metadata.git_root == "/tmp/project"
+    assert metadata.git_remote == "git@github.com:company/project.git"
+    assert metadata.session_title == "Planning"
+    assert metadata.source_paths == (str(session_file),)
+
+
 def test_extract_model_skips_empty_slug_falls_through_to_model(tmp_path) -> None:
     session_file = write_codex_rows(
         tmp_path / "turn-context-empty.jsonl",

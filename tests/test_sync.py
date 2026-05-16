@@ -26,6 +26,7 @@ from toktrail.db import (
     set_active_area,
     summarize_tracking_session,
     summarize_usage,
+    upsert_source_session_metadata,
 )
 from toktrail.models import RunScope, TokenBreakdown, UsageEvent
 from toktrail.reporting import UsageReportFilter
@@ -421,6 +422,64 @@ def test_sync_import_rejects_unsafe_archive_paths(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="Unsafe archive member path"):
         import_state_archive(db_path, archive_path)
+
+
+def test_sync_preserves_source_session_metadata(tmp_path: Path) -> None:
+    db_a = tmp_path / "state-a.db"
+    db_b = tmp_path / "state-b.db"
+    archive = tmp_path / "a.tar.gz"
+
+    conn = connect(db_a)
+    try:
+        migrate(conn)
+        machine_id = get_local_machine_id(conn)
+        upsert_source_session_metadata(
+            conn,
+            origin_machine_id=machine_id,
+            harness="codex",
+            source_session_id="sync-meta",
+            source_paths=("/tmp/codex/sync-meta.jsonl",),
+            cwd="/work/project",
+            source_dir="/work/project",
+            git_root="/work/project",
+            git_remote="git@github.com:company/project.git",
+            session_title="Sync Metadata",
+            started_ms=1_000,
+            last_seen_ms=2_000,
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    export_state_archive(db_a, archive)
+    import_state_archive(db_b, archive)
+
+    imported = connect(db_b)
+    try:
+        migrate(imported)
+        row = imported.execute(
+            """
+            SELECT
+                source_paths_json,
+                cwd,
+                source_dir,
+                git_root,
+                git_remote,
+                session_title
+            FROM source_session_metadata
+            WHERE harness = 'codex' AND source_session_id = 'sync-meta'
+            """
+        ).fetchone()
+    finally:
+        imported.close()
+
+    assert row is not None
+    assert json.loads(str(row["source_paths_json"])) == ["/tmp/codex/sync-meta.jsonl"]
+    assert row["cwd"] == "/work/project"
+    assert row["source_dir"] == "/work/project"
+    assert row["git_root"] == "/work/project"
+    assert row["git_remote"] == "git@github.com:company/project.git"
+    assert row["session_title"] == "Sync Metadata"
 
 
 def test_sync_preserves_area_tree_and_session_assignments(tmp_path: Path) -> None:

@@ -9,7 +9,11 @@ from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
-from toktrail.adapters.base import ScanResult, SourceSessionSummary
+from toktrail.adapters.base import (
+    ScanResult,
+    SourceSessionMetadata,
+    SourceSessionSummary,
+)
 from toktrail.adapters.summary import summarize_events_by_source_session
 from toktrail.config import CostingConfig, normalize_identity
 from toktrail.models import TokenBreakdown, UsageEvent, normalize_thinking_level
@@ -29,6 +33,11 @@ class _SessionHeader:
     started_ms: int | None = None
     provider_id: str | None = None
     model_id: str | None = None
+    cwd: str | None = None
+    source_dir: str | None = None
+    git_root: str | None = None
+    git_remote: str | None = None
+    session_title: str | None = None
 
 
 def scan_harnessbridge_path(
@@ -64,6 +73,7 @@ def scan_harnessbridge_path(
     rows_seen = 0
     rows_skipped = 0
     events: list[UsageEvent] = []
+    metadata_by_key: dict[tuple[str, str], SourceSessionMetadata] = {}
     for file_path in file_paths:
         scan = scan_harnessbridge_file(
             file_path,
@@ -75,6 +85,12 @@ def scan_harnessbridge_path(
         rows_seen += scan.rows_seen
         rows_skipped += scan.rows_skipped
         events.extend(scan.events)
+        for metadata in scan.session_metadata:
+            key = (metadata.harness, metadata.source_session_id)
+            metadata_by_key[key] = _merge_session_metadata(
+                metadata_by_key.get(key),
+                metadata,
+            )
 
     return HarnessbridgeScanResult(
         source_path=resolved_path,
@@ -82,6 +98,7 @@ def scan_harnessbridge_path(
         rows_seen=rows_seen,
         rows_skipped=rows_skipped,
         events=events,
+        session_metadata=tuple(metadata_by_key.values()),
     )
 
 
@@ -108,6 +125,7 @@ def scan_harnessbridge_file(
     rows_seen = 0
     rows_skipped = 0
     events: list[UsageEvent] = []
+    metadata_by_key: dict[tuple[str, str], SourceSessionMetadata] = {}
 
     try:
         with resolved_path.open("r", encoding="utf-8", errors="replace") as handle:
@@ -152,6 +170,15 @@ def scan_harnessbridge_file(
                     rows_skipped += 1
                     continue
                 events.append(event)
+                key = (event.harness, event.source_session_id)
+                metadata_by_key[key] = _merge_session_metadata(
+                    metadata_by_key.get(key),
+                    _build_session_metadata_from_event(
+                        file_path=resolved_path,
+                        header=header,
+                        event=event,
+                    ),
+                )
     except OSError:
         return HarnessbridgeScanResult(
             source_path=resolved_path,
@@ -161,12 +188,33 @@ def scan_harnessbridge_file(
             events=[],
         )
 
+    if (
+        not metadata_by_key
+        and header.session_id is not None
+        and (source_session_id is None or header.session_id == source_session_id)
+    ):
+        fallback_harness = header.harness or HARNESSBRIDGE_SOURCE
+        key = (fallback_harness, header.session_id)
+        metadata_by_key[key] = SourceSessionMetadata(
+            harness=fallback_harness,
+            source_session_id=header.session_id,
+            source_paths=(str(resolved_path),),
+            cwd=header.cwd,
+            source_dir=header.source_dir or header.cwd or str(resolved_path.parent),
+            git_root=header.git_root,
+            git_remote=header.git_remote,
+            session_title=header.session_title,
+            started_ms=header.started_ms,
+            last_seen_ms=header.started_ms,
+        )
+
     return HarnessbridgeScanResult(
         source_path=resolved_path,
         files_seen=1,
         rows_seen=rows_seen,
         rows_skipped=rows_skipped,
         events=events,
+        session_metadata=tuple(metadata_by_key.values()),
     )
 
 
@@ -196,6 +244,20 @@ def _merge_session_header(
     row: dict[str, object],
     previous: _SessionHeader,
 ) -> _SessionHeader:
+    cwd = _first_non_empty_str(
+        row,
+        "cwd",
+        "working_directory",
+        "current_working_directory",
+    )
+    source_dir = _first_non_empty_str(
+        row,
+        "source_dir",
+        "directory",
+        "project_dir",
+        "workspace_dir",
+    )
+    git_remote = _first_non_empty_str(row, "git_remote", "remote_url")
     return _SessionHeader(
         session_id=_as_str(row.get("id")) or previous.session_id,
         harness=_normalized_identity(row.get("harness")) or previous.harness,
@@ -212,6 +274,15 @@ def _merge_session_header(
             _as_str(row.get("model_id"))
             or _as_str(row.get("model"))
             or previous.model_id
+        ),
+        cwd=cwd or previous.cwd,
+        source_dir=source_dir or previous.source_dir,
+        git_root=_first_non_empty_str(row, "git_root", "repository_root", "repo_root")
+        or previous.git_root,
+        git_remote=git_remote or previous.git_remote,
+        session_title=(
+            _first_non_empty_str(row, "session_title", "title", "name")
+            or previous.session_title
         ),
     )
 
@@ -327,6 +398,53 @@ def _source_paths_by_session(source_path: Path) -> dict[str, list[Path]]:
     return grouped
 
 
+def _build_session_metadata_from_event(
+    *,
+    file_path: Path,
+    header: _SessionHeader,
+    event: UsageEvent,
+) -> SourceSessionMetadata:
+    source_dir = (
+        header.source_dir
+        or header.cwd
+        or header.git_root
+        or str(file_path.parent)
+    )
+    return SourceSessionMetadata(
+        harness=event.harness,
+        source_session_id=event.source_session_id,
+        source_paths=(str(file_path),),
+        cwd=header.cwd,
+        source_dir=source_dir,
+        git_root=header.git_root,
+        git_remote=header.git_remote,
+        session_title=header.session_title,
+        started_ms=header.started_ms,
+        last_seen_ms=event.created_ms,
+    )
+
+
+def _merge_session_metadata(
+    current: SourceSessionMetadata | None,
+    incoming: SourceSessionMetadata,
+) -> SourceSessionMetadata:
+    if current is None:
+        return incoming
+    merged_paths = tuple(sorted(set(current.source_paths) | set(incoming.source_paths)))
+    return SourceSessionMetadata(
+        harness=incoming.harness,
+        source_session_id=incoming.source_session_id,
+        source_paths=merged_paths,
+        cwd=current.cwd or incoming.cwd,
+        source_dir=current.source_dir or incoming.source_dir,
+        git_root=current.git_root or incoming.git_root,
+        git_remote=current.git_remote or incoming.git_remote,
+        session_title=current.session_title or incoming.session_title,
+        started_ms=_min_optional_int(current.started_ms, incoming.started_ms),
+        last_seen_ms=_max_optional_int(current.last_seen_ms, incoming.last_seen_ms),
+    )
+
+
 def _global_dedup_key(
     value: object,
     *,
@@ -419,6 +537,14 @@ def _as_str(value: object) -> str | None:
     return stripped or None
 
 
+def _first_non_empty_str(mapping: Mapping[str, object], *keys: str) -> str | None:
+    for key in keys:
+        value = _as_str(mapping.get(key))
+        if value is not None:
+            return value
+    return None
+
+
 def _normalized_identity(value: object) -> str | None:
     raw = _as_str(value)
     if raw is None:
@@ -484,6 +610,22 @@ def _timestamp_ms_from_value(value: object) -> int | None:
     if abs(numeric) >= 10_000_000_000:
         return max(int(numeric), 0)
     return max(int(numeric * 1000), 0)
+
+
+def _min_optional_int(left: int | None, right: int | None) -> int | None:
+    if left is None:
+        return right
+    if right is None:
+        return left
+    return min(left, right)
+
+
+def _max_optional_int(left: int | None, right: int | None) -> int | None:
+    if left is None:
+        return right
+    if right is None:
+        return left
+    return max(left, right)
 
 
 def _file_modified_timestamp_ms(path: Path) -> int:

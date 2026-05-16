@@ -19,6 +19,7 @@ from toktrail.db import (
     insert_usage_events,
     migrate,
     summarize_usage,
+    upsert_source_session_metadata,
 )
 from toktrail.git_sync import (
     ensure_git_repo,
@@ -387,6 +388,82 @@ def test_git_sync_round_trip_preserves_areas(tmp_path: Path) -> None:
     assert assignment["sync_id"] == expected_sync_id
     assert usage is not None
     assert usage["path"] == "work/odoo"
+
+
+def test_git_sync_round_trip_preserves_source_session_metadata(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    db_a = tmp_path / "a.db"
+    db_b = tmp_path / "b.db"
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("config_version = 1\n", encoding="utf-8")
+
+    ensure_git_repo(repo, remote_url=None, branch="main")
+    _configure_git_identity(repo)
+    _seed_db(db_a, event=_event("meta", created_ms=1_777_801_240_000))
+
+    conn = connect(db_a)
+    try:
+        migrate(conn)
+        machine_id = get_local_machine_id(conn)
+        upsert_source_session_metadata(
+            conn,
+            origin_machine_id=machine_id,
+            harness="opencode",
+            source_session_id="ses-1",
+            source_paths=("/tmp/opencode.db",),
+            cwd="/work/odoo",
+            source_dir="/work/odoo",
+            git_root="/work/odoo",
+            git_remote="git@github.com:company/odoo.git",
+            session_title="Round Trip",
+            started_ms=1_777_801_240_000,
+            last_seen_ms=1_777_801_240_100,
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    export_repo_archive(
+        db_a,
+        repo,
+        archive_dir="archives",
+        config_path=config_path,
+        include_config=False,
+        redact_raw_json=True,
+        commit_message="sync",
+        remote="origin",
+        branch="main",
+        push=False,
+        allow_dirty=False,
+    )
+    import_repo_archives(db_b, repo, dry_run=False)
+
+    conn = connect(db_b)
+    try:
+        migrate(conn)
+        row = conn.execute(
+            """
+            SELECT
+                source_paths_json,
+                cwd,
+                source_dir,
+                git_root,
+                git_remote,
+                session_title
+            FROM source_session_metadata
+            WHERE harness = 'opencode' AND source_session_id = 'ses-1'
+            """
+        ).fetchone()
+    finally:
+        conn.close()
+
+    assert row is not None
+    assert json.loads(str(row["source_paths_json"])) == ["/tmp/opencode.db"]
+    assert row["cwd"] == "/work/odoo"
+    assert row["source_dir"] == "/work/odoo"
+    assert row["git_root"] == "/work/odoo"
+    assert row["git_remote"] == "git@github.com:company/odoo.git"
+    assert row["session_title"] == "Round Trip"
 
 
 def test_git_sync_area_numeric_id_is_local_when_pc2_has_existing_areas(

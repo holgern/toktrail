@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
 from time import time
@@ -46,6 +47,7 @@ from toktrail.db import (
     summarize_usage_sessions,
     unarchive_tracking_session,
     unassign_area_from_source_session,
+    upsert_source_session_metadata,
 )
 from toktrail.models import RunScope, TokenBreakdown, UsageEvent
 from toktrail.periods import resolve_fixed_subscription_window
@@ -160,13 +162,14 @@ def test_migrate_creates_tables_and_is_idempotent(tmp_path: Path) -> None:
         "area_session_assignments",
         "machine_active_areas",
         "source_sessions",
+        "source_session_metadata",
         "usage_events",
         "run_events",
         "state_metadata",
         "import_sources",
         "sync_imports",
     } <= table_names
-    assert user_version == 12
+    assert user_version == 14
 
 
 def test_migrate_v3_to_v4_idempotent_with_existing_column(tmp_path: Path) -> None:
@@ -182,7 +185,7 @@ def test_migrate_v3_to_v4_idempotent_with_existing_column(tmp_path: Path) -> Non
     # Re-running migrate must not crash on duplicate column.
     migrate(conn)
 
-    assert int(conn.execute("PRAGMA user_version").fetchone()[0]) == 12
+    assert int(conn.execute("PRAGMA user_version").fetchone()[0]) == 14
 
 
 def test_insert_usage_events_sets_origin_machine_id(tmp_path: Path) -> None:
@@ -268,6 +271,156 @@ def test_usage_sessions_groups_same_source_session_by_machine(tmp_path: Path) ->
         conn.close()
 
     assert len(report.sessions) == 2
+
+
+def test_source_session_metadata_upsert_merges_paths_and_times(tmp_path: Path) -> None:
+    conn = connect(tmp_path / "toktrail.db")
+    try:
+        migrate(conn)
+        machine_id = get_local_machine_id(conn)
+        upsert_source_session_metadata(
+            conn,
+            origin_machine_id=machine_id,
+            harness="codex",
+            source_session_id="meta-1",
+            source_paths=("/tmp/a.jsonl", "/tmp/b.jsonl"),
+            cwd="/work/project",
+            started_ms=2_000,
+            last_seen_ms=3_000,
+        )
+        upsert_source_session_metadata(
+            conn,
+            origin_machine_id=machine_id,
+            harness="codex",
+            source_session_id="meta-1",
+            source_paths=("/tmp/b.jsonl", "/tmp/c.jsonl"),
+            source_dir="/work/project",
+            git_root="/work/project",
+            git_remote="git@github.com:company/project.git",
+            started_ms=1_000,
+            last_seen_ms=4_000,
+        )
+        row = conn.execute(
+            """
+            SELECT
+                source_paths_json,
+                cwd,
+                source_dir,
+                git_root,
+                git_remote,
+                started_ms,
+                last_seen_ms
+            FROM source_session_metadata
+            WHERE origin_machine_id = ?
+              AND harness = 'codex'
+              AND source_session_id = 'meta-1'
+            """,
+            (machine_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    assert row is not None
+    assert json.loads(str(row["source_paths_json"])) == [
+        "/tmp/a.jsonl",
+        "/tmp/b.jsonl",
+        "/tmp/c.jsonl",
+    ]
+    assert row["cwd"] == "/work/project"
+    assert row["source_dir"] == "/work/project"
+    assert row["git_root"] == "/work/project"
+    assert row["git_remote"] == "git@github.com:company/project.git"
+    assert row["started_ms"] == 1_000
+    assert row["last_seen_ms"] == 4_000
+
+
+def test_summarize_usage_sessions_includes_source_metadata(tmp_path: Path) -> None:
+    conn = connect(tmp_path / "toktrail.db")
+    try:
+        migrate(conn)
+        machine_id = get_local_machine_id(conn)
+        insert_usage_events(
+            conn,
+            None,
+            [
+                make_usage_event(
+                    dedup_suffix="meta-session",
+                    harness="codex",
+                    source_session_id="meta-session",
+                    created_ms=1_500,
+                    tokens=TokenBreakdown(input=11, output=4),
+                )
+            ],
+            origin_machine_id=machine_id,
+        )
+        upsert_source_session_metadata(
+            conn,
+            origin_machine_id=machine_id,
+            harness="codex",
+            source_session_id="meta-session",
+            source_paths=("/tmp/sessions/meta-session.jsonl",),
+            cwd="/work/odoo",
+            source_dir="/work/odoo",
+            git_root="/work/odoo",
+            git_remote="git@github.com:company/odoo.git",
+            session_title="Feature Session",
+            started_ms=1_000,
+            last_seen_ms=1_500,
+        )
+        report = summarize_usage_sessions(conn, UsageSessionsFilter(limit=None))
+    finally:
+        conn.close()
+
+    row = next(
+        session
+        for session in report.sessions
+        if session.source_session_id == "meta-session"
+    )
+    assert row.source_paths == ("/tmp/sessions/meta-session.jsonl",)
+    assert row.cwd == "/work/odoo"
+    assert row.source_dir == "/work/odoo"
+    assert row.git_root == "/work/odoo"
+    assert row.git_remote == "git@github.com:company/odoo.git"
+    assert row.session_title == "Feature Session"
+
+
+def test_summarize_usage_sessions_derives_file_source_paths_from_source_row_id(
+    tmp_path: Path,
+) -> None:
+    conn = connect(tmp_path / "toktrail.db")
+    try:
+        migrate(conn)
+        machine_id = get_local_machine_id(conn)
+        seeded = make_usage_event(
+            dedup_suffix="derived-path",
+            harness="codex",
+            source_session_id="derived-path",
+            created_ms=2_000,
+            tokens=TokenBreakdown(input=5, output=1),
+        )
+        event = replace(
+            seeded,
+            source_row_id="/tmp/codex/sessions/derived-path.jsonl:321",
+            source_dedup_key="/tmp/codex/sessions/derived-path.jsonl:321",
+            global_dedup_key="codex:derived-path:/tmp/codex/sessions/derived-path.jsonl:321",
+            fingerprint_hash="derived-path-fingerprint",
+        )
+        insert_usage_events(
+            conn,
+            None,
+            [event],
+            origin_machine_id=machine_id,
+        )
+        report = summarize_usage_sessions(conn, UsageSessionsFilter(limit=None))
+    finally:
+        conn.close()
+
+    row = next(
+        session
+        for session in report.sessions
+        if session.source_session_id == "derived-path"
+    )
+    assert row.source_paths == ("/tmp/codex/sessions/derived-path.jsonl",)
 
 
 def test_create_area_creates_parent_tree(tmp_path: Path) -> None:

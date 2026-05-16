@@ -136,6 +136,12 @@ def import_usage(
                 f"{selected_session_id}: {exc}"
             )
             raise UsageImportError(msg) from exc
+        db_module.persist_source_session_metadata(
+            conn,
+            source_path=resolved,
+            scan_session_metadata=scan.session_metadata,
+            events=filtered_events,
+        )
 
         fingerprint = pre_scan_fingerprint
         latest_seen_ms = max(

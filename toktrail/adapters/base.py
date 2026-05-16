@@ -17,6 +17,7 @@ class ScanResult:
     rows_skipped: int
     events: list[UsageEvent]
     files_seen: int | None = None
+    session_metadata: tuple[SourceSessionMetadata, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -33,6 +34,20 @@ class ImportSourceState:
     last_seen_rowid: int | None = None
     last_file_offset: int | None = None
     updated_at_ms: int | None = None
+
+
+@dataclass(frozen=True)
+class SourceSessionMetadata:
+    harness: str
+    source_session_id: str
+    source_paths: tuple[str, ...] = ()
+    cwd: str | None = None
+    source_dir: str | None = None
+    git_root: str | None = None
+    git_remote: str | None = None
+    session_title: str | None = None
+    started_ms: int | None = None
+    last_seen_ms: int | None = None
 
 
 @dataclass(frozen=True)

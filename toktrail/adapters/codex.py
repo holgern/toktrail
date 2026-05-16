@@ -9,7 +9,11 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 
-from toktrail.adapters.base import ScanResult, SourceSessionSummary
+from toktrail.adapters.base import (
+    ScanResult,
+    SourceSessionMetadata,
+    SourceSessionSummary,
+)
 from toktrail.adapters.summary import summarize_events_by_source_session
 from toktrail.config import CostingConfig
 from toktrail.models import TokenBreakdown, UsageEvent
@@ -101,6 +105,13 @@ class _CodexParseState:
     session_is_headless: bool = False
     session_provider: str | None = None
     session_agent: str | None = None
+    cwd: str | None = None
+    source_dir: str | None = None
+    git_root: str | None = None
+    git_remote: str | None = None
+    session_title: str | None = None
+    started_ms: int | None = None
+    last_seen_ms: int | None = None
 
 
 def scan_codex_path(
@@ -136,6 +147,7 @@ def scan_codex_path(
     rows_seen = 0
     rows_skipped = 0
     events: list[UsageEvent] = []
+    metadata_by_key: dict[tuple[str, str], SourceSessionMetadata] = {}
     for file_path in file_paths:
         scan = scan_codex_file(
             file_path,
@@ -145,6 +157,12 @@ def scan_codex_path(
         )
         rows_seen += scan.rows_seen
         rows_skipped += scan.rows_skipped
+        for metadata in scan.session_metadata:
+            key = (metadata.harness, metadata.source_session_id)
+            metadata_by_key[key] = _merge_session_metadata(
+                metadata_by_key.get(key),
+                metadata,
+            )
         if source_session_id is None:
             events.extend(scan.events)
             continue
@@ -162,6 +180,12 @@ def scan_codex_path(
         rows_seen=rows_seen,
         rows_skipped=rows_skipped,
         events=events,
+        session_metadata=tuple(
+            metadata
+            for metadata in metadata_by_key.values()
+            if source_session_id is None
+            or metadata.source_session_id == source_session_id
+        ),
     )
 
 
@@ -228,6 +252,8 @@ def scan_codex_file(
                     rows_skipped += 1
                     continue
                 events.append(event)
+                if state.last_seen_ms is None or event.created_ms > state.last_seen_ms:
+                    state.last_seen_ms = event.created_ms
     except OSError:
         return CodexScanResult(
             source_path=resolved_path,
@@ -237,12 +263,21 @@ def scan_codex_file(
             events=[],
         )
 
+    metadata = _build_codex_session_metadata(
+        state=state,
+        session_id=session_id,
+        resolved_path=resolved_path,
+        events=events,
+        fallback_timestamp=fallback_timestamp,
+    )
+
     return CodexScanResult(
         source_path=resolved_path,
         files_seen=1,
         rows_seen=rows_seen,
         rows_skipped=rows_skipped,
         events=events,
+        session_metadata=(metadata,),
     )
 
 
@@ -281,6 +316,7 @@ def _parse_codex_line(
     entry = _json_loads(line_json)
     if entry is None:
         return None, True
+    _update_session_metadata_from_mapping(entry, state)
 
     if _handle_session_meta(entry, state):
         return None, False
@@ -318,6 +354,7 @@ def _handle_session_meta(entry: Mapping[str, object], state: _CodexParseState) -
     payload = _as_mapping(entry.get("payload"))
     if payload is None:
         return False
+    _update_session_metadata_from_mapping(payload, state)
     if _as_str(payload.get("source")) == "exec":
         state.session_is_headless = True
     provider = _as_str(payload.get("model_provider"))
@@ -335,6 +372,7 @@ def _handle_turn_context(entry: Mapping[str, object], state: _CodexParseState) -
     payload = _as_mapping(entry.get("payload"))
     if payload is None:
         return False
+    _update_session_metadata_from_mapping(payload, state)
     model = _extract_model_from_payload(payload)
     if model is not None:
         state.current_model = model
@@ -626,6 +664,60 @@ def _codex_source_paths_by_session(source_path: Path) -> dict[str, list[Path]]:
     return grouped
 
 
+def _build_codex_session_metadata(
+    *,
+    state: _CodexParseState,
+    session_id: str,
+    resolved_path: Path,
+    events: list[UsageEvent],
+    fallback_timestamp: int,
+) -> SourceSessionMetadata:
+    started_ms = state.started_ms or min(
+        (event.created_ms for event in events),
+        default=fallback_timestamp,
+    )
+    last_seen_ms = state.last_seen_ms or max(
+        (event.created_ms for event in events),
+        default=started_ms,
+    )
+    source_dir = state.source_dir or state.cwd or state.git_root
+    if source_dir is None:
+        source_dir = str(resolved_path.parent)
+    return SourceSessionMetadata(
+        harness=CODEX_HARNESS,
+        source_session_id=session_id,
+        source_paths=(str(resolved_path),),
+        cwd=state.cwd,
+        source_dir=source_dir,
+        git_root=state.git_root,
+        git_remote=state.git_remote,
+        session_title=state.session_title,
+        started_ms=started_ms,
+        last_seen_ms=last_seen_ms,
+    )
+
+
+def _merge_session_metadata(
+    current: SourceSessionMetadata | None,
+    incoming: SourceSessionMetadata,
+) -> SourceSessionMetadata:
+    if current is None:
+        return incoming
+    merged_paths = tuple(sorted(set(current.source_paths) | set(incoming.source_paths)))
+    return SourceSessionMetadata(
+        harness=incoming.harness,
+        source_session_id=incoming.source_session_id,
+        source_paths=merged_paths,
+        cwd=current.cwd or incoming.cwd,
+        source_dir=current.source_dir or incoming.source_dir,
+        git_root=current.git_root or incoming.git_root,
+        git_remote=current.git_remote or incoming.git_remote,
+        session_title=current.session_title or incoming.session_title,
+        started_ms=_min_optional_int(current.started_ms, incoming.started_ms),
+        last_seen_ms=_max_optional_int(current.last_seen_ms, incoming.last_seen_ms),
+    )
+
+
 def _session_id_from_path(path: Path) -> str:
     return path.stem or "unknown"
 
@@ -667,6 +759,116 @@ def _as_str(value: object) -> str | None:
     return None
 
 
+def _update_session_metadata_from_mapping(
+    entry: Mapping[str, object],
+    state: _CodexParseState,
+) -> None:
+    cwd = _extract_metadata_str(
+        entry,
+        (
+            "cwd",
+            "working_directory",
+            "current_working_directory",
+            "project_dir",
+            "workspace_dir",
+        ),
+    )
+    if state.cwd is None and cwd is not None:
+        state.cwd = cwd
+
+    source_dir = _extract_metadata_str(
+        entry,
+        ("source_dir", "directory", "session_dir"),
+    )
+    if state.source_dir is None and source_dir is not None:
+        state.source_dir = source_dir
+
+    git_root = _extract_metadata_str(
+        entry,
+        ("git_root", "repository_root", "repo_root"),
+    )
+    if state.git_root is None and git_root is not None:
+        state.git_root = git_root
+
+    git_remote = _extract_metadata_str(
+        entry,
+        ("git_remote", "remote_url", "origin"),
+    )
+    if state.git_remote is None and git_remote is not None:
+        state.git_remote = git_remote
+
+    session_title = _extract_metadata_str(entry, ("session_title", "title", "name"))
+    if state.session_title is None and session_title is not None:
+        state.session_title = session_title
+
+    started_ms = _extract_metadata_timestamp_ms(
+        entry,
+        (
+            "started_ms",
+            "started_at",
+            "session_started_ms",
+            "session_started_at",
+        ),
+    )
+    if state.started_ms is None and started_ms is not None:
+        state.started_ms = started_ms
+
+    seen_ms = _extract_metadata_timestamp_ms(
+        entry,
+        (
+            "timestamp",
+            "time",
+            "created_at",
+            "created_ms",
+            "last_seen_ms",
+            "updated_at",
+            "updated_ms",
+        ),
+    )
+    if seen_ms is not None:
+        state.last_seen_ms = _max_optional_int(state.last_seen_ms, seen_ms)
+
+
+def _extract_metadata_str(
+    entry: Mapping[str, object],
+    keys: tuple[str, ...],
+) -> str | None:
+    nested_keys = ("payload", "session", "context", "turn_context", "metadata", "git")
+    for key in keys:
+        value = _as_str(entry.get(key))
+        if value is not None:
+            return value
+    for nested_key in nested_keys:
+        nested = _as_mapping(entry.get(nested_key))
+        if nested is None:
+            continue
+        for key in keys:
+            value = _as_str(nested.get(key))
+            if value is not None:
+                return value
+    return None
+
+
+def _extract_metadata_timestamp_ms(
+    entry: Mapping[str, object],
+    keys: tuple[str, ...],
+) -> int | None:
+    nested_keys = ("payload", "session", "context", "turn_context", "metadata")
+    for key in keys:
+        parsed = _timestamp_ms_from_value(entry.get(key))
+        if parsed is not None:
+            return parsed
+    for nested_key in nested_keys:
+        nested = _as_mapping(entry.get(nested_key))
+        if nested is None:
+            continue
+        for key in keys:
+            parsed = _timestamp_ms_from_value(nested.get(key))
+            if parsed is not None:
+                return parsed
+    return None
+
+
 def _value_as_int(value: object) -> int | None:
     if isinstance(value, bool):
         return None
@@ -684,6 +886,22 @@ def _as_non_negative_int(value: object, default: int = 0) -> int:
     if parsed is None:
         return default
     return max(parsed, 0)
+
+
+def _min_optional_int(left: int | None, right: int | None) -> int | None:
+    if left is None:
+        return right
+    if right is None:
+        return left
+    return min(left, right)
+
+
+def _max_optional_int(left: int | None, right: int | None) -> int | None:
+    if left is None:
+        return right
+    if right is None:
+        return left
+    return max(left, right)
 
 
 def _parse_rfc3339_ms(value: str) -> int | None:

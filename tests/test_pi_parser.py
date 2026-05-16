@@ -197,3 +197,23 @@ def test_list_pi_sessions_aggregates_messages(tmp_path) -> None:
     assert summary.source_session_id == "pi_ses_007"
     assert summary.assistant_message_count == 2
     assert summary.tokens.total == 14
+
+
+def test_scan_pi_file_exposes_session_metadata_cwd(tmp_path) -> None:
+    session_file = tmp_path / "session.jsonl"
+    write_pi_session(
+        session_file,
+        """{"type":"session","id":"pi_meta_001","timestamp":"2026-01-01T00:00:00.000Z","cwd":"/tmp/project"}
+{"type":"message","timestamp":"2026-01-01T00:00:01.000Z","message":{"role":"assistant","model":"m","provider":"p","usage":{"input":1,"output":1,"cacheRead":0,"cacheWrite":0}}}
+""",
+    )
+
+    scan = scan_pi_path(session_file)
+
+    assert len(scan.session_metadata) == 1
+    metadata = scan.session_metadata[0]
+    assert metadata.harness == "pi"
+    assert metadata.source_session_id == "pi_meta_001"
+    assert metadata.cwd == "/tmp/project"
+    assert metadata.source_dir == "/tmp/project"
+    assert metadata.source_paths == (str(session_file),)

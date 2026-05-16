@@ -26,5 +26,5 @@ project_name = "TokTrail"
 # Taskledger branch-scoped state. This block is intentionally safe to commit.
 ledger_ref = "main"
 ledger_parent_ref = ""
-ledger_next_task_number = 70
+ledger_next_task_number = 71
 ledger_branch_guard = "off"

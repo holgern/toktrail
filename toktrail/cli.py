@@ -86,6 +86,7 @@ from toktrail.db import (
     migrate,
     move_area_path,
     normalize_area_path,
+    persist_source_session_metadata,
     resolve_machine_selector,
     set_active_area,
     set_local_machine_name,
@@ -3265,6 +3266,16 @@ def _print_usage_sessions(
                 f"{session_time}  {session.machine_label}  "
                 f"{session.harness}/{session.source_session_id}"
             )
+            typer.echo(f"   Area: {session.area_path or 'unassigned'}")
+            if session.cwd:
+                typer.echo(f"   CWD:  {session.cwd}")
+            elif session.source_dir:
+                typer.echo(f"   CWD:  {session.source_dir}")
+            if session.source_paths:
+                first_source = session.source_paths[0]
+                extra_count = len(session.source_paths) - 1
+                extra_suffix = f" (+{extra_count} more)" if extra_count > 0 else ""
+                typer.echo(f"   Source: {first_source}{extra_suffix}")
             model_line = _format_session_model_line(session, rich_output=rich_output)
             typer.echo(f"   {model_line}")
             token_line = _format_token_usage_line(
@@ -5694,6 +5705,12 @@ def _run_harness_import(
             filtered_events,
             link_scope=tracking_session.scope,
         )
+        persist_source_session_metadata(
+            conn,
+            source_path=resolved_source,
+            scan_session_metadata=scan.session_metadata,
+            events=filtered_events,
+        )
         rows_filtered = len(scan.events) - len(filtered_events)
     finally:
         conn.close()
@@ -5784,6 +5801,12 @@ def _run_harness_import_with_dry_run(
                 link_scope=(
                     tracking_session.scope if tracking_session is not None else None
                 ),
+            )
+            persist_source_session_metadata(
+                conn,
+                source_path=resolved_source,
+                scan_session_metadata=scan.session_metadata,
+                events=filtered_events,
             )
         else:
             insert_result = InsertUsageResult(

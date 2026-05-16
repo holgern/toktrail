@@ -326,3 +326,44 @@ def test_scan_harnessbridge_path_supports_directory_scans(tmp_path) -> None:
     assert scan.files_seen == 2
     assert len(scan.events) == 2
     assert {event.harness for event in scan.events} == {"pi", "codex"}
+
+
+def test_scan_harnessbridge_file_exposes_session_cwd(tmp_path) -> None:
+    session_file = write_harnessbridge_rows(
+        tmp_path / "session-metadata.jsonl",
+        [
+            {
+                "type": "session",
+                "id": "hb-session-meta",
+                "harness": "codex",
+                "accounting": "primary",
+                "cwd": "/tmp/project",
+                "git_root": "/tmp/project",
+                "git_remote": "git@github.com:company/project.git",
+                "title": "Bridge Session",
+                "started_ms": 1_778_682_000_000,
+            },
+            {
+                "type": "usage",
+                "id": "evt-1",
+                "harness": "codex",
+                "provider_id": "openai",
+                "model_id": "gpt-5",
+                "created_ms": 1_778_682_001_000,
+                "tokens": {"input": 5, "output": 2},
+            },
+        ],
+    )
+
+    scan = scan_harnessbridge_file(session_file)
+
+    assert len(scan.session_metadata) == 1
+    metadata = scan.session_metadata[0]
+    assert metadata.harness == "codex"
+    assert metadata.source_session_id == "hb-session-meta"
+    assert metadata.cwd == "/tmp/project"
+    assert metadata.source_dir == "/tmp/project"
+    assert metadata.git_root == "/tmp/project"
+    assert metadata.git_remote == "git@github.com:company/project.git"
+    assert metadata.session_title == "Bridge Session"
+    assert metadata.source_paths == (str(session_file),)

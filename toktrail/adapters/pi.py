@@ -8,7 +8,11 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 
-from toktrail.adapters.base import ScanResult, SourceSessionSummary
+from toktrail.adapters.base import (
+    ScanResult,
+    SourceSessionMetadata,
+    SourceSessionSummary,
+)
 from toktrail.adapters.summary import summarize_events_by_source_session
 from toktrail.config import CostingConfig
 from toktrail.models import TokenBreakdown, UsageEvent, normalize_thinking_level
@@ -47,10 +51,17 @@ def scan_pi_path(
     rows_seen = 0
     rows_skipped = 0
     events: list[UsageEvent] = []
+    metadata_by_key: dict[tuple[str, str], SourceSessionMetadata] = {}
     for file_path in file_paths:
         scan = scan_pi_file(file_path, include_raw_json=include_raw_json)
         rows_seen += scan.rows_seen
         rows_skipped += scan.rows_skipped
+        for metadata in scan.session_metadata:
+            key = (metadata.harness, metadata.source_session_id)
+            metadata_by_key[key] = _merge_session_metadata(
+                metadata_by_key.get(key),
+                metadata,
+            )
         if source_session_id is None:
             events.extend(scan.events)
             continue
@@ -69,6 +80,12 @@ def scan_pi_path(
         rows_seen=rows_seen,
         rows_skipped=rows_skipped,
         events=events,
+        session_metadata=tuple(
+            metadata
+            for metadata in metadata_by_key.values()
+            if source_session_id is None
+            or metadata.source_session_id == source_session_id
+        ),
     )
 
 
@@ -94,6 +111,7 @@ def scan_pi_file(
     rows_skipped = 0
     events: list[UsageEvent] = []
     session_id: str | None = None
+    session_header: dict[str, object] | None = None
 
     try:
         with resolved_path.open("r", encoding="utf-8", errors="replace") as handle:
@@ -123,6 +141,7 @@ def scan_pi_file(
                             events=[],
                         )
                     session_id = header_id
+                    session_header = header
                     continue
 
                 rows_seen += 1
@@ -147,12 +166,25 @@ def scan_pi_file(
             events=[],
         )
 
+    session_metadata: tuple[SourceSessionMetadata, ...] = ()
+    if session_id is not None:
+        session_metadata = (
+            _build_pi_session_metadata(
+                session_id=session_id,
+                resolved_path=resolved_path,
+                header=session_header,
+                events=events,
+                fallback_timestamp=fallback_timestamp,
+            ),
+        )
+
     return PiScanResult(
         source_path=resolved_path,
         files_seen=1,
         rows_seen=rows_seen,
         rows_skipped=rows_skipped,
         events=events,
+        session_metadata=session_metadata,
     )
 
 
@@ -271,6 +303,69 @@ def _pi_source_paths_by_session(source_path: Path) -> dict[str, list[Path]]:
     return grouped
 
 
+def _build_pi_session_metadata(
+    *,
+    session_id: str,
+    resolved_path: Path,
+    header: dict[str, object] | None,
+    events: list[UsageEvent],
+    fallback_timestamp: int,
+) -> SourceSessionMetadata:
+    started_ms = (
+        _parse_rfc3339_ms(header.get("timestamp")) if isinstance(header, dict) else None
+    )
+    if started_ms is None:
+        started_ms = min(
+            (event.created_ms for event in events),
+            default=fallback_timestamp,
+        )
+    last_seen_ms = max((event.created_ms for event in events), default=started_ms)
+    cwd = (
+        _first_non_empty_str(
+            header,
+            "cwd",
+            "working_directory",
+            "current_working_directory",
+            "source_dir",
+            "project_dir",
+            "workspace_dir",
+        )
+        if isinstance(header, dict)
+        else None
+    )
+    source_dir = cwd or str(resolved_path.parent)
+    return SourceSessionMetadata(
+        harness=PI_HARNESS,
+        source_session_id=session_id,
+        source_paths=(str(resolved_path),),
+        cwd=cwd,
+        source_dir=source_dir,
+        started_ms=started_ms,
+        last_seen_ms=last_seen_ms,
+    )
+
+
+def _merge_session_metadata(
+    current: SourceSessionMetadata | None,
+    incoming: SourceSessionMetadata,
+) -> SourceSessionMetadata:
+    if current is None:
+        return incoming
+    merged_paths = tuple(sorted(set(current.source_paths) | set(incoming.source_paths)))
+    return SourceSessionMetadata(
+        harness=incoming.harness,
+        source_session_id=incoming.source_session_id,
+        source_paths=merged_paths,
+        cwd=current.cwd or incoming.cwd,
+        source_dir=current.source_dir or incoming.source_dir,
+        git_root=current.git_root or incoming.git_root,
+        git_remote=current.git_remote or incoming.git_remote,
+        session_title=current.session_title or incoming.session_title,
+        started_ms=_min_optional_int(current.started_ms, incoming.started_ms),
+        last_seen_ms=_max_optional_int(current.last_seen_ms, incoming.last_seen_ms),
+    )
+
+
 def _file_modified_timestamp_ms(path: Path) -> int:
     try:
         return int(path.stat().st_mtime * 1000)
@@ -311,6 +406,14 @@ def _first_non_negative_int(mapping: dict[str, object], *keys: str) -> int:
     return 0
 
 
+def _first_non_empty_str(mapping: dict[str, object], *keys: str) -> str | None:
+    for key in keys:
+        value = _as_str(mapping.get(key))
+        if value is not None:
+            return value
+    return None
+
+
 def _parse_rfc3339_ms(value: object) -> int | None:
     if not isinstance(value, str):
         return None
@@ -325,6 +428,22 @@ def _parse_rfc3339_ms(value: object) -> int | None:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return int(parsed.timestamp() * 1000)
+
+
+def _min_optional_int(left: int | None, right: int | None) -> int | None:
+    if left is None:
+        return right
+    if right is None:
+        return left
+    return min(left, right)
+
+
+def _max_optional_int(left: int | None, right: int | None) -> int | None:
+    if left is None:
+        return right
+    if right is None:
+        return left
+    return max(left, right)
 
 
 def _make_fingerprint(event: UsageEvent) -> str:

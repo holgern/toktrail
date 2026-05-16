@@ -516,6 +516,12 @@ def _to_public_usage_session_row(
         costs=_to_public_cost_totals(value.costs),
         models=value.models,
         providers=value.providers,
+        source_paths=value.source_paths,
+        cwd=value.cwd,
+        source_dir=value.source_dir,
+        git_root=value.git_root,
+        git_remote=value.git_remote,
+        session_title=value.session_title,
         by_model=tuple(_to_public_model_row(m) for m in value.by_model),
     )
 
