@@ -101,6 +101,18 @@ init -> start -> import/watch -> status -> stop
 
 This workflow is the product contract, not decoration.
 
+### 3.1.1 Refactor architecture guardrail
+
+During staged refactors, preserve the public import facades and command
+entrypoints while moving implementation details into internal packages:
+
+- keep `toktrail.cli` as the stable Typer/entrypoint facade
+- keep `toktrail.db` as the stable DB facade
+- keep `toktrail.config` as the stable config facade
+- keep `toktrail.api.models` as the stable API model facade
+- use `toktrail/cli_parts/`, `toktrail/_db/`, `toktrail/config_parts/`,
+  and `toktrail/api/model_parts/` for internal extraction targets
+
 ### 3.2 Important code surfaces
 
 Use the owning layer before editing.

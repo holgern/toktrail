@@ -131,9 +131,31 @@ def load_statusline_output_cache(
         return None
     if payload.get("state_db_mtime_ns") != _path_mtime_ns(state_db_path):
         return None
+    state_db_atime_ns = payload.get("state_db_atime_ns")
+    if state_db_atime_ns is not None and state_db_atime_ns != _path_atime_ns(
+        state_db_path
+    ):
+        return None
+    state_db_ctime_ns = payload.get("state_db_ctime_ns")
+    if state_db_ctime_ns is not None and state_db_ctime_ns != _path_ctime_ns(
+        state_db_path
+    ):
+        return None
     if payload.get("config_mtime_ns") != _path_mtime_ns(config_path):
         return None
+    config_atime_ns = payload.get("config_atime_ns")
+    if config_atime_ns is not None and config_atime_ns != _path_atime_ns(config_path):
+        return None
+    config_ctime_ns = payload.get("config_ctime_ns")
+    if config_ctime_ns is not None and config_ctime_ns != _path_ctime_ns(config_path):
+        return None
     if payload.get("source_mtime_ns") != _path_mtime_ns(source_path):
+        return None
+    source_atime_ns = payload.get("source_atime_ns")
+    if source_atime_ns is not None and source_atime_ns != _path_atime_ns(source_path):
+        return None
+    source_ctime_ns = payload.get("source_ctime_ns")
+    if source_ctime_ns is not None and source_ctime_ns != _path_ctime_ns(source_path):
         return None
     report_payload = payload.get("report")
     if not isinstance(report_payload, dict):
@@ -157,8 +179,14 @@ def write_statusline_output_cache(
     payload = {
         "created_ms": int(time() * 1000),
         "state_db_mtime_ns": _path_mtime_ns(state_db_path),
+        "state_db_atime_ns": _path_atime_ns(state_db_path),
+        "state_db_ctime_ns": _path_ctime_ns(state_db_path),
         "config_mtime_ns": _path_mtime_ns(config_path),
+        "config_atime_ns": _path_atime_ns(config_path),
+        "config_ctime_ns": _path_ctime_ns(config_path),
         "source_mtime_ns": _path_mtime_ns(source_path),
+        "source_atime_ns": _path_atime_ns(source_path),
+        "source_ctime_ns": _path_ctime_ns(source_path),
         "report": _with_output_cache(report, "miss").as_dict(),
     }
     temp_file.write_text(json.dumps(payload, indent=2), encoding="utf-8")
@@ -895,6 +923,24 @@ def _path_mtime_ns(path: Path | None) -> int | None:
         return None
     try:
         return path.stat().st_mtime_ns
+    except OSError:
+        return None
+
+
+def _path_atime_ns(path: Path | None) -> int | None:
+    if path is None:
+        return None
+    try:
+        return path.stat().st_atime_ns
+    except OSError:
+        return None
+
+
+def _path_ctime_ns(path: Path | None) -> int | None:
+    if path is None:
+        return None
+    try:
+        return path.stat().st_ctime_ns
     except OSError:
         return None
 

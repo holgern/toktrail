@@ -746,9 +746,9 @@ class RunReport:
     totals: SessionTotals
     by_provider: tuple[ProviderSummaryRow, ...]
     by_harness: tuple[HarnessSummaryRow, ...]
-    by_machine: tuple[MachineSummaryRow, ...]
     by_model: tuple[ModelSummaryRow, ...]
     by_activity: tuple[ActivitySummaryRow, ...]
+    by_machine: tuple[MachineSummaryRow, ...] = ()
     unconfigured_models: tuple[UnconfiguredModelRow, ...] = ()
     filters: dict[str, object] = field(default_factory=dict)
 

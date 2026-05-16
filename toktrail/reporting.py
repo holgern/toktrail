@@ -395,9 +395,9 @@ class RunReport:
     totals: SessionTotals
     by_provider: list[ProviderSummaryRow]
     by_harness: list[HarnessSummaryRow]
-    by_machine: list[MachineSummaryRow]
     by_model: list[ModelSummaryRow]
     by_activity: list[ActivitySummaryRow]
+    by_machine: list[MachineSummaryRow] = field(default_factory=list)
     unconfigured_models: list[UnconfiguredModelRow] = field(default_factory=list)
     simulations: list[SimulationSummaryRow] = field(default_factory=list)
     filters: UsageReportFilter = field(default_factory=UsageReportFilter)

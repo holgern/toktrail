@@ -9,7 +9,7 @@ import shlex
 import sqlite3
 import subprocess
 import time
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Literal, NoReturn, cast
@@ -43,6 +43,41 @@ from toktrail.api.sessions import list_runs
 from toktrail.api.sources import capture_source_snapshot
 from toktrail.api.statusline import statusline_report as statusline_report_api
 from toktrail.cli_sync import maybe_auto_export_to_git_repo, sync_app
+from toktrail.cli_parts.filters import (
+    _aliases_from_row,
+    _as_float_or_none,
+    _filter_model_rows,
+    _filter_price_rows,
+    _filter_series_buckets,
+    _filter_unconfigured_models,
+    _normalize_price_display_filter,
+    _normalize_report_display_filter,
+    _sort_series_buckets,
+)
+from toktrail.cli_parts.formatting import (
+    _format_cost,
+    _format_cost_or_dash,
+    _format_cost_precise,
+    _format_int,
+    _format_percent,
+    _format_price,
+    _format_ratio_percent,
+    _format_signed_int,
+    _format_token_delta,
+)
+from toktrail.cli_parts.table import (
+    _print_model_table,
+    _print_table,
+    _print_unconfigured_model_table,
+)
+from toktrail.cli_parts.machines import register_machine_commands
+from toktrail.cli_parts.types import (
+    ImportExecutionResult,
+    PriceDisplayFilter,
+    ReportDisplayFilter,
+    WatchDelta,
+    WatchTotals,
+)
 from toktrail.config import (
     DEFAULT_TEMPLATE_NAME,
     ContextWindowConfig,
@@ -173,71 +208,6 @@ app.add_typer(machine_app, name="machine")
 app.add_typer(area_app, name="area")
 app.add_typer(sync_app, name="sync")
 statusline_app.add_typer(statusline_config_app, name="config")
-
-_VALID_REPORT_PRICE_STATES = {"all", "priced", "unpriced"}
-_VALID_REPORT_SORTS = {
-    "actual",
-    "virtual",
-    "savings",
-    "tokens",
-    "messages",
-    "provider",
-    "model",
-    "unpriced",
-}
-_VALID_PRICE_TABLES = {"virtual", "actual", "all"}
-_VALID_PRICE_SORTS = {
-    "provider",
-    "model",
-    "input",
-    "cached",
-    "cache-write",
-    "output",
-    "reasoning",
-    "category",
-    "release",
-}
-
-
-@dataclass(frozen=True)
-class ImportExecutionResult:
-    harness: str
-    source_path: Path
-    run_id: int | None
-    rows_seen: int
-    rows_imported: int
-    rows_skipped: int
-
-
-@dataclass(frozen=True)
-class ReportDisplayFilter:
-    price_state: str = "all"
-    min_messages: int | None = None
-    min_tokens: int | None = None
-    sort: str = "actual"
-    limit: int | None = None
-
-    def as_dict(self) -> dict[str, object]:
-        return {
-            "price_state": self.price_state,
-            "min_messages": self.min_messages,
-            "min_tokens": self.min_tokens,
-            "sort": self.sort,
-            "limit": self.limit,
-        }
-
-
-@dataclass(frozen=True)
-class PriceDisplayFilter:
-    table: str = "virtual"
-    provider: str | None = None
-    model: str | None = None
-    query: str | None = None
-    category: str | None = None
-    release_status: str | None = None
-    sort: str = "provider"
-    limit: int | None = None
-
 
 CopilotEnvVar = tuple[str, str]
 
@@ -470,175 +440,6 @@ def init(ctx: typer.Context) -> None:
     apply_local_machine_config(conn, loaded_machine.config)
     conn.close()
     typer.echo(f"Initialized toktrail database: {db_path}")
-
-
-@machine_app.command("status")
-def machine_status(ctx: typer.Context, json_output: JsonOption = False) -> None:
-    loaded_machine = _load_machine_config_or_exit(ctx)
-    conn = _open_toktrail_connection(ctx)
-    try:
-        local_machine_id = get_local_machine_id(conn)
-        machine = get_machine(conn, local_machine_id)
-    finally:
-        conn.close()
-    if machine is None:
-        _exit_with_error("Local machine record not found.")
-    if json_output:
-        payload = {
-            "machine_id": machine.machine_id,
-            "name": machine.name,
-            "name_key": machine.name_key,
-            "first_seen_ms": machine.first_seen_ms,
-            "last_seen_ms": machine.last_seen_ms,
-            "is_local": machine.is_local,
-            "created_at_ms": machine.created_at_ms,
-            "updated_at_ms": machine.updated_at_ms,
-            "imported_at_ms": machine.imported_at_ms,
-            "label": machine.label,
-        }
-        payload["config_path"] = str(loaded_machine.path)
-        payload["config_exists"] = loaded_machine.exists
-        typer.echo(json.dumps(payload, indent=2))
-        return
-    typer.echo(f"id:    {machine.machine_id}")
-    typer.echo(f"name:  {machine.name or machine.label}")
-    typer.echo("local: yes")
-
-
-@machine_app.command("list")
-def machine_list(
-    ctx: typer.Context,
-    json_output: JsonOption = False,
-    utc: UtcOption = False,
-    rich_output: RichOption = False,
-) -> None:
-    conn = _open_toktrail_connection(ctx)
-    try:
-        machines = list_machines(conn)
-        report = summarize_usage(conn, UsageReportFilter())
-        usage_by_machine = {row.machine_id: row for row in report.by_machine}
-    finally:
-        conn.close()
-    rows_payload = []
-    for machine in machines:
-        usage = usage_by_machine.get(machine.machine_id)
-        rows_payload.append(
-            {
-                "machine": machine.label,
-                "machine_id": machine.machine_id,
-                "local": machine.is_local,
-                "first_seen_ms": machine.first_seen_ms,
-                "last_seen_ms": machine.last_seen_ms,
-                "message_count": 0 if usage is None else usage.message_count,
-                "tokens": TokenBreakdown() if usage is None else usage.tokens,
-                "costs": CostTotals() if usage is None else usage.costs,
-            }
-        )
-    if json_output:
-        typer.echo(
-            json.dumps(
-                [
-                    {
-                        "machine": row["machine"],
-                        "machine_id": row["machine_id"],
-                        "local": row["local"],
-                        "first_seen_ms": row["first_seen_ms"],
-                        "last_seen_ms": row["last_seen_ms"],
-                        "message_count": row["message_count"],
-                        "tokens": cast(TokenBreakdown, row["tokens"]).as_dict(),
-                        "costs": cast(CostTotals, row["costs"]).as_dict(),
-                    }
-                    for row in rows_payload
-                ],
-                indent=2,
-            )
-        )
-        return
-    _print_table(
-        [
-            {
-                "machine": str(row["machine"]),
-                "id": str(row["machine_id"])[:8],
-                "local": "yes" if bool(row["local"]) else "no",
-                "first_seen": format_epoch_ms_compact(
-                    cast(int, row["first_seen_ms"]),
-                    utc=utc,
-                ),
-                "last_seen": format_epoch_ms_compact(
-                    cast(int, row["last_seen_ms"]),
-                    utc=utc,
-                ),
-                "msgs": _format_int(cast(int, row["message_count"])),
-                "total": _format_int(cast(TokenBreakdown, row["tokens"]).total),
-                "actual": _format_cost(
-                    cast(CostTotals, row["costs"]).actual_cost_usd,
-                ),
-                "virtual": _format_cost(
-                    cast(CostTotals, row["costs"]).virtual_cost_usd,
-                ),
-            }
-            for row in rows_payload
-        ],
-        [
-            "machine",
-            "id",
-            "local",
-            "first_seen",
-            "last_seen",
-            "msgs",
-            "total",
-            "actual",
-            "virtual",
-        ],
-        {
-            "machine": "machine",
-            "id": "id",
-            "local": "local",
-            "first_seen": "first seen",
-            "last_seen": "last seen",
-            "msgs": "msgs",
-            "total": "total",
-            "actual": "actual",
-            "virtual": "virtual",
-        },
-        rich_output=rich_output,
-        numeric_columns={"msgs", "total", "actual", "virtual"},
-    )
-
-
-@machine_app.command("set-name")
-def machine_set_name(ctx: typer.Context, name: str) -> None:
-    cleaned_name = name.strip()
-    if not cleaned_name:
-        _exit_with_error("Machine name must not be empty.")
-    path = _resolve_machine_config_path(ctx)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        "[machine]\nname = " + json.dumps(cleaned_name) + "\n",
-        encoding="utf-8",
-    )
-    conn = _open_toktrail_connection(ctx)
-    try:
-        set_local_machine_name(conn, cleaned_name)
-        conn.commit()
-    finally:
-        conn.close()
-    typer.echo(f"Updated machine name: {cleaned_name}")
-
-
-@machine_app.command("clear-name")
-def machine_clear_name(ctx: typer.Context) -> None:
-    path = _resolve_machine_config_path(ctx)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("[machine]\n", encoding="utf-8")
-    conn = _open_toktrail_connection(ctx)
-    try:
-        loaded_machine = _load_machine_config_or_exit(ctx)
-        apply_local_machine_config(conn, loaded_machine.config)
-        conn.commit()
-    finally:
-        conn.close()
-    typer.echo("Cleared machine name.")
 
 
 @area_app.command("create")
@@ -1501,13 +1302,16 @@ def status(
     raw: RawModeOption = None,
 ) -> None:
     costing_config = _load_costing_config_or_exit(ctx)
-    display_filters = _normalize_report_display_filter(
-        price_state=price_state,
-        min_messages=min_messages,
-        min_tokens=min_tokens,
-        sort=sort,
-        limit=limit,
-    )
+    try:
+        display_filters = _normalize_report_display_filter(
+            price_state=price_state,
+            min_messages=min_messages,
+            min_tokens=min_tokens,
+            sort=sort,
+            limit=limit,
+        )
+    except ValueError as exc:
+        _exit_with_error(str(exc))
     selected_session_id = run_id
     conn = _open_toktrail_connection(ctx)
     try:
@@ -4069,13 +3873,16 @@ def _usage_aggregate(
         _exit_with_error(str(exc))
 
     costing_config = _load_costing_config_or_exit(ctx)
-    display_filters = _normalize_report_display_filter(
-        price_state=price_state,
-        min_messages=min_messages,
-        min_tokens=min_tokens,
-        sort=sort,
-        limit=limit,
-    )
+    try:
+        display_filters = _normalize_report_display_filter(
+            price_state=price_state,
+            min_messages=min_messages,
+            min_tokens=min_tokens,
+            sort=sort,
+            limit=limit,
+        )
+    except ValueError as exc:
+        _exit_with_error(str(exc))
     conn = _open_toktrail_connection(ctx)
     unassigned_total = 0
     try:
@@ -4720,12 +4527,6 @@ def _format_subscription_resets(
     return "-"
 
 
-def _format_percent(value: Decimal | None) -> str:
-    if value is None:
-        return "-"
-    return f"{value.quantize(Decimal('0.1'))}%"
-
-
 @config_app.command("path")
 def config_path(
     ctx: typer.Context,
@@ -5090,16 +4891,19 @@ def pricing_list(
         return
 
     loaded = _load_resolved_costing_config_or_exit(ctx)
-    filters = _normalize_price_display_filter(
-        table=table,
-        provider=provider,
-        model=model,
-        query=query,
-        category=category,
-        release_status=release_status,
-        sort=sort,
-        limit=limit,
-    )
+    try:
+        filters = _normalize_price_display_filter(
+            table=table,
+            provider=provider,
+            model=model,
+            query=query,
+            category=category,
+            release_status=release_status,
+            sort=sort,
+            limit=limit,
+        )
+    except ValueError as exc:
+        _exit_with_error(str(exc))
     price_rows = _filter_price_rows(_price_rows(loaded.config, filters.table), filters)
     if json_output:
         typer.echo(json.dumps(price_rows, indent=2))
@@ -5835,19 +5639,6 @@ def _run_harness_import_with_dry_run(
     )
 
 
-@dataclass(frozen=True)
-class WatchTotals:
-    message_count: int
-    tokens: TokenBreakdown
-    costs: CostTotals
-
-
-@dataclass(frozen=True)
-class WatchDelta:
-    totals: WatchTotals
-    by_harness: dict[str, WatchTotals]
-
-
 def _resolve_watch_session_id(
     ctx: typer.Context,
     tracking_session_id: int | None,
@@ -5982,23 +5773,6 @@ def _watch_delta(previous: InternalRunReport, current: InternalRunReport) -> Wat
     return WatchDelta(
         totals=_subtract_totals(after_totals, before_totals),
         by_harness=by_harness_delta,
-    )
-
-
-def _format_signed_int(value: int) -> str:
-    sign = "+" if value >= 0 else "-"
-    return f"{sign}{_format_int(abs(value))}"
-
-
-def _format_token_delta(tokens: TokenBreakdown) -> str:
-    return (
-        f"{_format_signed_int(tokens.total)} tokens "
-        f"in={_format_int(tokens.input)} "
-        f"out={_format_int(tokens.output)} "
-        f"reasoning={_format_int(tokens.reasoning)} "
-        f"cache_r={_format_int(tokens.cache_read)} "
-        f"cache_w={_format_int(tokens.cache_write)} "
-        f"cache_o={_format_int(tokens.cache_output)}"
     )
 
 
@@ -6503,529 +6277,6 @@ def _normalize_source_session_columns(columns: str | None) -> list[str]:
     return selected or default_columns
 
 
-def _render_table(
-    rows: list[dict[str, str]],
-    columns: list[str],
-    headers: dict[str, str],
-    *,
-    numeric_columns: set[str] | None = None,
-) -> str:
-    numeric = numeric_columns or set()
-    widths = {
-        column: max([len(headers[column]), *(len(row.get(column, "")) for row in rows)])
-        for column in columns
-    }
-
-    def _cell(column: str, value: str) -> str:
-        width = widths[column]
-        if column in numeric:
-            return value.rjust(width)
-        return value.ljust(width)
-
-    lines = ["  ".join(_cell(column, headers[column]) for column in columns)]
-    for row in rows:
-        lines.append(
-            "  ".join(_cell(column, row.get(column, "")) for column in columns)
-        )
-    return "\n".join(lines)
-
-
-def _print_table(
-    rows: list[dict[str, str]],
-    columns: list[str],
-    headers: dict[str, str],
-    *,
-    rich_output: bool,
-    numeric_columns: set[str] | None = None,
-    wrap_columns: set[str] | None = None,
-    max_widths: dict[str, int] | None = None,
-) -> None:
-    numeric = numeric_columns or set()
-    wrap = wrap_columns or set()
-    widths = max_widths or {}
-    if not rich_output:
-        typer.echo(_render_table(rows, columns, headers, numeric_columns=numeric))
-        return
-
-    try:
-        from rich import box
-        from rich.console import Console
-        from rich.table import Table
-    except ImportError:
-        _exit_with_error("Rich output requires installing toktrail[rich].")
-
-    table = Table(
-        show_header=True,
-        header_style="bold",
-        box=box.ROUNDED,
-        show_lines=False,
-        expand=False,
-    )
-    for column in columns:
-        table.add_column(
-            headers[column],
-            justify="right" if column in numeric else "left",
-            no_wrap=column not in wrap,
-            overflow="fold" if column in wrap else "ellipsis",
-            max_width=widths.get(column),
-        )
-    for row in rows:
-        table.add_row(*(row.get(column, "") for column in columns))
-    Console().print(table)
-
-
-def _print_model_table(
-    rows: list[ModelSummaryRow],
-    *,
-    rich_output: bool,
-) -> None:
-    headers = {
-        "provider_model": "provider/model",
-        "thinking": "thinking",
-        "msgs": "msgs",
-        "input": "input",
-        "output": "output",
-        "reasoning": "reasoning",
-        "cache_r": "cache_r",
-        "cache_w": "cache_w",
-        "cache_o": "cache_o",
-        "total": "total",
-        "actual": "actual",
-        "virtual": "virtual",
-        "savings": "savings",
-    }
-    include_thinking = any(row.thinking_level is not None for row in rows)
-    payload_rows = [
-        {
-            "provider_model": f"{row.provider_id}/{row.model_id}",
-            "thinking": row.thinking_level or "-",
-            "msgs": _format_int(row.message_count),
-            "input": _format_int(row.tokens.input),
-            "output": _format_int(row.tokens.output),
-            "reasoning": _format_int(row.tokens.reasoning),
-            "cache_r": _format_int(row.tokens.cache_read),
-            "cache_w": _format_int(row.tokens.cache_write),
-            "cache_o": _format_int(row.tokens.cache_output),
-            "total": _format_int(row.total_tokens),
-            "actual": _format_cost(row.actual_cost_usd),
-            "virtual": _format_cost(row.virtual_cost_usd),
-            "savings": _format_cost(row.savings_usd),
-        }
-        for row in rows
-    ]
-    columns = ["provider_model"]
-    if include_thinking:
-        columns.append("thinking")
-    columns.extend(
-        [
-            "msgs",
-            "input",
-            "output",
-            "reasoning",
-            "cache_r",
-            "cache_w",
-            "cache_o",
-            "total",
-            "actual",
-            "virtual",
-            "savings",
-        ]
-    )
-    _print_table(
-        payload_rows,
-        columns,
-        headers,
-        rich_output=rich_output,
-        numeric_columns={
-            "msgs",
-            "input",
-            "output",
-            "reasoning",
-            "cache_r",
-            "cache_w",
-            "cache_o",
-            "total",
-            "actual",
-            "virtual",
-            "savings",
-        },
-    )
-
-
-def _print_unconfigured_model_table(
-    rows: list[UnconfiguredModelRow],
-    *,
-    rich_output: bool,
-) -> None:
-    headers = {
-        "required": "required",
-        "provider_model": "provider/model",
-        "harness": "harness",
-        "thinking": "thinking",
-        "msgs": "msgs",
-        "input": "input",
-        "output": "output",
-        "reasoning": "reasoning",
-        "cache_r": "cache_r",
-        "cache_w": "cache_w",
-        "cache_o": "cache_o",
-        "total": "total",
-    }
-    include_thinking = any(row.thinking_level is not None for row in rows)
-    payload_rows = [
-        {
-            "required": "+".join(row.required),
-            "provider_model": f"{row.provider_id}/{row.model_id}",
-            "harness": row.harness,
-            "thinking": row.thinking_level or "-",
-            "msgs": _format_int(row.message_count),
-            "input": _format_int(row.tokens.input),
-            "output": _format_int(row.tokens.output),
-            "reasoning": _format_int(row.tokens.reasoning),
-            "cache_r": _format_int(row.tokens.cache_read),
-            "cache_w": _format_int(row.tokens.cache_write),
-            "cache_o": _format_int(row.tokens.cache_output),
-            "total": _format_int(row.total_tokens),
-        }
-        for row in rows
-    ]
-    columns = ["required", "provider_model", "harness"]
-    if include_thinking:
-        columns.append("thinking")
-    columns.extend(
-        [
-            "msgs",
-            "input",
-            "output",
-            "reasoning",
-            "cache_r",
-            "cache_w",
-            "cache_o",
-            "total",
-        ]
-    )
-    _print_table(
-        payload_rows,
-        columns,
-        headers,
-        rich_output=rich_output,
-        numeric_columns={
-            "msgs",
-            "input",
-            "output",
-            "reasoning",
-            "cache_r",
-            "cache_w",
-            "cache_o",
-            "total",
-        },
-    )
-
-
-def _normalize_report_display_filter(
-    *,
-    price_state: str,
-    min_messages: int | None,
-    min_tokens: int | None,
-    sort: str,
-    limit: int | None,
-) -> ReportDisplayFilter:
-    normalized_price_state = price_state.strip().lower()
-    if normalized_price_state not in _VALID_REPORT_PRICE_STATES:
-        _exit_with_error("Unsupported --price-state. Use all, priced, or unpriced.")
-    normalized_sort = sort.strip().lower()
-    if normalized_sort not in _VALID_REPORT_SORTS:
-        _exit_with_error(
-            "Unsupported --sort. Use actual, virtual, savings, tokens, messages, "
-            "provider, model, or unpriced."
-        )
-    if min_messages is not None and min_messages < 0:
-        _exit_with_error("--min-messages must be non-negative.")
-    if min_tokens is not None and min_tokens < 0:
-        _exit_with_error("--min-tokens must be non-negative.")
-    if limit is not None and limit < 0:
-        _exit_with_error("--limit must be non-negative.")
-    return ReportDisplayFilter(
-        price_state=normalized_price_state,
-        min_messages=min_messages,
-        min_tokens=min_tokens,
-        sort=normalized_sort,
-        limit=limit,
-    )
-
-
-def _normalize_price_display_filter(
-    *,
-    table: str,
-    provider: str | None,
-    model: str | None,
-    query: str | None,
-    category: str | None,
-    release_status: str | None,
-    sort: str,
-    limit: int | None,
-) -> PriceDisplayFilter:
-    normalized_table = table.strip().lower()
-    if normalized_table not in _VALID_PRICE_TABLES:
-        _exit_with_error("Unsupported --table. Use virtual, actual, or all.")
-    normalized_sort = sort.strip().lower()
-    if normalized_sort not in _VALID_PRICE_SORTS:
-        _exit_with_error(
-            "Unsupported --sort. Use provider, model, input, cached, cache-write, "
-            "output, reasoning, category, or release."
-        )
-    if limit is not None and limit < 0:
-        _exit_with_error("--limit must be non-negative.")
-    return PriceDisplayFilter(
-        table=normalized_table,
-        provider=provider,
-        model=model,
-        query=query,
-        category=category,
-        release_status=release_status,
-        sort=normalized_sort,
-        limit=limit,
-    )
-
-
-def _filter_model_rows(
-    rows: list[ModelSummaryRow],
-    *,
-    price_state: str,
-    min_messages: int | None,
-    min_tokens: int | None,
-    sort: str,
-    limit: int | None,
-) -> list[ModelSummaryRow]:
-    filtered = [
-        row
-        for row in rows
-        if _model_row_matches_price_state(row, price_state)
-        and (min_messages is None or row.message_count >= min_messages)
-        and (min_tokens is None or row.total_tokens >= min_tokens)
-    ]
-    sorted_rows = _sort_model_rows(filtered, sort=sort)
-    if limit is not None:
-        return sorted_rows[:limit]
-    return sorted_rows
-
-
-def _model_row_matches_price_state(row: ModelSummaryRow, price_state: str) -> bool:
-    if price_state == "all":
-        return True
-    if price_state == "priced":
-        return row.unpriced_count == 0
-    return row.unpriced_count > 0
-
-
-def _sort_model_rows(
-    rows: list[ModelSummaryRow],
-    *,
-    sort: str,
-) -> list[ModelSummaryRow]:
-    if sort == "actual":
-        return sorted(
-            rows,
-            key=lambda row: (
-                row.actual_cost_usd,
-                row.total_tokens,
-                row.message_count,
-                row.provider_id,
-                row.model_id,
-                row.thinking_level or "",
-            ),
-            reverse=True,
-        )
-    if sort == "virtual":
-        return sorted(
-            rows,
-            key=lambda row: (
-                row.virtual_cost_usd,
-                row.total_tokens,
-                row.message_count,
-                row.provider_id,
-                row.model_id,
-                row.thinking_level or "",
-            ),
-            reverse=True,
-        )
-    if sort == "savings":
-        return sorted(
-            rows,
-            key=lambda row: (
-                row.savings_usd,
-                row.total_tokens,
-                row.message_count,
-                row.provider_id,
-                row.model_id,
-                row.thinking_level or "",
-            ),
-            reverse=True,
-        )
-    if sort == "tokens":
-        return sorted(
-            rows,
-            key=lambda row: (
-                row.total_tokens,
-                row.message_count,
-                row.provider_id,
-                row.model_id,
-                row.thinking_level or "",
-            ),
-            reverse=True,
-        )
-    if sort == "messages":
-        return sorted(
-            rows,
-            key=lambda row: (
-                row.message_count,
-                row.total_tokens,
-                row.provider_id,
-                row.model_id,
-                row.thinking_level or "",
-            ),
-            reverse=True,
-        )
-    if sort == "provider":
-        return sorted(
-            rows,
-            key=lambda row: (
-                row.provider_id,
-                row.model_id,
-                row.thinking_level or "",
-                -row.total_tokens,
-                -row.message_count,
-            ),
-        )
-    if sort == "model":
-        return sorted(
-            rows,
-            key=lambda row: (
-                row.model_id,
-                row.provider_id,
-                row.thinking_level or "",
-                -row.total_tokens,
-                -row.message_count,
-            ),
-        )
-    return sorted(
-        rows,
-        key=lambda row: (
-            row.unpriced_count == 0,
-            -row.total_tokens,
-            -row.message_count,
-            row.provider_id,
-            row.model_id,
-            row.thinking_level or "",
-        ),
-    )
-
-
-def _filter_unconfigured_models(
-    rows: list[UnconfiguredModelRow],
-    *,
-    price_state: str,
-    min_messages: int | None,
-    min_tokens: int | None,
-) -> list[UnconfiguredModelRow]:
-    if price_state == "priced":
-        return []
-    return [
-        row
-        for row in rows
-        if (min_messages is None or row.message_count >= min_messages)
-        and (min_tokens is None or row.total_tokens >= min_tokens)
-    ]
-
-
-def _filter_series_buckets(
-    buckets: tuple[UsageSeriesBucket, ...],
-    *,
-    price_state: str,
-    min_messages: int | None,
-    min_tokens: int | None,
-) -> list[UsageSeriesBucket]:
-    return [
-        b
-        for b in buckets
-        if _series_bucket_matches_price_state(b, price_state)
-        and (min_messages is None or b.message_count >= min_messages)
-        and (min_tokens is None or b.tokens.total >= min_tokens)
-    ]
-
-
-def _series_bucket_matches_price_state(
-    bucket: UsageSeriesBucket, price_state: str
-) -> bool:
-    if price_state == "all":
-        return True
-    if price_state == "priced":
-        return bucket.costs.unpriced_count == 0
-    return bucket.costs.unpriced_count > 0
-
-
-def _sort_series_buckets(
-    buckets: list[UsageSeriesBucket],
-    *,
-    sort: str,
-) -> list[UsageSeriesBucket]:
-    if sort == "actual":
-        return sorted(
-            buckets,
-            key=lambda b: (
-                b.costs.actual_cost_usd,
-                b.tokens.total,
-                b.message_count,
-                b.key,
-            ),
-            reverse=True,
-        )
-    if sort == "virtual":
-        return sorted(
-            buckets,
-            key=lambda b: (
-                b.costs.virtual_cost_usd,
-                b.tokens.total,
-                b.message_count,
-                b.key,
-            ),
-            reverse=True,
-        )
-    if sort == "savings":
-        return sorted(
-            buckets,
-            key=lambda b: (
-                b.costs.savings_usd,
-                b.tokens.total,
-                b.message_count,
-                b.key,
-            ),
-            reverse=True,
-        )
-    if sort == "tokens":
-        return sorted(
-            buckets,
-            key=lambda b: (
-                b.tokens.total,
-                b.message_count,
-                b.key,
-            ),
-            reverse=True,
-        )
-    if sort == "messages":
-        return sorted(
-            buckets,
-            key=lambda b: (
-                b.message_count,
-                b.tokens.total,
-                b.key,
-            ),
-            reverse=True,
-        )
-    # default: sort by key (chronological)
-    return sorted(buckets, key=lambda b: b.key)
-
-
 def _price_rows(config: CostingConfig, table: str) -> list[dict[str, object]]:
     tables: list[tuple[str, tuple[Price, ...]]] = []
     if table in {"virtual", "all"}:
@@ -7077,171 +6328,6 @@ def _price_rows(config: CostingConfig, table: str) -> list[dict[str, object]]:
                 }
             )
     return rows
-
-
-def _filter_price_rows(
-    rows: list[dict[str, object]],
-    filters: PriceDisplayFilter,
-) -> list[dict[str, object]]:
-    filtered = rows
-    if filters.provider is not None:
-        normalized_provider = normalize_identity(filters.provider)
-        filtered = [
-            row
-            for row in filtered
-            if normalize_identity(str(row["provider"])) == normalized_provider
-        ]
-    if filters.model is not None:
-        normalized_model = normalize_identity(filters.model)
-        filtered = [
-            row
-            for row in filtered
-            if normalize_identity(str(row["model"])) == normalized_model
-            or normalized_model
-            in {normalize_identity(alias) for alias in _aliases_from_row(row)}
-        ]
-    if filters.category is not None:
-        normalized_category = normalize_identity(filters.category)
-        filtered = [
-            row
-            for row in filtered
-            if normalize_identity(str(row.get("category") or "")) == normalized_category
-        ]
-    if filters.release_status is not None:
-        normalized_release = filters.release_status.strip().lower()
-        filtered = [
-            row
-            for row in filtered
-            if str(row.get("release_status") or "").strip().lower()
-            == normalized_release
-        ]
-    if filters.query is not None:
-        needle = filters.query.strip().lower()
-        filtered = [
-            row
-            for row in filtered
-            if needle
-            in " ".join(
-                [
-                    str(row["provider"]),
-                    str(row["model"]),
-                    *_aliases_from_row(row),
-                    str(row.get("category") or ""),
-                    str(row.get("release_status") or ""),
-                ]
-            ).lower()
-        ]
-
-    sorted_rows = _sort_price_rows(filtered, sort=filters.sort)
-    if filters.limit is not None:
-        return sorted_rows[: filters.limit]
-    return sorted_rows
-
-
-def _sort_price_rows(
-    rows: list[dict[str, object]],
-    *,
-    sort: str,
-) -> list[dict[str, object]]:
-    if sort == "provider":
-        return sorted(
-            rows,
-            key=lambda row: (
-                str(row["provider"]),
-                str(row["model"]),
-                str(row["table"]),
-            ),
-        )
-    if sort == "model":
-        return sorted(
-            rows,
-            key=lambda row: (
-                str(row["model"]),
-                str(row["provider"]),
-                str(row["table"]),
-            ),
-        )
-    if sort == "input":
-        return sorted(
-            rows,
-            key=lambda row: (
-                _required_row_float(row, "input_usd_per_1m"),
-                str(row["provider"]),
-                str(row["model"]),
-                str(row["table"]),
-            ),
-            reverse=True,
-        )
-    if sort == "cached":
-        return sorted(
-            rows,
-            key=lambda row: (
-                _required_row_float(row, "effective_cached_input_usd_per_1m"),
-                str(row["provider"]),
-                str(row["model"]),
-                str(row["table"]),
-            ),
-            reverse=True,
-        )
-    if sort == "cache-write":
-        return sorted(
-            rows,
-            key=lambda row: (
-                _required_row_float(row, "effective_cache_write_usd_per_1m"),
-                str(row["provider"]),
-                str(row["model"]),
-                str(row["table"]),
-            ),
-            reverse=True,
-        )
-    if sort == "output":
-        return sorted(
-            rows,
-            key=lambda row: (
-                _required_row_float(row, "output_usd_per_1m"),
-                str(row["provider"]),
-                str(row["model"]),
-                str(row["table"]),
-            ),
-            reverse=True,
-        )
-    if sort == "reasoning":
-        return sorted(
-            rows,
-            key=lambda row: (
-                _required_row_float(row, "effective_reasoning_usd_per_1m"),
-                str(row["provider"]),
-                str(row["model"]),
-                str(row["table"]),
-            ),
-            reverse=True,
-        )
-    if sort == "category":
-        return sorted(
-            rows,
-            key=lambda row: (
-                str(row.get("category") or ""),
-                str(row["provider"]),
-                str(row["model"]),
-                str(row["table"]),
-            ),
-        )
-    return sorted(
-        rows,
-        key=lambda row: (
-            str(row.get("release_status") or ""),
-            str(row["provider"]),
-            str(row["model"]),
-            str(row["table"]),
-        ),
-    )
-
-
-def _aliases_from_row(row: dict[str, object]) -> list[str]:
-    aliases = row.get("aliases")
-    if not isinstance(aliases, list):
-        return []
-    return [str(alias) for alias in aliases]
 
 
 def _print_price_table(
@@ -7345,23 +6431,6 @@ def _format_price_context(row: dict[str, object]) -> str:
             return f"> {_format_int(minimum - 1)}"
         return f">= {_format_int(minimum)}"
     return f"{_format_int(minimum)}..{_format_int(maximum)}"
-
-
-def _as_float_or_none(value: object) -> float | None:
-    if value is None:
-        return None
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        msg = f"Expected float-compatible value, got {value!r}"
-        raise TypeError(msg)
-    return float(value)
-
-
-def _required_row_float(row: dict[str, object], key: str) -> float:
-    value = _as_float_or_none(row.get(key))
-    if value is None:
-        msg = f"Missing numeric price field: {key}"
-        raise TypeError(msg)
-    return value
 
 
 def _print_session_cache_analysis_report(
@@ -7541,20 +6610,6 @@ def _print_session_cache_analysis_report(
             wrap_columns={"ordinals"},
             max_widths={"ordinals": 28},
         )
-
-
-def _format_ratio_percent(value: float) -> str:
-    return f"{value * 100:.1f}%"
-
-
-def _format_cost_precise(value: Decimal | float) -> str:
-    return f"${float(value):.4f}"
-
-
-def _format_cost_or_dash(value: Decimal | None) -> str:
-    if value is None:
-        return "-"
-    return _format_cost_precise(value)
 
 
 def _build_statusline_cli(
@@ -8494,15 +7549,10 @@ def _exit_with_error(message: str) -> NoReturn:
     raise typer.Exit(1)
 
 
-def _format_int(value: int) -> str:
-    return f"{value:,}"
-
-
-def _format_cost(value: Decimal | float) -> str:
-    return f"${float(value):.2f}"
-
-
-def _format_price(value: float | None, *, fallback: str | None = None) -> str:
-    if value is None:
-        return f"={fallback}" if fallback is not None else "-"
-    return f"${value:.2f}"
+register_machine_commands(
+    machine_app,
+    load_machine_config_or_exit=_load_machine_config_or_exit,
+    open_toktrail_connection=_open_toktrail_connection,
+    resolve_machine_config_path=_resolve_machine_config_path,
+    exit_with_error=_exit_with_error,
+)
