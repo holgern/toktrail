@@ -392,7 +392,11 @@ def test_assign_area_to_existing_session_backfills_usage_events(tmp_path: Path) 
         insert_usage_events(
             conn,
             None,
-            [make_usage_event(dedup_suffix="assign-1", source_session_id="old-session")],
+            [
+                make_usage_event(
+                    dedup_suffix="assign-1", source_session_id="old-session"
+                )
+            ],
         )
         local_machine_id = get_local_machine_id(conn)
         before_row = conn.execute(
@@ -552,7 +556,11 @@ def test_usage_sessions_include_area_fields(tmp_path: Path) -> None:
         insert_usage_events(
             conn,
             None,
-            [make_usage_event(dedup_suffix="session-area-1", source_session_id="ses-a")],
+            [
+                make_usage_event(
+                    dedup_suffix="session-area-1", source_session_id="ses-a"
+                )
+            ],
         )
         assign_area_to_source_session(
             conn,

@@ -5,7 +5,7 @@ import json
 import os
 import shlex
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, cast
 
 import typer
 
@@ -215,9 +215,9 @@ def _refresh_for_export(
 
 def _refresh_changed(refresh_payload: list[dict[str, object]]) -> bool:
     for row in refresh_payload:
-        if int(row.get("rows_imported", 0)) > 0:
+        if cast(int, row.get("rows_imported", 0)) > 0:
             return True
-        if int(row.get("rows_linked", 0)) > 0:
+        if cast(int, row.get("rows_linked", 0)) > 0:
             return True
     return False
 
@@ -516,9 +516,9 @@ def sync_git_init(
     if hook_payload is not None:
         typer.echo(
             "  hooks: installed "
-            f"{len(hook_payload['installed'])}, "
-            f"overwritten {len(hook_payload['overwritten'])}, "
-            f"skipped {len(hook_payload['skipped'])}"
+            f"{len(cast(list, hook_payload['installed']))}, "
+            f"overwritten {len(cast(list, hook_payload['overwritten']))}, "
+            f"skipped {len(cast(list, hook_payload['skipped']))}"
         )
     if import_payload is not None:
         typer.echo(

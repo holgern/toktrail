@@ -140,14 +140,14 @@ def export_state_archive(
             "counts": {
                 "runs": counts["runs"],
                 "source_sessions": counts["source_sessions"],
-            "usage_events": counts["usage_events"],
-            "run_events": counts["run_events"],
-            "areas": counts["areas"],
-            "area_session_assignments": counts["area_session_assignments"],
-            "machine_active_areas": counts["machine_active_areas"],
-            "raw_json_rows": counts["raw_json_rows"],
-        },
-        "sha256": checksum_map,
+                "usage_events": counts["usage_events"],
+                "run_events": counts["run_events"],
+                "areas": counts["areas"],
+                "area_session_assignments": counts["area_session_assignments"],
+                "machine_active_areas": counts["machine_active_areas"],
+                "raw_json_rows": counts["raw_json_rows"],
+            },
+            "sha256": checksum_map,
         }
         manifest_path = temp_dir / MANIFEST_NAME
         manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")

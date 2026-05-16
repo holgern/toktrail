@@ -107,10 +107,7 @@ def _resolve_assignment_machine_id(
         (harness, source_session_id),
     ).fetchall()
     if not rows:
-        msg = (
-            "No imported source session matched "
-            f"{harness}/{source_session_id}."
-        )
+        msg = f"No imported source session matched {harness}/{source_session_id}."
         raise ValueError(msg)
     if len(rows) > 1:
         labels = db_module.machine_label_map(conn)

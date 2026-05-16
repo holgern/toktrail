@@ -543,7 +543,8 @@ def _create_schema(conn: sqlite3.Connection) -> None:
         ON area_session_assignments(area_id);
 
         CREATE TABLE IF NOT EXISTS machine_active_areas (
-            machine_id TEXT PRIMARY KEY REFERENCES machines(machine_id) ON DELETE CASCADE,
+            machine_id TEXT PRIMARY KEY
+                REFERENCES machines(machine_id) ON DELETE CASCADE,
             area_id INTEGER REFERENCES areas(id) ON DELETE SET NULL,
             updated_at_ms INTEGER NOT NULL,
             imported_at_ms INTEGER
@@ -1126,7 +1127,8 @@ def _create_machine_active_areas_table(conn: sqlite3.Connection) -> None:
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS machine_active_areas (
-            machine_id TEXT PRIMARY KEY REFERENCES machines(machine_id) ON DELETE CASCADE,
+            machine_id TEXT PRIMARY KEY
+                REFERENCES machines(machine_id) ON DELETE CASCADE,
             area_id INTEGER REFERENCES areas(id) ON DELETE SET NULL,
             updated_at_ms INTEGER NOT NULL,
             imported_at_ms INTEGER
@@ -1958,7 +1960,11 @@ def ensure_area(
             if area.parent_id != parent_id:
                 msg = f"Area tree mismatch for path {current_path!r}."
                 raise ValueError(msg)
-            if area.name != display_name and index == len(slugs) - 1 and name is not None:
+            if (
+                area.name != display_name
+                and index == len(slugs) - 1
+                and name is not None
+            ):
                 conn.execute(
                     """
                     UPDATE areas
@@ -2073,8 +2079,10 @@ def set_active_area(
             area_id = excluded.area_id,
             updated_at_ms = excluded.updated_at_ms,
             imported_at_ms = CASE
-                WHEN machine_active_areas.imported_at_ms IS NULL THEN excluded.imported_at_ms
-                WHEN excluded.imported_at_ms IS NULL THEN machine_active_areas.imported_at_ms
+                WHEN machine_active_areas.imported_at_ms IS NULL
+                    THEN excluded.imported_at_ms
+                WHEN excluded.imported_at_ms IS NULL
+                    THEN machine_active_areas.imported_at_ms
                 ELSE MAX(machine_active_areas.imported_at_ms, excluded.imported_at_ms)
             END
         """,
@@ -2651,7 +2659,7 @@ def insert_usage_events(
             if should_link:
                 harness_session_id = harness_session_ids.get(
                     (event.harness, event.source_session_id)
-            )
+                )
             provider_key = normalize_identity(event.provider_id)
             model_key = normalize_identity(event.model_id)
             agent_key = normalize_identity(event.agent) if event.agent else None
@@ -4327,7 +4335,7 @@ def summarize_usage_areas(
         if row.area_id is None:
             buckets.setdefault(None, _ReportBucket()).add(atom, breakdown)
             continue
-        current_area_id = row.area_id
+        current_area_id: int | None = row.area_id
         while current_area_id is not None:
             if allowed_area_ids and current_area_id not in allowed_area_ids:
                 break
@@ -5081,6 +5089,57 @@ def _run_archive_filter_sql(filters: UsageRunsFilter, where_clause: str) -> str:
     return " WHERE " + " AND ".join(run_filter_clauses)
 
 
+def _build_runs_where_clause(
+    usage_filters: UsageReportFilter,
+) -> tuple[str, list[object]]:
+
+    clauses: list[str] = []
+    params: list[object] = []
+    if usage_filters.harness is not None:
+        clauses.append("ue.harness = ?")
+        params.append(usage_filters.harness)
+    if usage_filters.machine_id is not None:
+        clauses.append("ue.origin_machine_id = ?")
+        params.append(usage_filters.machine_id)
+    if usage_filters.provider_id is not None:
+        clauses.append("ue.provider_id = ?")
+        params.append(usage_filters.provider_id)
+    elif usage_filters.provider_ids:
+        normalized = tuple(
+            normalize_identity(pid) for pid in usage_filters.provider_ids
+        )
+        ph = ", ".join("?" for _ in normalized)
+        clauses.append(f"ue.provider_id IN ({ph})")
+        params.extend(normalized)
+    if usage_filters.model_id is not None:
+        clauses.append("ue.model_id = ?")
+        params.append(usage_filters.model_id)
+    if usage_filters.thinking_level is not None:
+        clauses.append("COALESCE(ue.thinking_level, '') = ?")
+        params.append(usage_filters.thinking_level)
+    if usage_filters.agent is not None:
+        clauses.append("ue.agent = ?")
+        params.append(usage_filters.agent)
+    if usage_filters.since_ms is not None:
+        clauses.append("ue.created_ms >= ?")
+        params.append(usage_filters.since_ms)
+    if usage_filters.until_ms is not None:
+        clauses.append("ue.created_ms < ?")
+        params.append(usage_filters.until_ms)
+    if usage_filters.unassigned_area:
+        clauses.append("ue.area_id IS NULL")
+    elif usage_filters.area is not None:
+        if len(usage_filters.area_ids) == 1:
+            clauses.append("ue.area_id = ?")
+            params.append(usage_filters.area_ids[0])
+        elif usage_filters.area_ids:
+            ph = ", ".join("?" for _ in usage_filters.area_ids)
+            clauses.append(f"ue.area_id IN ({ph})")
+            params.extend(usage_filters.area_ids)
+    where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+    return where, params
+
+
 def summarize_usage_runs(
     conn: sqlite3.Connection,
     filters: UsageRunsFilter,
@@ -5101,53 +5160,7 @@ def summarize_usage_runs(
         filters.to_usage_report_filter(),
     )
     usage_filters = _resolve_usage_area_filter(conn, usage_filters)
-    base_where_clauses: list[str] = []
-    base_params: list[object] = []
-    if usage_filters.harness is not None:
-        base_where_clauses.append("ue.harness = ?")
-        base_params.append(usage_filters.harness)
-    if usage_filters.machine_id is not None:
-        base_where_clauses.append("ue.origin_machine_id = ?")
-        base_params.append(usage_filters.machine_id)
-    if usage_filters.provider_id is not None:
-        base_where_clauses.append("ue.provider_id = ?")
-        base_params.append(usage_filters.provider_id)
-    elif usage_filters.provider_ids:
-        normalized_provider_ids = tuple(
-            normalize_identity(pid) for pid in usage_filters.provider_ids
-        )
-        ph = ", ".join("?" for _ in normalized_provider_ids)
-        base_where_clauses.append(f"ue.provider_id IN ({ph})")
-        base_params.extend(normalized_provider_ids)
-    if usage_filters.model_id is not None:
-        base_where_clauses.append("ue.model_id = ?")
-        base_params.append(usage_filters.model_id)
-    if usage_filters.thinking_level is not None:
-        base_where_clauses.append("COALESCE(ue.thinking_level, '') = ?")
-        base_params.append(usage_filters.thinking_level)
-    if usage_filters.agent is not None:
-        base_where_clauses.append("ue.agent = ?")
-        base_params.append(usage_filters.agent)
-    if usage_filters.since_ms is not None:
-        base_where_clauses.append("ue.created_ms >= ?")
-        base_params.append(usage_filters.since_ms)
-    if usage_filters.until_ms is not None:
-        base_where_clauses.append("ue.created_ms < ?")
-        base_params.append(usage_filters.until_ms)
-    if usage_filters.unassigned_area:
-        base_where_clauses.append("ue.area_id IS NULL")
-    elif usage_filters.area is not None:
-        if len(usage_filters.area_ids) == 1:
-            base_where_clauses.append("ue.area_id = ?")
-            base_params.append(usage_filters.area_ids[0])
-        elif usage_filters.area_ids:
-            ph = ", ".join("?" for _ in usage_filters.area_ids)
-            base_where_clauses.append(f"ue.area_id IN ({ph})")
-            base_params.extend(usage_filters.area_ids)
-    where_clause = (
-        f" WHERE {' AND '.join(base_where_clauses)}" if base_where_clauses else ""
-    )
-    params = base_params
+    where_clause, params = _build_runs_where_clause(usage_filters)
     run_filter_sql = _run_archive_filter_sql(filters, where_clause)
 
     thinking_select = (

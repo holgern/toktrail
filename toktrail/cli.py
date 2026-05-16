@@ -7635,9 +7635,7 @@ def _resolve_assignment_machine_id_or_exit(
             f"No imported source session matched {harness}/{source_session_id}."
         )
     if len(rows) > 1:
-        _exit_with_error(
-            "Source session matched multiple machines. Specify --machine."
-        )
+        _exit_with_error("Source session matched multiple machines. Specify --machine.")
     value = rows[0]["origin_machine_id"]
     if not isinstance(value, str):
         msg = "Expected origin_machine_id to be a string."
