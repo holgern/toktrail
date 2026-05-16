@@ -194,6 +194,44 @@ track = ["prices", "provider-prices", "subscriptions"]
     assert config.sync_git.track == ("prices", "provider-prices", "subscriptions")
 
 
+def test_load_runtime_config_parses_sync_git_auto_aliases(tmp_path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        """
+config_version = 1
+
+[sync.git]
+auto_import = false
+auto_export = true
+""".strip(),
+        encoding="utf-8",
+    )
+
+    config = load_runtime_config(config_path)
+
+    assert config.sync_git.auto_pull is False
+    assert config.sync_git.auto_push is True
+
+
+def test_load_runtime_config_rejects_sync_git_conflicting_auto_aliases(
+    tmp_path,
+) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        """
+config_version = 1
+
+[sync.git]
+auto_pull = true
+auto_import = false
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="auto_pull and sync.git.auto_import conflict"):
+        load_runtime_config(config_path)
+
+
 def test_load_runtime_config_parses_sync_git_track_all(tmp_path) -> None:
     config_path = tmp_path / "config.toml"
     config_path.write_text(

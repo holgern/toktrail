@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 import subprocess
 import tarfile
 import tempfile
@@ -25,6 +26,8 @@ DEFAULT_ARCHIVE_DIR = "archives"
 DEFAULT_REMOTE = "origin"
 DEFAULT_BRANCH = "main"
 _STATE_DB_FILE_NAMES = frozenset({"toktrail.db", "toktrail.db-wal", "toktrail.db-shm"})
+_HOOK_MARKER = "# toktrail-managed-hook v1"
+_MANAGED_HOOKS = ("post-merge", "post-checkout", "post-rewrite")
 
 
 @dataclass(frozen=True)
@@ -102,6 +105,34 @@ class GitSyncResult:
         return {
             "pull": self.pull.as_dict(),
             "push": None if self.push is None else self.push.as_dict(),
+        }
+
+
+@dataclass(frozen=True)
+class GitHookInstallResult:
+    repo_path: Path
+    installed: tuple[str, ...]
+    skipped: tuple[str, ...]
+    overwritten: tuple[str, ...]
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "repo_path": str(self.repo_path),
+            "installed": list(self.installed),
+            "skipped": list(self.skipped),
+            "overwritten": list(self.overwritten),
+        }
+
+
+@dataclass(frozen=True)
+class GitHookStatus:
+    repo_path: Path
+    hooks: dict[str, str]
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "repo_path": str(self.repo_path),
+            "hooks": dict(self.hooks),
         }
 
 
@@ -409,6 +440,102 @@ def git_sync_status(
     )
 
 
+def install_git_hooks(
+    repo_path: Path,
+    *,
+    toktrail_command: tuple[str, ...] = ("toktrail",),
+    config_path: Path | None = None,
+    db_path: Path | None = None,
+    force: bool = False,
+) -> GitHookInstallResult:
+    resolved_repo = _require_repo(repo_path)
+    hooks_dir = resolved_repo / ".git" / "hooks"
+    hooks_dir.mkdir(parents=True, exist_ok=True)
+    hook_script = _render_import_local_hook_script(
+        toktrail_command=toktrail_command,
+        config_path=config_path,
+        db_path=db_path,
+        repo_path=resolved_repo,
+    )
+
+    installed: list[str] = []
+    skipped: list[str] = []
+    overwritten: list[str] = []
+    for hook_name in _MANAGED_HOOKS:
+        hook_path = hooks_dir / hook_name
+        if hook_path.exists():
+            existing = hook_path.read_text(encoding="utf-8")
+            if _is_managed_hook(existing):
+                if existing == hook_script:
+                    skipped.append(hook_name)
+                    continue
+                hook_path.write_text(hook_script, encoding="utf-8")
+                hook_path.chmod(0o755)
+                overwritten.append(hook_name)
+                continue
+            if not force:
+                sample_path = hook_path.with_suffix(
+                    f"{hook_path.suffix}.toktrail.sample"
+                )
+                sample_path.write_text(hook_script, encoding="utf-8")
+                skipped.append(hook_name)
+                continue
+            hook_path.write_text(hook_script, encoding="utf-8")
+            hook_path.chmod(0o755)
+            overwritten.append(hook_name)
+            continue
+
+        hook_path.write_text(hook_script, encoding="utf-8")
+        hook_path.chmod(0o755)
+        installed.append(hook_name)
+
+    return GitHookInstallResult(
+        repo_path=resolved_repo,
+        installed=tuple(installed),
+        skipped=tuple(skipped),
+        overwritten=tuple(overwritten),
+    )
+
+
+def uninstall_git_hooks(repo_path: Path) -> GitHookInstallResult:
+    resolved_repo = _require_repo(repo_path)
+    hooks_dir = resolved_repo / ".git" / "hooks"
+    installed: list[str] = []
+    skipped: list[str] = []
+    overwritten: list[str] = []
+    for hook_name in _MANAGED_HOOKS:
+        hook_path = hooks_dir / hook_name
+        if not hook_path.exists():
+            skipped.append(hook_name)
+            continue
+        content = hook_path.read_text(encoding="utf-8")
+        if not _is_managed_hook(content):
+            skipped.append(hook_name)
+            continue
+        hook_path.unlink()
+        overwritten.append(hook_name)
+    return GitHookInstallResult(
+        repo_path=resolved_repo,
+        installed=tuple(installed),
+        skipped=tuple(skipped),
+        overwritten=tuple(overwritten),
+    )
+
+
+def git_hooks_status(repo_path: Path) -> GitHookStatus:
+    resolved_repo = _require_repo(repo_path)
+    hooks_dir = resolved_repo / ".git" / "hooks"
+    status: dict[str, str] = {}
+    for hook_name in _MANAGED_HOOKS:
+        hook_path = hooks_dir / hook_name
+        if not hook_path.exists():
+            status[hook_name] = "missing"
+            continue
+        content = hook_path.read_text(encoding="utf-8")
+        status[hook_name] = "installed" if _is_managed_hook(content) else "foreign"
+    return GitHookStatus(repo_path=resolved_repo, hooks=status)
+
+
 def _write_repo_layout(repo_path: Path) -> None:
     (repo_path / "meta").mkdir(parents=True, exist_ok=True)
     format_path = repo_path / "meta" / "format.json"
@@ -439,6 +566,39 @@ def _write_repo_layout(repo_path: Path) -> None:
             "Do not commit live sqlite state files (`toktrail.db*`).\n",
             encoding="utf-8",
         )
+
+
+def _render_import_local_hook_script(
+    *,
+    toktrail_command: tuple[str, ...],
+    config_path: Path | None,
+    db_path: Path | None,
+    repo_path: Path,
+) -> str:
+    if not toktrail_command:
+        msg = "toktrail_command must contain at least one token."
+        raise ValueError(msg)
+    command_parts = list(toktrail_command)
+    if db_path is not None:
+        command_parts.extend(("--db", str(db_path.expanduser())))
+    if config_path is not None:
+        command_parts.extend(("--config", str(config_path.expanduser())))
+    command_parts.extend(
+        (
+            "sync",
+            "git",
+            "import-local",
+            "--repo",
+            str(repo_path.expanduser()),
+            "--quiet",
+        )
+    )
+    command = " ".join(shlex.quote(part) for part in command_parts)
+    return f"#!/bin/sh\n{_HOOK_MARKER}\nTOKTRAIL_GIT_HOOK=1 exec {command}\n"
+
+
+def _is_managed_hook(content: str) -> bool:
+    return _HOOK_MARKER in content
 
 
 def _require_repo(repo_path: Path) -> Path:

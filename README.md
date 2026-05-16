@@ -327,15 +327,22 @@ local state.
 
 ```bash
 toktrail sync git init --repo ~/toktrail-state --remote git@github.com:me/toktrail-state.git
-toktrail sync git sync
+cd ~/toktrail-state
+git pull
+git push
 ```
 
 On another machine:
 
 ```bash
 toktrail sync git init --repo ~/toktrail-state --remote git@github.com:me/toktrail-state.git
-toktrail sync git pull
+cd ~/toktrail-state
+git pull
 ```
+
+`toktrail sync git init` installs local Git hooks by default so plain `git pull`
+imports archives into the local toktrail DB. Hooks are clone-local, so run
+`toktrail sync git init` (or `toktrail sync git hooks install`) once per clone.
 
 By default Git sync exports with raw JSON redaction and stores archives under
 `archives/<machine_id>/...tar.gz`. Do not commit live sqlite files
@@ -357,8 +364,17 @@ toktrail then reads/writes:
 - `<repo>/config/prices/*.toml`
 - `<repo>/config/subscriptions.toml`
 
-Run `toktrail sync git sync` to pull remote changes and commit local archive +
-tracked config updates. CLI/env overrides still win over tracked paths:
+Compatibility commands remain available for explicit flows and recovery:
+
+```bash
+toktrail sync git import-local
+toktrail sync git export-local --no-refresh
+toktrail sync git pull
+toktrail sync git push
+toktrail sync git sync
+```
+
+CLI/env overrides still win over tracked paths:
 `--prices`, `--prices-dir`, `--subscriptions`, `TOKTRAIL_PRICES`,
 `TOKTRAIL_PRICES_DIR`, `TOKTRAIL_SUBSCRIPTIONS`.
 

@@ -130,6 +130,8 @@ _SYNC_GIT_FIELDS = {
     "archive_dir",
     "auto_pull",
     "auto_push",
+    "auto_import",
+    "auto_export",
     "redact_raw_json",
     "include_config",
     "remote_active",
@@ -272,8 +274,8 @@ vibe = "~/.vibe/logs/session"
 # remote = "origin"
 # branch = "main"
 # archive_dir = "archives"
-# auto_pull = true
-# auto_push = true
+# auto_import = true  # alias: auto_pull
+# auto_export = true  # alias: auto_push
 # redact_raw_json = true
 # include_config = false
 # remote_active = "close-at-export"
@@ -2146,6 +2148,42 @@ def _parse_sync_config(value: object, default_config: GitSyncConfig) -> GitSyncC
     _validate_allowed_keys(sync_table, _SYNC_FIELDS, context="sync")
     git_table = _parse_optional_table(sync_table.get("git"), context="sync.git")
     _validate_allowed_keys(git_table, _SYNC_GIT_FIELDS, context="sync.git")
+
+    auto_pull_configured = "auto_pull" in git_table
+    auto_import_configured = "auto_import" in git_table
+    auto_push_configured = "auto_push" in git_table
+    auto_export_configured = "auto_export" in git_table
+
+    auto_pull = _parse_bool(
+        git_table.get("auto_pull", default_config.auto_pull),
+        context="sync.git.auto_pull",
+    )
+    auto_import = _parse_bool(
+        git_table.get("auto_import", auto_pull),
+        context="sync.git.auto_import",
+    )
+    if auto_pull_configured and auto_import_configured and auto_pull != auto_import:
+        msg = (
+            "sync.git.auto_pull and sync.git.auto_import conflict; "
+            "set only one or use the same value."
+        )
+        raise ValueError(msg)
+
+    auto_push = _parse_bool(
+        git_table.get("auto_push", default_config.auto_push),
+        context="sync.git.auto_push",
+    )
+    auto_export = _parse_bool(
+        git_table.get("auto_export", auto_push),
+        context="sync.git.auto_export",
+    )
+    if auto_push_configured and auto_export_configured and auto_push != auto_export:
+        msg = (
+            "sync.git.auto_push and sync.git.auto_export conflict; "
+            "set only one or use the same value."
+        )
+        raise ValueError(msg)
+
     return GitSyncConfig(
         repo=_parse_optional_string(git_table.get("repo"), context="sync.git.repo"),
         remote=_parse_string(
@@ -2160,14 +2198,8 @@ def _parse_sync_config(value: object, default_config: GitSyncConfig) -> GitSyncC
             git_table.get("archive_dir", default_config.archive_dir),
             context="sync.git.archive_dir",
         ),
-        auto_pull=_parse_bool(
-            git_table.get("auto_pull", default_config.auto_pull),
-            context="sync.git.auto_pull",
-        ),
-        auto_push=_parse_bool(
-            git_table.get("auto_push", default_config.auto_push),
-            context="sync.git.auto_push",
-        ),
+        auto_pull=auto_import,
+        auto_push=auto_export,
         redact_raw_json=_parse_bool(
             git_table.get("redact_raw_json", default_config.redact_raw_json),
             context="sync.git.redact_raw_json",

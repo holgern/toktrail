@@ -19,6 +19,10 @@ Keep ``config.toml`` local and opt into shared costing files via Git sync:
    repo = "~/toktrail-state"
    track = ["prices", "provider-prices", "subscriptions"]
 
+``[sync.git].repo`` is also the canonical state-sync repository used by
+``toktrail sync git`` and plain ``git pull``/``git push`` workflows after
+``toktrail sync git init`` installs repo-local hooks.
+
 With this setting, toktrail reads/writes:
 
 - ``<repo>/config/prices.toml``

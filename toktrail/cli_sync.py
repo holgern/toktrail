@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import os
+import shlex
 from pathlib import Path
 from typing import Annotated
 
 import typer
 
+from toktrail import db as db_module
 from toktrail.api.imports import import_configured_usage
 from toktrail.api.sync import (
     default_archive_name,
@@ -19,9 +23,13 @@ from toktrail.git_sync import (
     DEFAULT_REMOTE,
     ensure_git_repo,
     export_repo_archive,
+    git_hooks_status,
     git_pull,
+    git_push,
     git_sync_status,
     import_repo_archives,
+    install_git_hooks,
+    uninstall_git_hooks,
 )
 from toktrail.paths import (
     resolve_toktrail_config_path,
@@ -32,7 +40,9 @@ from toktrail.sync import RemoteActiveMode as SyncRemoteActiveMode
 
 sync_app = typer.Typer(help="Export and import toktrail state archives.")
 sync_git_app = typer.Typer(help="Sync toktrail state through a Git repository.")
+sync_git_hooks_app = typer.Typer(help="Manage toktrail-managed Git hooks.")
 sync_app.add_typer(sync_git_app, name="git")
+sync_git_app.add_typer(sync_git_hooks_app, name="hooks")
 
 JsonOption = Annotated[bool, typer.Option("--json")]
 RefreshOption = Annotated[
@@ -203,6 +213,139 @@ def _refresh_for_export(
     return [result.as_dict() for result in results]
 
 
+def _refresh_changed(refresh_payload: list[dict[str, object]]) -> bool:
+    for row in refresh_payload:
+        if int(row.get("rows_imported", 0)) > 0:
+            return True
+        if int(row.get("rows_linked", 0)) > 0:
+            return True
+    return False
+
+
+def _export_state_fingerprint(db_path: Path) -> str:
+    conn = db_module.connect(db_path.expanduser())
+    try:
+        db_module.migrate(conn)
+        row = conn.execute(
+            """
+            SELECT
+              (SELECT COUNT(*) FROM usage_events) AS usage_count,
+              (SELECT COALESCE(MAX(id), 0) FROM usage_events) AS usage_max_id,
+              (SELECT COUNT(*) FROM runs) AS run_count,
+              (SELECT COALESCE(MAX(updated_at_ms), 0) FROM runs) AS run_updated_max,
+              (SELECT COUNT(*) FROM source_sessions) AS source_session_count,
+              (
+                SELECT COALESCE(MAX(updated_at_ms), 0) FROM source_sessions
+              ) AS source_session_updated_max,
+              (SELECT COUNT(*) FROM run_events) AS run_event_count,
+              (SELECT COUNT(*) FROM sync_imports WHERE dry_run = 0) AS sync_import_count
+            """
+        ).fetchone()
+    finally:
+        conn.close()
+    if row is None:
+        return ""
+    payload = {
+        "usage_count": int(row[0]),
+        "usage_max_id": int(row[1]),
+        "run_count": int(row[2]),
+        "run_updated_max": int(row[3]),
+        "source_session_count": int(row[4]),
+        "source_session_updated_max": int(row[5]),
+        "run_event_count": int(row[6]),
+        "sync_import_count": int(row[7]),
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode(
+        "utf-8"
+    )
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _repo_metadata_key(repo_path: Path) -> str:
+    repo_hash = hashlib.sha256(
+        str(repo_path.expanduser().resolve()).encode("utf-8")
+    ).hexdigest()
+    repo_id = repo_hash[:16]
+    return f"git_sync.last_export.{repo_id}"
+
+
+def _resolve_hook_command() -> tuple[str, ...]:
+    configured = os.environ.get("TOKTRAIL_GIT_HOOK_COMMAND")
+    if configured is None:
+        return ("toktrail",)
+    pieces = tuple(part for part in shlex.split(configured) if part)
+    if not pieces:
+        msg = "TOKTRAIL_GIT_HOOK_COMMAND must not be empty."
+        raise ValueError(msg)
+    return pieces
+
+
+def maybe_auto_export_to_git_repo(
+    ctx: typer.Context,
+    *,
+    reason: str,
+    only_if_changed: bool = True,
+    quiet: bool = True,
+) -> bool:
+    if os.environ.get("TOKTRAIL_GIT_HOOK") == "1":
+        return False
+    if os.environ.get("TOKTRAIL_DISABLE_GIT_SYNC") == "1":
+        return False
+
+    loaded = _load_resolved_sync_config(ctx)
+    runtime = loaded.runtime.sync_git
+    if not runtime.repo:
+        return False
+    if not runtime.auto_push:
+        return False
+
+    repo_path = Path(runtime.repo).expanduser()
+    db_path = _resolve_state_db(ctx)
+    metadata_key = _repo_metadata_key(repo_path)
+    fingerprint = _export_state_fingerprint(db_path)
+
+    conn = db_module.connect(db_path.expanduser())
+    try:
+        db_module.migrate(conn)
+        previous = db_module.get_state_metadata(conn, metadata_key)
+    finally:
+        conn.close()
+
+    if only_if_changed and previous == fingerprint:
+        return False
+
+    try:
+        result = export_repo_archive(
+            db_path,
+            repo_path,
+            archive_dir=runtime.archive_dir or DEFAULT_ARCHIVE_DIR,
+            config_path=loaded.config_path,
+            include_config=runtime.include_config,
+            redact_raw_json=runtime.redact_raw_json,
+            commit_message=f"toktrail auto-export: {reason}",
+            remote=runtime.remote or DEFAULT_REMOTE,
+            branch=runtime.branch or DEFAULT_BRANCH,
+            push=False,
+            allow_dirty=False,
+            tracked_config_paths=_tracked_config_paths(loaded),
+        )
+    except (OSError, ValueError) as exc:
+        typer.echo(f"warning: auto git export skipped ({reason}): {exc}", err=True)
+        return False
+
+    conn = db_module.connect(db_path.expanduser())
+    try:
+        db_module.migrate(conn)
+        db_module.set_state_metadata(conn, metadata_key, fingerprint)
+        conn.commit()
+    finally:
+        conn.close()
+
+    if not quiet and result.committed:
+        typer.echo(f"Auto-exported to git sync repo: {result.archive_path}")
+    return result.committed
+
+
 @sync_app.command("export")
 def sync_export(
     ctx: typer.Context,
@@ -269,6 +412,9 @@ def sync_import(
     except (OSError, ValueError) as exc:
         _exit_with_error(str(exc))
 
+    if not dry_run:
+        maybe_auto_export_to_git_repo(ctx, reason="sync import")
+
     if json_output:
         typer.echo(json.dumps(result.as_dict(), indent=2))
         return
@@ -301,14 +447,50 @@ def sync_git_init(
     repo: RepoOption = None,
     remote_url: Annotated[str | None, typer.Option("--remote")] = None,
     branch: Annotated[str | None, typer.Option("--branch")] = None,
+    hooks: Annotated[
+        bool,
+        typer.Option("--hooks/--no-hooks", help="Install toktrail-managed hooks."),
+    ] = True,
+    import_existing: Annotated[
+        bool,
+        typer.Option(
+            "--import-existing/--no-import-existing",
+            help="Import existing archives from the repo after init.",
+        ),
+    ] = True,
+    force_hooks: Annotated[
+        bool,
+        typer.Option("--force-hooks", help="Overwrite foreign hooks."),
+    ] = False,
     json_output: JsonOption = False,
 ) -> None:
     loaded = _load_resolved_sync_config(ctx)
     runtime = loaded.runtime
     repo_path = _resolve_git_repo(repo, loaded)
     branch_name = branch or runtime.sync_git.branch or DEFAULT_BRANCH
+    hook_payload: dict[str, object] | None = None
+    import_payload: dict[str, object] | None = None
     try:
         ensure_git_repo(repo_path, remote_url=remote_url, branch=branch_name)
+        if hooks:
+            hook_result = install_git_hooks(
+                repo_path,
+                toktrail_command=_resolve_hook_command(),
+                config_path=_resolve_config_path(ctx),
+                db_path=_resolve_state_db(ctx),
+                force=force_hooks,
+            )
+            hook_payload = hook_result.as_dict()
+        if import_existing:
+            import_result = import_repo_archives(
+                _resolve_state_db(ctx),
+                repo_path,
+                dry_run=False,
+                archive_dir=runtime.sync_git.archive_dir or DEFAULT_ARCHIVE_DIR,
+                on_conflict=_parse_sync_conflict_mode(runtime.sync_git.on_conflict),
+                remote_active=_parse_sync_remote_active_mode(runtime.sync_git.remote_active),
+            )
+            import_payload = import_result.as_dict()
         status = git_sync_status(
             _resolve_state_db(ctx),
             repo_path,
@@ -319,17 +501,37 @@ def sync_git_init(
         _exit_with_error(str(exc))
 
     if json_output:
-        typer.echo(json.dumps(status.as_dict(), indent=2))
+        payload = status.as_dict()
+        if hook_payload is not None:
+            payload["hooks"] = hook_payload
+        if import_payload is not None:
+            payload["import"] = import_payload
+        typer.echo(json.dumps(payload, indent=2))
         return
 
     typer.echo("Git sync repository initialized:")
     typer.echo(f"  repo: {status.repo_path}")
     typer.echo(f"  branch: {status.branch or 'unknown'}")
     typer.echo(f"  remote: {status.remote or 'not configured'}")
+    if hook_payload is not None:
+        typer.echo(
+            "  hooks: installed "
+            f"{len(hook_payload['installed'])}, "
+            f"overwritten {len(hook_payload['overwritten'])}, "
+            f"skipped {len(hook_payload['skipped'])}"
+        )
+    if import_payload is not None:
+        typer.echo(
+            "  import: "
+            f"seen {import_payload['archives_seen']}, "
+            f"imported {import_payload['archives_imported']}, "
+            f"skipped {import_payload['archives_skipped']}"
+        )
     if status.state_db_paths:
         typer.echo("  warning: live sqlite files found in repo:")
         for relpath in status.state_db_paths:
             typer.echo(f"    - {relpath}")
+    typer.echo(f"  next: cd {status.repo_path} && git pull && git push")
 
 
 @sync_git_app.command("status")
@@ -369,6 +571,184 @@ def sync_git_status(
         typer.echo("  warning: live sqlite files found in repo:")
         for relpath in status.state_db_paths:
             typer.echo(f"    - {relpath}")
+
+
+@sync_git_hooks_app.command("install")
+def sync_git_hooks_install(
+    ctx: typer.Context,
+    repo: RepoOption = None,
+    force: Annotated[bool, typer.Option("--force")] = False,
+    json_output: JsonOption = False,
+) -> None:
+    loaded = _load_resolved_sync_config(ctx)
+    repo_path = _resolve_git_repo(repo, loaded)
+    try:
+        result = install_git_hooks(
+            repo_path,
+            toktrail_command=_resolve_hook_command(),
+            config_path=_resolve_config_path(ctx),
+            db_path=_resolve_state_db(ctx),
+            force=force,
+        )
+    except (OSError, ValueError) as exc:
+        _exit_with_error(str(exc))
+
+    if json_output:
+        typer.echo(json.dumps(result.as_dict(), indent=2))
+        return
+
+    typer.echo("Git hooks install")
+    typer.echo(f"  repo: {result.repo_path}")
+    typer.echo(f"  installed: {', '.join(result.installed) or 'none'}")
+    typer.echo(f"  overwritten: {', '.join(result.overwritten) or 'none'}")
+    typer.echo(f"  skipped: {', '.join(result.skipped) or 'none'}")
+
+
+@sync_git_hooks_app.command("status")
+def sync_git_hooks_status(
+    ctx: typer.Context,
+    repo: RepoOption = None,
+    json_output: JsonOption = False,
+) -> None:
+    loaded = _load_resolved_sync_config(ctx)
+    repo_path = _resolve_git_repo(repo, loaded)
+    try:
+        result = git_hooks_status(repo_path)
+    except (OSError, ValueError) as exc:
+        _exit_with_error(str(exc))
+
+    if json_output:
+        typer.echo(json.dumps(result.as_dict(), indent=2))
+        return
+
+    typer.echo("Git hooks status")
+    typer.echo(f"  repo: {result.repo_path}")
+    for hook_name, hook_status in result.hooks.items():
+        typer.echo(f"  {hook_name}: {hook_status}")
+
+
+@sync_git_hooks_app.command("uninstall")
+def sync_git_hooks_uninstall(
+    ctx: typer.Context,
+    repo: RepoOption = None,
+    json_output: JsonOption = False,
+) -> None:
+    loaded = _load_resolved_sync_config(ctx)
+    repo_path = _resolve_git_repo(repo, loaded)
+    try:
+        result = uninstall_git_hooks(repo_path)
+    except (OSError, ValueError) as exc:
+        _exit_with_error(str(exc))
+
+    if json_output:
+        typer.echo(json.dumps(result.as_dict(), indent=2))
+        return
+
+    typer.echo("Git hooks uninstall")
+    typer.echo(f"  repo: {result.repo_path}")
+    typer.echo(f"  removed: {', '.join(result.overwritten) or 'none'}")
+    typer.echo(f"  skipped: {', '.join(result.skipped) or 'none'}")
+
+
+@sync_git_app.command("import-local")
+def sync_git_import_local(
+    ctx: typer.Context,
+    repo: RepoOption = None,
+    dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
+    on_conflict: Annotated[str | None, typer.Option("--on-conflict")] = None,
+    remote_active: Annotated[str | None, typer.Option("--remote-active")] = None,
+    quiet: Annotated[bool, typer.Option("--quiet")] = False,
+    json_output: JsonOption = False,
+) -> None:
+    loaded = _load_resolved_sync_config(ctx)
+    runtime = loaded.runtime
+    repo_path = _resolve_git_repo(repo, loaded)
+    conflict_mode = on_conflict or runtime.sync_git.on_conflict
+    remote_active_mode = remote_active or runtime.sync_git.remote_active
+    try:
+        result = import_repo_archives(
+            _resolve_state_db(ctx),
+            repo_path,
+            dry_run=dry_run,
+            archive_dir=runtime.sync_git.archive_dir or DEFAULT_ARCHIVE_DIR,
+            on_conflict=_parse_sync_conflict_mode(conflict_mode),
+            remote_active=_parse_sync_remote_active_mode(remote_active_mode),
+        )
+    except (OSError, ValueError) as exc:
+        _exit_with_error(str(exc))
+
+    if json_output:
+        typer.echo(json.dumps(result.as_dict(), indent=2))
+        return
+    if quiet:
+        return
+
+    heading = "Dry-run local import:" if dry_run else "Local import:"
+    typer.echo(heading)
+    typer.echo(f"  repo: {result.repo_path}")
+    typer.echo(f"  archives: seen {result.archives_seen}")
+    typer.echo(f"  archives: imported {result.archives_imported}")
+    typer.echo(f"  archives: skipped {result.archives_skipped}")
+
+
+@sync_git_app.command("export-local")
+def sync_git_export_local(
+    ctx: typer.Context,
+    repo: RepoOption = None,
+    refresh: RefreshOption = True,
+    message: Annotated[str | None, typer.Option("--message")] = None,
+    allow_dirty: Annotated[bool, typer.Option("--allow-dirty")] = False,
+    quiet: Annotated[bool, typer.Option("--quiet")] = False,
+    json_output: JsonOption = False,
+) -> None:
+    loaded = _load_resolved_sync_config(ctx)
+    runtime = loaded.runtime
+    repo_path = _resolve_git_repo(repo, loaded)
+    try:
+        refresh_payload = _refresh_for_export(
+            ctx,
+            enabled=refresh,
+            details=False,
+            json_output=json_output,
+        )
+        result = export_repo_archive(
+            _resolve_state_db(ctx),
+            repo_path,
+            archive_dir=runtime.sync_git.archive_dir or DEFAULT_ARCHIVE_DIR,
+            config_path=loaded.config_path,
+            include_config=runtime.sync_git.include_config,
+            redact_raw_json=runtime.sync_git.redact_raw_json,
+            commit_message=message,
+            remote=runtime.sync_git.remote or DEFAULT_REMOTE,
+            branch=runtime.sync_git.branch or DEFAULT_BRANCH,
+            push=False,
+            allow_dirty=allow_dirty,
+            tracked_config_paths=_tracked_config_paths(loaded),
+        )
+    except (OSError, ValueError) as exc:
+        _exit_with_error(str(exc))
+
+    if _refresh_changed(refresh_payload):
+        maybe_auto_export_to_git_repo(
+            ctx,
+            reason="sync git export-local refresh",
+            only_if_changed=False,
+        )
+
+    if json_output:
+        payload = result.as_dict()
+        if refresh:
+            payload["refresh"] = refresh_payload
+        typer.echo(json.dumps(payload, indent=2))
+        return
+    if quiet:
+        return
+
+    typer.echo("Git export (local only):")
+    typer.echo(f"  repo: {result.repo_path}")
+    typer.echo(f"  archive: {result.archive_path}")
+    typer.echo(f"  committed: {'yes' if result.committed else 'no'}")
+    typer.echo(f"  commit: {result.commit_hash or 'none'}")
 
 
 @sync_git_app.command("pull")
@@ -424,6 +804,8 @@ def sync_git_push(
     loaded = _load_resolved_sync_config(ctx)
     runtime = loaded.runtime
     repo_path = _resolve_git_repo(repo, loaded)
+    remote_name = runtime.sync_git.remote or DEFAULT_REMOTE
+    branch_name = runtime.sync_git.branch or DEFAULT_BRANCH
     try:
         _refresh_for_export(
             ctx,
@@ -439,17 +821,23 @@ def sync_git_push(
             include_config=runtime.sync_git.include_config,
             redact_raw_json=runtime.sync_git.redact_raw_json,
             commit_message=message,
-            remote=runtime.sync_git.remote or DEFAULT_REMOTE,
-            branch=runtime.sync_git.branch or DEFAULT_BRANCH,
-            push=True,
+            remote=remote_name,
+            branch=branch_name,
+            push=False,
             allow_dirty=allow_dirty,
             tracked_config_paths=_tracked_config_paths(loaded),
         )
+        pushed = False
+        if result.committed:
+            git_push(repo_path, remote=remote_name, branch=branch_name)
+            pushed = True
     except (OSError, ValueError) as exc:
         _exit_with_error(str(exc))
 
     if json_output:
-        typer.echo(json.dumps(result.as_dict(), indent=2))
+        payload = result.as_dict()
+        payload["pushed"] = pushed
+        typer.echo(json.dumps(payload, indent=2))
         return
 
     typer.echo("Git push/export:")
@@ -457,7 +845,7 @@ def sync_git_push(
     typer.echo(f"  archive: {result.archive_path}")
     typer.echo(f"  committed: {'yes' if result.committed else 'no'}")
     typer.echo(f"  commit: {result.commit_hash or 'none'}")
-    typer.echo(f"  pushed: {'yes' if result.pushed else 'no'}")
+    typer.echo(f"  pushed: {'yes' if pushed else 'no'}")
 
 
 @sync_git_app.command("sync")
@@ -490,6 +878,7 @@ def sync_git_sync(
             remote_active=_parse_sync_remote_active_mode(remote_active_mode),
         )
         push_result = None
+        pushed = False
         if not dry_run:
             _refresh_for_export(
                 ctx,
@@ -507,10 +896,13 @@ def sync_git_sync(
                 commit_message=message,
                 remote=remote_name,
                 branch=branch_name,
-                push=True,
+                push=False,
                 allow_dirty=allow_dirty,
                 tracked_config_paths=_tracked_config_paths(loaded),
             )
+            if push_result.committed:
+                git_push(repo_path, remote=remote_name, branch=branch_name)
+                pushed = True
     except (OSError, ValueError) as exc:
         _exit_with_error(str(exc))
 
@@ -522,10 +914,12 @@ def sync_git_sync(
                 "archives_imported": pull_result.archives_imported,
                 "archives_skipped": pull_result.archives_skipped,
             },
-            "push": None if push_result is None else {
+            "push": None
+            if push_result is None
+            else {
                 "archive_path": str(push_result.archive_path),
                 "committed": push_result.committed,
-                "pushed": push_result.pushed,
+                "pushed": pushed,
                 "commit_hash": push_result.commit_hash,
             },
         }
@@ -544,4 +938,4 @@ def sync_git_sync(
     if push_result is not None:
         typer.echo(f"  export: {push_result.archive_path}")
         typer.echo(f"  commit: {push_result.commit_hash or 'none'}")
-        typer.echo(f"  pushed: {'yes' if push_result.pushed else 'no'}")
+        typer.echo(f"  pushed: {'yes' if pushed else 'no'}")

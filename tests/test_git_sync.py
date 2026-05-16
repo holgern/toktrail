@@ -18,9 +18,12 @@ from toktrail.db import (
 from toktrail.git_sync import (
     ensure_git_repo,
     export_repo_archive,
+    git_hooks_status,
     git_pull,
     import_repo_archives,
+    install_git_hooks,
     list_archives,
+    uninstall_git_hooks,
 )
 from toktrail.models import TokenBreakdown, UsageEvent
 from toktrail.reporting import UsageReportFilter
@@ -439,3 +442,86 @@ def test_git_sync_export_still_rejects_untracked_dirty_changes(tmp_path: Path) -
             allow_dirty=False,
             tracked_config_paths=(provider_dir,),
         )
+
+
+def test_install_git_hooks_writes_managed_hooks(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    ensure_git_repo(repo, remote_url=None, branch="main")
+
+    result = install_git_hooks(
+        repo,
+        toktrail_command=("toktrail",),
+        db_path=tmp_path / "toktrail.db",
+        config_path=tmp_path / "config.toml",
+        force=False,
+    )
+
+    assert set(result.installed) == {"post-merge", "post-checkout", "post-rewrite"}
+    for hook_name in result.installed:
+            hook_path = repo / ".git" / "hooks" / hook_name
+            assert hook_path.exists()
+            text = hook_path.read_text(encoding="utf-8")
+            assert "# toktrail-managed-hook v1" in text
+            assert "sync git import-local --repo" in text
+            assert "--quiet" in text
+
+
+def test_install_git_hooks_preserves_foreign_hook_without_force(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    ensure_git_repo(repo, remote_url=None, branch="main")
+    foreign_hook = repo / ".git" / "hooks" / "post-merge"
+    foreign_hook.write_text("#!/bin/sh\necho foreign\n", encoding="utf-8")
+
+    result = install_git_hooks(repo, force=False)
+
+    assert "post-merge" in result.skipped
+    assert "post-merge" not in result.overwritten
+    assert "foreign" in foreign_hook.read_text(encoding="utf-8")
+    assert (repo / ".git" / "hooks" / "post-merge.toktrail.sample").exists()
+
+
+def test_install_git_hooks_overwrites_foreign_hook_with_force(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    ensure_git_repo(repo, remote_url=None, branch="main")
+    foreign_hook = repo / ".git" / "hooks" / "post-rewrite"
+    foreign_hook.write_text("#!/bin/sh\necho foreign\n", encoding="utf-8")
+
+    result = install_git_hooks(repo, force=True)
+
+    assert "post-rewrite" in result.overwritten
+    assert "# toktrail-managed-hook v1" in foreign_hook.read_text(encoding="utf-8")
+
+
+def test_git_hooks_status_reports_installed_missing_foreign(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    ensure_git_repo(repo, remote_url=None, branch="main")
+    install_git_hooks(repo)
+    (repo / ".git" / "hooks" / "post-checkout").write_text(
+        "#!/bin/sh\necho foreign\n",
+        encoding="utf-8",
+    )
+    (repo / ".git" / "hooks" / "post-rewrite").unlink()
+
+    status = git_hooks_status(repo)
+
+    assert status.hooks["post-merge"] == "installed"
+    assert status.hooks["post-checkout"] == "foreign"
+    assert status.hooks["post-rewrite"] == "missing"
+
+
+def test_uninstall_git_hooks_removes_only_managed_hooks(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    ensure_git_repo(repo, remote_url=None, branch="main")
+    install_git_hooks(repo)
+    (repo / ".git" / "hooks" / "post-checkout").write_text(
+        "#!/bin/sh\necho foreign\n",
+        encoding="utf-8",
+    )
+
+    result = uninstall_git_hooks(repo)
+
+    assert "post-merge" in result.overwritten
+    assert "post-rewrite" in result.overwritten
+    assert "post-checkout" in result.skipped
+    assert not (repo / ".git" / "hooks" / "post-merge").exists()
+    assert (repo / ".git" / "hooks" / "post-checkout").exists()

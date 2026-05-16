@@ -18,7 +18,8 @@ The preferred CLI workflow is:
    toktrail run status
    toktrail usage today
    toktrail subscriptions status
-   toktrail sync git sync
+   toktrail sync git init --repo ~/toktrail-state --remote git@github.com:me/toktrail-state.git
+   cd ~/toktrail-state && git pull && git push
    toktrail sync export --out toktrail-state.tar.gz
    toktrail run list
    toktrail run list --archived
@@ -67,14 +68,20 @@ repository while keeping the live sqlite state database local:
 .. code-block:: bash
 
    toktrail sync git init --repo ~/toktrail-state --remote git@github.com:me/toktrail-state.git
-   toktrail sync git sync
+   cd ~/toktrail-state
+   git pull
+   git push
 
 On another machine:
 
 .. code-block:: bash
 
    toktrail sync git init --repo ~/toktrail-state --remote git@github.com:me/toktrail-state.git
-   toktrail sync git pull
+   cd ~/toktrail-state
+   git pull
+
+Hooks are clone-local. Run ``toktrail sync git init`` (or
+``toktrail sync git hooks install``) on each machine/clone.
 
 Do not commit live sqlite files (``toktrail.db``, ``toktrail.db-wal``,
 ``toktrail.db-shm``) into the sync repository.
@@ -89,6 +96,16 @@ To share costing files across machines while keeping import paths local:
 
 toktrail then uses ``<repo>/config/prices.toml``, ``<repo>/config/prices/*.toml``,
 and ``<repo>/config/subscriptions.toml``.
+
+Compatibility commands for explicit orchestration/recovery remain available:
+
+.. code-block:: bash
+
+   toktrail sync git import-local
+   toktrail sync git export-local --no-refresh
+   toktrail sync git pull
+   toktrail sync git push
+   toktrail sync git sync
 
 Use ``toktrail refresh`` for explicit/manual refresh operation. It reads enabled
 harnesses and source paths from ``config.toml``:
