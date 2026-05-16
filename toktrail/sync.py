@@ -30,6 +30,7 @@ class StateExportResult:
     exported_at_ms: int
     schema_version: int
     machine_id: str
+    machine_name: str | None
     run_count: int
     source_session_count: int
     usage_event_count: int
@@ -83,6 +84,16 @@ def export_state_archive(
     archive_path = archive_path.expanduser()
     archive_path.parent.mkdir(parents=True, exist_ok=True)
     db_path = db_path.expanduser()
+    bootstrap_conn = db_module.connect(db_path)
+    try:
+        from toktrail.config import load_machine_config
+
+        db_module.migrate(bootstrap_conn)
+        machine_config = load_machine_config().config
+        db_module.apply_local_machine_config(bootstrap_conn, machine_config)
+        bootstrap_conn.commit()
+    finally:
+        bootstrap_conn.close()
 
     with tempfile.TemporaryDirectory(prefix="toktrail-sync-export-") as temp_dir_text:
         temp_dir = Path(temp_dir_text)
@@ -93,7 +104,7 @@ def export_state_archive(
             redact_raw_json=redact_raw_json,
         )
         counts = _read_counts(snapshot_path)
-        machine_id = _read_machine_id(snapshot_path)
+        machine_id, machine_name = _read_machine_identity(snapshot_path)
 
         archive_config_name: str | None = None
         checksum_map = {STATE_DB_NAME: _sha256_file(snapshot_path)}
@@ -121,6 +132,7 @@ def export_state_archive(
             "exported_at_ms": exported_at_ms,
             "schema_version": db_module.SCHEMA_VERSION,
             "machine_id": machine_id,
+            "machine_name": machine_name,
             "contains": {
                 "state_db": STATE_DB_NAME,
                 "config": archive_config_name,
@@ -148,6 +160,7 @@ def export_state_archive(
         exported_at_ms=exported_at_ms,
         schema_version=db_module.SCHEMA_VERSION,
         machine_id=machine_id,
+        machine_name=machine_name,
         run_count=counts["runs"],
         source_session_count=counts["source_sessions"],
         usage_event_count=counts["usage_events"],
@@ -207,16 +220,25 @@ def import_state_archive(
 
         imported_at_ms = _required_int(manifest, "exported_at_ms")
         imported_machine_id = _required_str(manifest, "machine_id")
+        imported_machine_name = _optional_manifest_str(manifest, "machine_name")
 
         target = db_module.connect(db_path.expanduser())
         imported = sqlite3.connect(imported_db_path)
         imported.row_factory = sqlite3.Row
         try:
             db_module.migrate(target)
+            db_module.migrate(imported)
             _validate_imported_db(imported)
 
             target.execute("BEGIN")
             try:
+                _merge_machines(
+                    target,
+                    imported,
+                    imported_machine_id=imported_machine_id,
+                    imported_machine_name=imported_machine_name,
+                    imported_at_ms=imported_at_ms,
+                )
                 run_id_map, runs_inserted, runs_updated = _merge_runs(
                     target,
                     imported,
@@ -239,6 +261,7 @@ def import_state_archive(
                     imported,
                     run_id_map=run_id_map,
                     source_session_id_map=source_id_map,
+                    imported_machine_id=imported_machine_id,
                     on_conflict=on_conflict,
                 )
                 run_events_inserted = _merge_run_events(
@@ -318,11 +341,13 @@ def _read_counts(snapshot_path: Path) -> dict[str, int]:
         conn.close()
 
 
-def _read_machine_id(snapshot_path: Path) -> str:
+def _read_machine_identity(snapshot_path: Path) -> tuple[str, str | None]:
     conn = sqlite3.connect(snapshot_path)
     conn.row_factory = sqlite3.Row
     try:
-        return db_module.get_machine_id(conn)
+        machine_id = db_module.get_machine_id(conn)
+        machine = db_module.get_machine(conn, machine_id)
+        return machine_id, machine.name if machine is not None else None
     finally:
         conn.close()
 
@@ -395,6 +420,7 @@ def _validate_manifest(manifest: dict[str, object]) -> None:
     _required_int(manifest, "schema_version")
     _required_int(manifest, "exported_at_ms")
     _required_str(manifest, "machine_id")
+    _optional_manifest_str(manifest, "machine_name")
 
 
 def _validate_imported_db(imported: sqlite3.Connection) -> None:
@@ -409,6 +435,51 @@ def _validate_imported_db(imported: sqlite3.Connection) -> None:
             f"{user_version} > {db_module.SCHEMA_VERSION}"
         )
         raise ValueError(msg)
+
+
+def _merge_machines(
+    target: sqlite3.Connection,
+    imported: sqlite3.Connection,
+    *,
+    imported_machine_id: str,
+    imported_machine_name: str | None,
+    imported_at_ms: int,
+) -> None:
+    imported_rows = imported.execute(
+        """
+        SELECT
+            machine_id,
+            name,
+            last_seen_ms
+        FROM machines
+        ORDER BY machine_id
+        """
+    ).fetchall()
+    for row in imported_rows:
+        db_module.upsert_machine(
+            target,
+            machine_id=str(row["machine_id"]),
+            name=str(row["name"]) if row["name"] is not None else None,
+            seen_ms=int(row["last_seen_ms"]),
+            is_local=False,
+            imported_at_ms=imported_at_ms,
+        )
+    db_module.upsert_machine(
+        target,
+        machine_id=imported_machine_id,
+        name=imported_machine_name,
+        seen_ms=imported_at_ms,
+        is_local=False,
+        imported_at_ms=imported_at_ms,
+    )
+    local_machine_id = db_module.get_local_machine_id(target)
+    db_module.upsert_machine(
+        target,
+        machine_id=local_machine_id,
+        name=None,
+        seen_ms=_now_ms(),
+        is_local=True,
+    )
 
 
 def _merge_runs(
@@ -482,6 +553,21 @@ def _merge_runs(
             (imported_sync_id,),
         ).fetchone()
         if local_row is None:
+            new_origin_machine_id = _coalesce_text(
+                imported_row["origin_machine_id"],
+                imported_machine_id,
+            )
+            if new_origin_machine_id is None:
+                msg = "Imported run origin_machine_id is missing."
+                raise ValueError(msg)
+            db_module.upsert_machine(
+                target,
+                machine_id=new_origin_machine_id,
+                name=None,
+                seen_ms=int(imported_row["updated_at_ms"]),
+                is_local=False,
+                imported_at_ms=imported_at_ms,
+            )
             cursor = target.execute(
                 """
                 INSERT INTO runs (
@@ -505,10 +591,7 @@ def _merge_runs(
                 """,
                 (
                     imported_sync_id,
-                    _coalesce_text(
-                        imported_row["origin_machine_id"],
-                        imported_machine_id,
-                    ),
+                    new_origin_machine_id,
                     imported_row["name"],
                     int(imported_row["started_at_ms"]),
                     imported_ended,
@@ -552,6 +635,20 @@ def _merge_runs(
         merged_origin = _coalesce_text(
             local_row["origin_machine_id"],
             _coalesce_text(imported_row["origin_machine_id"], imported_machine_id),
+        )
+        if merged_origin is None:
+            msg = "Merged run origin_machine_id is missing."
+            raise ValueError(msg)
+        db_module.upsert_machine(
+            target,
+            machine_id=merged_origin,
+            name=None,
+            seen_ms=max(
+                int(local_row["updated_at_ms"]),
+                int(imported_row["updated_at_ms"]),
+            ),
+            is_local=False,
+            imported_at_ms=imported_at_ms,
         )
         merged_scope_harnesses_json = _merge_scope_json(
             local_row["scope_harnesses_json"],
@@ -716,6 +813,7 @@ def _merge_usage_events(
     *,
     run_id_map: dict[int, int],
     source_session_id_map: dict[int, int],
+    imported_machine_id: str,
     on_conflict: ConflictMode,
 ) -> tuple[dict[int, int], int, int, tuple[StateImportConflict, ...]]:
     inserted = 0
@@ -726,7 +824,8 @@ def _merge_usage_events(
         """
         SELECT id, tracking_session_id, harness_session_id, harness, source_session_id,
                source_row_id, source_message_id, source_dedup_key, global_dedup_key,
-               fingerprint_hash, role, provider_id, model_id, thinking_level, agent,
+               fingerprint_hash, origin_machine_id,
+               role, provider_id, model_id, thinking_level, agent,
                created_ms, completed_ms, input_tokens, output_tokens, reasoning_tokens,
                cache_read_tokens, cache_write_tokens, cache_output_tokens,
                source_cost_usd, raw_json, imported_at_ms
@@ -746,6 +845,18 @@ def _merge_usage_events(
             (harness, dedup_key),
         ).fetchone()
         if local is not None:
+            existing_origin_machine_id = _coalesce_text(
+                row["origin_machine_id"],
+                imported_machine_id,
+            )
+            if existing_origin_machine_id is not None:
+                db_module.upsert_machine(
+                    target,
+                    machine_id=existing_origin_machine_id,
+                    name=None,
+                    seen_ms=int(row["created_ms"]),
+                    is_local=False,
+                )
             local_id = int(local["id"])
             if str(local["fingerprint_hash"]) != str(row["fingerprint_hash"]):
                 conflict = StateImportConflict(
@@ -771,6 +882,20 @@ def _merge_usage_events(
             source_session_id_map,
             row["harness_session_id"],
         )
+        event_origin_machine_id = _coalesce_text(
+            row["origin_machine_id"],
+            imported_machine_id,
+        )
+        if event_origin_machine_id is None:
+            msg = "Usage event origin_machine_id is missing."
+            raise ValueError(msg)
+        db_module.upsert_machine(
+            target,
+            machine_id=event_origin_machine_id,
+            name=None,
+            seen_ms=int(row["created_ms"]),
+            is_local=False,
+        )
         cursor = target.execute(
             """
             INSERT INTO usage_events (
@@ -783,6 +908,7 @@ def _merge_usage_events(
                 source_dedup_key,
                 global_dedup_key,
                 fingerprint_hash,
+                origin_machine_id,
                 role,
                 provider_id,
                 model_id,
@@ -803,7 +929,7 @@ def _merge_usage_events(
             VALUES (
                 ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                 ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                ?, ?, ?, ?, ?
+                ?, ?, ?, ?, ?, ?
             )
             """,
             (
@@ -816,6 +942,7 @@ def _merge_usage_events(
                 row["source_dedup_key"],
                 row["global_dedup_key"],
                 row["fingerprint_hash"],
+                event_origin_machine_id,
                 row["role"],
                 row["provider_id"],
                 row["model_id"],
@@ -900,6 +1027,17 @@ def _required_dict(mapping: dict[str, object], key: str) -> dict[str, object]:
         msg = f"Manifest field {key!r} must be an object."
         raise ValueError(msg)
     return value
+
+
+def _optional_manifest_str(mapping: dict[str, object], key: str) -> str | None:
+    value = mapping.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        msg = f"Manifest field {key!r} must be a string when present."
+        raise ValueError(msg)
+    stripped = value.strip()
+    return stripped or None
 
 
 def _coalesce_text(value: object, fallback: str | None) -> str | None:

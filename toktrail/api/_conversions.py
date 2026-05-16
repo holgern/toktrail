@@ -5,6 +5,8 @@ from toktrail.api.models import (
     ActivitySummaryRow,
     CostTotals,
     HarnessSummaryRow,
+    Machine,
+    MachineSummaryRow,
     ModelSummaryRow,
     ProviderSummaryRow,
     Run,
@@ -48,6 +50,9 @@ from toktrail.reporting import (
 )
 from toktrail.reporting import (
     HarnessSummaryRow as InternalHarnessSummaryRow,
+)
+from toktrail.reporting import (
+    MachineSummaryRow as InternalMachineSummaryRow,
 )
 from toktrail.reporting import (
     ModelSummaryRow as InternalModelSummaryRow,
@@ -163,6 +168,7 @@ def _to_public_usage_event(
         tokens=_to_public_token_breakdown(value.tokens),
         source_cost_usd=value.source_cost_usd,
         raw_json=value.raw_json if include_raw_json else None,
+        origin_machine_id=value.origin_machine_id,
     )
 
 
@@ -213,6 +219,17 @@ def _to_public_provider_row(value: InternalProviderSummaryRow) -> ProviderSummar
     )
 
 
+def _to_public_machine_row(value: InternalMachineSummaryRow) -> MachineSummaryRow:
+    return MachineSummaryRow(
+        machine_id=value.machine_id,
+        machine_name=value.machine_name,
+        machine_label=value.machine_label,
+        message_count=value.message_count,
+        tokens=_to_public_token_breakdown(value.tokens),
+        costs=_to_public_cost_totals(value.costs),
+    )
+
+
 def _to_public_model_row(value: InternalModelSummaryRow) -> ModelSummaryRow:
     return ModelSummaryRow(
         provider_id=value.provider_id,
@@ -250,6 +267,7 @@ def _to_public_unconfigured_model_row(
 def _to_public_report(value: InternalRunReport) -> RunReport:
     by_provider = tuple(_to_public_provider_row(row) for row in value.by_provider)
     by_harness = tuple(_to_public_harness_row(row) for row in value.by_harness)
+    by_machine = tuple(_to_public_machine_row(row) for row in value.by_machine)
     by_model = tuple(_to_public_model_row(row) for row in value.by_model)
     by_activity = tuple(_to_public_activity_row(row) for row in value.by_activity)
     unconfigured_models = tuple(
@@ -264,6 +282,7 @@ def _to_public_report(value: InternalRunReport) -> RunReport:
         totals=_to_public_session_totals(value.totals, message_count=message_count),
         by_provider=by_provider,
         by_harness=by_harness,
+        by_machine=by_machine,
         by_model=by_model,
         by_activity=by_activity,
         unconfigured_models=unconfigured_models,
@@ -415,6 +434,7 @@ def _to_public_state_export_result(
         exported_at_ms=value.exported_at_ms,
         schema_version=value.schema_version,
         machine_id=value.machine_id,
+        machine_name=value.machine_name,
         run_count=value.run_count,
         source_session_count=value.source_session_count,
         usage_event_count=value.usage_event_count,
@@ -460,6 +480,9 @@ def _to_public_usage_session_row(
 ) -> UsageSessionRow:
     return UsageSessionRow(
         key=value.key,
+        origin_machine_id=value.origin_machine_id,
+        machine_name=value.machine_name,
+        machine_label=value.machine_label,
         harness=value.harness,
         source_session_id=value.source_session_id,
         first_ms=value.first_ms,
@@ -470,6 +493,23 @@ def _to_public_usage_session_row(
         models=value.models,
         providers=value.providers,
         by_model=tuple(_to_public_model_row(m) for m in value.by_model),
+    )
+
+
+def _to_public_machine(value: object) -> Machine:
+    from toktrail.db import Machine as InternalMachine
+
+    assert isinstance(value, InternalMachine)
+    return Machine(
+        machine_id=value.machine_id,
+        name=value.name,
+        name_key=value.name_key,
+        first_seen_ms=value.first_seen_ms,
+        last_seen_ms=value.last_seen_ms,
+        is_local=value.is_local,
+        created_at_ms=value.created_at_ms,
+        updated_at_ms=value.updated_at_ms,
+        imported_at_ms=value.imported_at_ms,
     )
 
 
@@ -490,6 +530,8 @@ __all__ = [
     "_to_public_activity_row",
     "_to_public_cost_totals",
     "_to_public_harness_row",
+    "_to_public_machine",
+    "_to_public_machine_row",
     "_to_public_model_row",
     "_to_public_provider_row",
     "_to_public_report",

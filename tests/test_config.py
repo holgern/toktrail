@@ -6,12 +6,14 @@ from toktrail.config import (
     COPILOT_TEMPLATE_NAME,
     Price,
     load_costing_config,
+    load_machine_config,
     load_pricing_config,
     load_resolved_costing_config,
     load_resolved_toktrail_config,
     load_runtime_config,
     load_toktrail_config,
     normalize_identity,
+    parse_machine_config,
     parse_pricing_config,
     render_config_template,
     summarize_costing_config,
@@ -64,6 +66,38 @@ def test_load_costing_config_parses_minimal_config(tmp_path) -> None:
         "zero",
         "source",
     ]
+
+
+def test_load_machine_config_missing_file_returns_default(tmp_path) -> None:
+    loaded = load_machine_config(tmp_path / "missing-machine.toml")
+
+    assert loaded.exists is False
+    assert loaded.config.name is None
+
+
+def test_load_machine_config_parses_name(tmp_path) -> None:
+    path = tmp_path / "machine.toml"
+    path.write_text('[machine]\nname = "thinkpad"\n', encoding="utf-8")
+
+    loaded = load_machine_config(path)
+
+    assert loaded.exists is True
+    assert loaded.config.name == "thinkpad"
+
+
+def test_parse_machine_config_rejects_unknown_keys() -> None:
+    with pytest.raises(ValueError, match="unsupported keys"):
+        parse_machine_config({"machine": {"name": "thinkpad", "extra": "x"}})
+
+
+def test_machine_name_env_overrides_file(tmp_path, monkeypatch) -> None:
+    path = tmp_path / "machine.toml"
+    path.write_text('[machine]\nname = "desktop"\n', encoding="utf-8")
+    monkeypatch.setenv("TOKTRAIL_MACHINE_NAME", "thinkpad")
+
+    loaded = load_machine_config(path)
+
+    assert loaded.config.name == "thinkpad"
 
 
 def test_load_toktrail_config_parses_import_settings(tmp_path) -> None:

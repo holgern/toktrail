@@ -193,6 +193,7 @@ class UsageEvent:
     tokens: TokenBreakdown
     source_cost_usd: Decimal = field(default_factory=lambda: Decimal(0))
     raw_json: str | None = None
+    origin_machine_id: str | None = None
 
     def __post_init__(self) -> None:
         _require_non_negative_decimal("source_cost_usd", self.source_cost_usd)
@@ -214,6 +215,7 @@ class UsageEvent:
             "completed_ms": self.completed_ms,
             "tokens": self.tokens.as_dict(),
             "source_cost_usd": self.source_cost_usd,
+            "origin_machine_id": self.origin_machine_id,
         }
         if include_raw_json:
             payload["raw_json"] = self.raw_json
@@ -413,6 +415,7 @@ class StateExportResult:
     exported_at_ms: int
     schema_version: int
     machine_id: str
+    machine_name: str | None
     run_count: int
     source_session_count: int
     usage_event_count: int
@@ -425,6 +428,7 @@ class StateExportResult:
             "exported_at_ms": self.exported_at_ms,
             "schema_version": self.schema_version,
             "machine_id": self.machine_id,
+            "machine_name": self.machine_name,
             "run_count": self.run_count,
             "source_session_count": self.source_session_count,
             "usage_event_count": self.usage_event_count,
@@ -509,6 +513,61 @@ class HarnessSummaryRow:
     def as_dict(self) -> dict[str, object]:
         return {
             "harness": self.harness,
+            "message_count": self.message_count,
+            **self.tokens.as_dict(),
+            **self.costs.as_dict(),
+        }
+
+
+@dataclass(frozen=True)
+class Machine:
+    machine_id: str
+    name: str | None
+    name_key: str | None
+    first_seen_ms: int
+    last_seen_ms: int
+    is_local: bool
+    created_at_ms: int
+    updated_at_ms: int
+    imported_at_ms: int | None = None
+
+    @property
+    def label(self) -> str:
+        return self.name or f"machine:{self.machine_id[:8]}"
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "machine_id": self.machine_id,
+            "name": self.name,
+            "name_key": self.name_key,
+            "label": self.label,
+            "first_seen_ms": self.first_seen_ms,
+            "last_seen_ms": self.last_seen_ms,
+            "is_local": self.is_local,
+            "created_at_ms": self.created_at_ms,
+            "updated_at_ms": self.updated_at_ms,
+            "imported_at_ms": self.imported_at_ms,
+        }
+
+
+@dataclass(frozen=True)
+class MachineSummaryRow:
+    machine_id: str | None
+    machine_name: str | None
+    machine_label: str
+    message_count: int
+    tokens: TokenBreakdown
+    costs: CostTotals
+
+    @property
+    def total_tokens(self) -> int:
+        return self.tokens.total
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "machine_id": self.machine_id,
+            "machine_name": self.machine_name,
+            "machine_label": self.machine_label,
             "message_count": self.message_count,
             **self.tokens.as_dict(),
             **self.costs.as_dict(),
@@ -612,6 +671,7 @@ class RunReport:
     totals: SessionTotals
     by_provider: tuple[ProviderSummaryRow, ...]
     by_harness: tuple[HarnessSummaryRow, ...]
+    by_machine: tuple[MachineSummaryRow, ...]
     by_model: tuple[ModelSummaryRow, ...]
     by_activity: tuple[ActivitySummaryRow, ...]
     unconfigured_models: tuple[UnconfiguredModelRow, ...] = ()
@@ -627,6 +687,7 @@ class RunReport:
             "totals": self.totals.as_dict(),
             "by_provider": [row.as_dict() for row in self.by_provider],
             "by_harness": [row.as_dict() for row in self.by_harness],
+            "by_machine": [row.as_dict() for row in self.by_machine],
             "by_model": [row.as_dict() for row in self.by_model],
             "by_activity": [row.as_dict() for row in self.by_activity],
             "unconfigured_models": [row.as_dict() for row in self.unconfigured_models],
@@ -1243,6 +1304,9 @@ class SessionCacheAnalysisReport:
 @dataclass(frozen=True)
 class UsageSessionRow:
     key: str
+    origin_machine_id: str | None
+    machine_name: str | None
+    machine_label: str
     harness: str
     source_session_id: str
     first_ms: int
@@ -1257,6 +1321,9 @@ class UsageSessionRow:
     def as_dict(self) -> dict[str, object]:
         result: dict[str, object] = {
             "key": self.key,
+            "origin_machine_id": self.origin_machine_id,
+            "machine_name": self.machine_name,
+            "machine_label": self.machine_label,
             "harness": self.harness,
             "source_session_id": self.source_session_id,
             "first_ms": self.first_ms,
@@ -1324,6 +1391,8 @@ __all__ = [
     "HarnessEnvironment",
     "HarnessSummaryRow",
     "ImportUsageResult",
+    "Machine",
+    "MachineSummaryRow",
     "ModelSummaryRow",
     "PreparedManualRun",
     "ProviderSummaryRow",

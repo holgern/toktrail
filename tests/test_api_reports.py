@@ -21,6 +21,7 @@ from toktrail.api.reports import (
     session_report,
     subscription_usage_report,
     usage_report,
+    usage_runs_report,
     usage_series_report,
     usage_sessions_report,
 )
@@ -300,6 +301,32 @@ def test_usage_report_exposes_provider_summary(tmp_path: Path) -> None:
     assert report.by_provider[0].provider_id == "anthropic"
 
 
+def test_usage_report_exposes_machine_summary(tmp_path: Path) -> None:
+    state_db = tmp_path / "toktrail.db"
+    conn = connect(state_db)
+    try:
+        migrate(conn)
+        insert_usage_events(
+            conn,
+            None,
+            [
+                make_api_usage_event(
+                    "machine-summary",
+                    created_ms=1_000,
+                    tokens=TokenBreakdown(input=10, output=4),
+                )
+            ],
+        )
+    finally:
+        conn.close()
+
+    report = usage_report(state_db)
+
+    assert len(report.by_machine) == 1
+    assert report.by_machine[0].machine_id is not None
+    assert report.by_machine[0].message_count == 1
+
+
 def test_subscription_usage_report_returns_public_dataclasses(tmp_path: Path) -> None:
     state_db = tmp_path / "toktrail.db"
     source_db = tmp_path / "opencode.db"
@@ -487,6 +514,9 @@ def test_usage_sessions_report_json_shape(tmp_path: Path) -> None:
     assert len(sessions) >= 1
     session = sessions[0]
     assert "key" in session
+    assert "origin_machine_id" in session
+    assert "machine_name" in session
+    assert "machine_label" in session
     assert "harness" in session
     assert "source_session_id" in session
     assert "tokens" in session
@@ -598,3 +628,60 @@ def test_usage_sessions_report_rejects_period_with_since_until(tmp_path: Path) -
     init_state(state_db)
     with pytest.raises(InvalidAPIUsageError):
         usage_sessions_report(state_db, period="today", since_ms=1)
+
+
+def test_usage_runs_report_filters_machine_id(tmp_path: Path) -> None:
+    state_db = tmp_path / "toktrail.db"
+    machine_a = "aa11bb22cc33dd44"
+    machine_b = "ee55ff6677889900"
+    conn = connect(state_db)
+    try:
+        migrate(conn)
+        run_a = create_tracking_session(conn, "run-a", started_at_ms=1_000)
+        insert_usage_events(
+            conn,
+            run_a,
+            [
+                make_api_usage_event(
+                    "run-a-event",
+                    created_ms=1_100,
+                    tokens=TokenBreakdown(input=5, output=1),
+                )
+            ],
+            origin_machine_id=machine_a,
+        )
+        end_tracking_session(conn, run_a, ended_at_ms=1_500)
+        run_b = create_tracking_session(conn, "run-b", started_at_ms=2_000)
+        insert_usage_events(
+            conn,
+            run_b,
+            [
+                make_api_usage_event(
+                    "run-b-event",
+                    created_ms=2_100,
+                    tokens=TokenBreakdown(input=9, output=2),
+                )
+            ],
+            origin_machine_id=machine_b,
+        )
+        conn.execute(
+            "UPDATE runs SET origin_machine_id = ? WHERE id = ?",
+            (machine_a, run_a),
+        )
+        conn.execute(
+            "UPDATE runs SET origin_machine_id = ? WHERE id = ?",
+            (machine_b, run_b),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    report = usage_runs_report(
+        state_db,
+        machine_id=machine_a,
+        limit=None,
+    )
+
+    assert len(report.runs) == 1
+    assert report.runs[0].name == "run-a"
+    assert report.runs[0].origin_machine_id == machine_a

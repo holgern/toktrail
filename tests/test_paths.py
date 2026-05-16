@@ -12,6 +12,7 @@ from toktrail.paths import (
     default_harnessbridge_sessions_path,
     default_provider_prices_path,
     default_toktrail_config_path,
+    default_toktrail_machine_path,
     default_toktrail_prices_dir,
     default_toktrail_prices_path,
     default_toktrail_subscriptions_path,
@@ -25,6 +26,7 @@ from toktrail.paths import (
     resolve_goose_sessions_path,
     resolve_harnessbridge_sessions_path,
     resolve_toktrail_config_path,
+    resolve_toktrail_machine_path,
     resolve_toktrail_prices_dir,
     resolve_toktrail_prices_path,
     resolve_toktrail_subscriptions_path,
@@ -88,6 +90,27 @@ def test_resolve_toktrail_config_path_prefers_cli_over_env(
 
     assert resolve_toktrail_config_path(cli_path) == cli_path
     assert resolve_toktrail_config_path(None) == env_path
+
+
+def test_default_toktrail_machine_path_uses_xdg_config_home(
+    monkeypatch, tmp_path
+) -> None:
+    config_home = tmp_path / "xdg-config"
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+
+    assert default_toktrail_machine_path() == config_home / "toktrail" / "machine.toml"
+
+
+def test_resolve_toktrail_machine_path_prefers_cli_over_env(
+    monkeypatch, tmp_path
+) -> None:
+    env_path = tmp_path / "env-machine.toml"
+    cli_path = tmp_path / "cli-machine.toml"
+    monkeypatch.setenv("TOKTRAIL_MACHINE_CONFIG", str(env_path))
+
+    assert resolve_toktrail_machine_path(cli_path) == cli_path
+    assert resolve_toktrail_machine_path(None) == env_path
 
 
 def test_default_toktrail_prices_path_uses_xdg_config_home(

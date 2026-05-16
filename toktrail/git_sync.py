@@ -376,7 +376,7 @@ def export_repo_archive(
         ).strftime("%Y-%m-%dT%H:%M:%SZ")
         commit_text = commit_message or (
             "toktrail sync: "
-            f"{export_result.machine_id} "
+            f"{(export_result.machine_name or export_result.machine_id)} "
             f"{exported_stamp}"
         )
         _run_git(resolved_repo, "commit", "-m", commit_text)
@@ -823,6 +823,7 @@ def _state_export_result_dict(result: StateExportResult) -> dict[str, object]:
         "exported_at_ms": result.exported_at_ms,
         "schema_version": result.schema_version,
         "machine_id": result.machine_id,
+        "machine_name": result.machine_name,
         "run_count": result.run_count,
         "source_session_count": result.source_session_count,
         "usage_event_count": result.usage_event_count,

@@ -20,6 +20,12 @@ from toktrail.api.harnesses import (
     supported_harnesses,
 )
 from toktrail.api.imports import import_configured_usage, import_usage
+from toktrail.api.machines import (
+    clear_machine_name,
+    list_machines,
+    machine_status,
+    set_machine_name,
+)
 from toktrail.api.models import (
     ActivitySummaryRow,
     CacheCallRow,
@@ -30,6 +36,8 @@ from toktrail.api.models import (
     HarnessEnvironment,
     HarnessSummaryRow,
     ImportUsageResult,
+    Machine,
+    MachineSummaryRow,
     ModelSummaryRow,
     PreparedManualRun,
     ProviderSummaryRow,
@@ -121,6 +129,8 @@ __all__ = [
     "HarnessEnvironment",
     "HarnessSummaryRow",
     "ImportUsageResult",
+    "Machine",
+    "MachineSummaryRow",
     "ModelSummaryRow",
     "PreparedManualRun",
     "ProviderSummaryRow",
@@ -172,6 +182,7 @@ __all__ = [
     "get_run",
     "import_configured_usage",
     "import_usage",
+    "list_machines",
     "init_config",
     "init_state",
     "is_supported_harness",
@@ -180,6 +191,7 @@ __all__ = [
     "normalize_harness_name",
     "prepare_environment",
     "prepare_manual_run",
+    "machine_status",
     "record_usage_event",
     "record_usage_events",
     "render_config_template",
@@ -201,7 +213,9 @@ __all__ = [
     "subscription_usage_report",
     "start_run",
     "stop_run",
+    "set_machine_name",
     "unarchive_run",
+    "clear_machine_name",
     "supported_harnesses",
     "usage_report",
     "usage_series_report",

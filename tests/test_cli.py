@@ -26,8 +26,10 @@ from toktrail.db import (
     connect,
     create_tracking_session,
     end_tracking_session,
+    get_local_machine_id,
     insert_usage_events,
     migrate,
+    upsert_machine,
 )
 from toktrail.models import TokenBreakdown, UsageEvent
 
@@ -4898,6 +4900,165 @@ def test_cli_usage_summary_human_output_contains_by_provider(tmp_path) -> None:
     assert "(none)" not in harness_section
 
 
+def test_cli_machine_status_and_set_name(tmp_path: Path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    machine_config = tmp_path / "machine.toml"
+
+    init_result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "--machine-config",
+            str(machine_config),
+            "init",
+        ],
+    )
+    assert init_result.exit_code == 0, init_result.output
+
+    set_result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "--machine-config",
+            str(machine_config),
+            "machine",
+            "set-name",
+            "thinkpad",
+        ],
+    )
+    assert set_result.exit_code == 0, set_result.output
+    assert machine_config.exists()
+    assert 'name = "thinkpad"' in machine_config.read_text(encoding="utf-8")
+
+    status_result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "--machine-config",
+            str(machine_config),
+            "machine",
+            "status",
+            "--json",
+        ],
+    )
+    assert status_result.exit_code == 0, status_result.output
+    payload = json.loads(status_result.output)
+    assert payload["name"] == "thinkpad"
+    assert payload["is_local"] is True
+    assert payload["config_path"] == str(machine_config)
+
+
+def test_cli_usage_machines_json_and_machine_filter(tmp_path: Path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    remote_machine_id = "a17b91de00000001"
+    conn = connect(state_db)
+    try:
+        migrate(conn)
+        local_machine_id = get_local_machine_id(conn)
+        insert_usage_events(
+            conn,
+            None,
+            [
+                make_cli_usage_event(
+                    "local-machine-1",
+                    created_ms=1_777_801_200_000,
+                    tokens=TokenBreakdown(input=10, output=5),
+                )
+            ],
+            origin_machine_id=local_machine_id,
+        )
+        insert_usage_events(
+            conn,
+            None,
+            [
+                make_cli_usage_event(
+                    "remote-machine-2",
+                    created_ms=1_777_801_201_000,
+                    tokens=TokenBreakdown(input=8, output=2),
+                )
+            ],
+            origin_machine_id=remote_machine_id,
+        )
+    finally:
+        conn.close()
+
+    all_result = runner.invoke(
+        app,
+        ["--db", str(state_db), "usage", "machines", "--json", "--no-refresh"],
+    )
+    assert all_result.exit_code == 0, all_result.output
+    all_payload = json.loads(all_result.output)
+    assert "by_machine" in all_payload
+    assert len(all_payload["by_machine"]) == 2
+
+    filtered = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "usage",
+            "summary",
+            "--machine",
+            remote_machine_id[:8],
+            "--json",
+            "--no-refresh",
+        ],
+    )
+    assert filtered.exit_code == 0, filtered.output
+    payload = json.loads(filtered.output)
+    assert len(payload["by_machine"]) == 1
+    assert payload["by_machine"][0]["machine_id"] == remote_machine_id
+
+
+def test_cli_usage_machine_selector_ambiguous_name_errors(tmp_path: Path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    machine_a = "1234abcd11112222"
+    machine_b = "1234abcd33334444"
+    conn = connect(state_db)
+    try:
+        migrate(conn)
+        upsert_machine(
+            conn,
+            machine_id=machine_a,
+            name=None,
+            seen_ms=1_777_801_200_000,
+            is_local=False,
+        )
+        upsert_machine(
+            conn,
+            machine_id=machine_b,
+            name=None,
+            seen_ms=1_777_801_201_000,
+            is_local=False,
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "usage",
+            "summary",
+            "--machine",
+            "1234abcd",
+            "--json",
+            "--no-refresh",
+        ],
+    )
+    assert result.exit_code != 0
+    assert "ambiguous" in result.output
+    assert "1234abcd" in result.output
+
+
 def test_cli_usage_today_plain_default_is_borderless(tmp_path) -> None:
     runner = CliRunner()
     state_db = tmp_path / "toktrail.db"
@@ -6699,6 +6860,7 @@ def test_cli_usage_sessions_table_restores_legacy_columns(tmp_path) -> None:
         ["--db", str(state_db), "usage", "sessions", "--table", "--no-refresh"],
     )
     assert result.exit_code == 0, result.output
+    assert "machine" in result.output
     assert "cache_r" in result.output
     assert "unpriced" in result.output
 

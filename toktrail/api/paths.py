@@ -38,6 +38,9 @@ from toktrail.paths import (
     default_toktrail_db_path as _default_toktrail_db_path,
 )
 from toktrail.paths import (
+    default_toktrail_machine_path as _default_toktrail_machine_path,
+)
+from toktrail.paths import (
     default_toktrail_prices_dir as _default_toktrail_prices_dir,
 )
 from toktrail.paths import (
@@ -70,6 +73,9 @@ from toktrail.paths import (
 )
 from toktrail.paths import (
     resolve_toktrail_db_path as _resolve_toktrail_db_path,
+)
+from toktrail.paths import (
+    resolve_toktrail_machine_path as _resolve_toktrail_machine_path,
 )
 from toktrail.paths import (
     resolve_toktrail_prices_dir as _resolve_toktrail_prices_dir,
@@ -107,6 +113,10 @@ def default_toktrail_prices_path() -> Path:
     return _default_toktrail_prices_path()
 
 
+def default_toktrail_machine_path() -> Path:
+    return _default_toktrail_machine_path()
+
+
 def default_toktrail_prices_dir() -> Path:
     return _default_toktrail_prices_dir()
 
@@ -121,6 +131,10 @@ def default_toktrail_subscriptions_path() -> Path:
 
 def resolve_toktrail_config_path(config_path: Path | None = None) -> Path:
     return _resolve_toktrail_config_path(config_path)
+
+
+def resolve_toktrail_machine_path(config_path: Path | None = None) -> Path:
+    return _resolve_toktrail_machine_path(config_path)
 
 
 def resolve_toktrail_prices_path(prices_path: Path | None = None) -> Path:
@@ -227,12 +241,14 @@ __all__ = [
     "default_toktrail_config_dir",
     "default_provider_prices_path",
     "default_toktrail_prices_dir",
+    "default_toktrail_machine_path",
     "default_toktrail_prices_path",
     "default_toktrail_subscriptions_path",
     "default_toktrail_db_path",
     "default_vibe_logs_path",
     "resolve_source_path",
     "resolve_toktrail_config_path",
+    "resolve_toktrail_machine_path",
     "resolve_provider_prices_path",
     "resolve_toktrail_prices_dir",
     "resolve_toktrail_prices_path",

@@ -87,6 +87,7 @@ def _to_internal_event(event: UsageEvent) -> InternalUsageEvent:
         ),
         source_cost_usd=event.source_cost_usd,
         raw_json=event.raw_json,
+        origin_machine_id=event.origin_machine_id,
     )
 
 

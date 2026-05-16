@@ -172,6 +172,92 @@ def test_sync_duplicate_event_with_same_fingerprint_is_skipped(tmp_path: Path) -
     assert result.usage_events_skipped >= 1
 
 
+def test_sync_preserves_usage_event_origin_machine(tmp_path: Path) -> None:
+    db_a = tmp_path / "state-a.db"
+    db_b = tmp_path / "state-b.db"
+    archive = tmp_path / "a.tar.gz"
+    remote_machine_id = "remote-origin-1234"
+    conn = connect(db_a)
+    try:
+        migrate(conn)
+        insert_usage_events(
+            conn,
+            None,
+            [make_usage_event(dedup_suffix="origin-1")],
+            origin_machine_id=remote_machine_id,
+        )
+    finally:
+        conn.close()
+    export_state_archive(db_a, archive)
+    import_state_archive(db_b, archive)
+
+    imported = connect(db_b)
+    try:
+        migrate(imported)
+        row = imported.execute(
+            "SELECT origin_machine_id FROM usage_events LIMIT 1"
+        ).fetchone()
+    finally:
+        imported.close()
+
+    assert row is not None
+    assert row["origin_machine_id"] == remote_machine_id
+
+
+def test_sync_duplicate_event_keeps_existing_origin_machine(tmp_path: Path) -> None:
+    db_a = tmp_path / "state-a.db"
+    db_b = tmp_path / "state-b.db"
+    archive = tmp_path / "a.tar.gz"
+    local_origin = "local-origin-1111"
+    remote_origin = "remote-origin-2222"
+    event = make_usage_event(dedup_suffix="dup-origin", fingerprint="fp-same")
+
+    conn_a = connect(db_a)
+    try:
+        migrate(conn_a)
+        insert_usage_events(
+            conn_a,
+            None,
+            [event],
+            origin_machine_id=remote_origin,
+        )
+    finally:
+        conn_a.close()
+    conn_b = connect(db_b)
+    try:
+        migrate(conn_b)
+        insert_usage_events(
+            conn_b,
+            None,
+            [event],
+            origin_machine_id=local_origin,
+        )
+    finally:
+        conn_b.close()
+
+    export_state_archive(db_a, archive)
+    result = import_state_archive(db_b, archive)
+
+    imported = connect(db_b)
+    try:
+        migrate(imported)
+        row = imported.execute(
+            """
+            SELECT origin_machine_id
+            FROM usage_events
+            WHERE global_dedup_key = ?
+            """,
+            (event.global_dedup_key,),
+        ).fetchone()
+    finally:
+        imported.close()
+
+    assert result.usage_events_inserted == 0
+    assert result.usage_events_skipped >= 1
+    assert row is not None
+    assert row["origin_machine_id"] == local_origin
+
+
 def test_sync_duplicate_event_with_different_fingerprint_conflicts(
     tmp_path: Path,
 ) -> None:

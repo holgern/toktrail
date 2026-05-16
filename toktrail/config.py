@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 import sys
 from dataclasses import dataclass, field
@@ -12,7 +13,9 @@ else:  # pragma: no cover - Python < 3.11
     import tomli as tomllib
 
 from toktrail.paths import (
+    TOKTRAIL_MACHINE_NAME_ENV,
     resolve_toktrail_config_path,
+    resolve_toktrail_machine_path,
     resolve_toktrail_prices_dir,
     resolve_toktrail_prices_path,
     resolve_toktrail_subscriptions_path,
@@ -138,6 +141,8 @@ _SYNC_GIT_FIELDS = {
     "on_conflict",
     "track",
 }
+_MACHINE_CONFIG_ROOT_FIELDS = {"machine"}
+_MACHINE_CONFIG_MACHINE_FIELDS = {"name"}
 _COSTING_FIELDS = {
     "default_actual_mode",
     "default_virtual_mode",
@@ -374,6 +379,11 @@ config_version = 1
 
 [metadata]
 # updated_at = "2026-05-05"
+"""
+
+DEFAULT_MACHINE_TEXT = """\
+[machine]
+# name = "thinkpad"
 """
 
 COPILOT_CONFIG_TEXT = """\
@@ -1021,6 +1031,18 @@ class LoadedRuntimeConfig:
 
 
 @dataclass(frozen=True)
+class MachineConfig:
+    name: str | None = None
+
+
+@dataclass(frozen=True)
+class LoadedMachineConfig:
+    path: Path
+    exists: bool
+    config: MachineConfig
+
+
+@dataclass(frozen=True)
 class LoadedPricingConfig:
     manual_path: Path
     provider_dir: Path
@@ -1193,6 +1215,10 @@ def default_subscriptions_config() -> SubscriptionsConfig:
     return SubscriptionsConfig()
 
 
+def default_machine_config() -> MachineConfig:
+    return MachineConfig()
+
+
 def default_toktrail_config() -> ToktrailConfig:
     return merge_configs(
         default_runtime_config(),
@@ -1231,6 +1257,10 @@ def render_subscriptions_template(template: str = DEFAULT_TEMPLATE_NAME) -> str:
         return DEFAULT_SUBSCRIPTIONS_TEXT
     msg = f"Unsupported subscriptions template: {template}"
     raise ValueError(msg)
+
+
+def render_machine_template() -> str:
+    return DEFAULT_MACHINE_TEXT
 
 
 def load_costing_config(path: Path) -> CostingConfig:
@@ -1476,6 +1506,52 @@ def parse_toktrail_config(
         parse_runtime_config(runtime_data),
         parse_pricing_config(pricing_data or {}),
         parse_subscriptions_config(subscriptions_data or {}),
+    )
+
+
+def parse_machine_config(data: object) -> MachineConfig:
+    if not isinstance(data, dict):
+        msg = "machine.toml must contain a TOML table."
+        raise ValueError(msg)
+    _validate_allowed_keys(
+        cast(dict[str, object], data),
+        _MACHINE_CONFIG_ROOT_FIELDS,
+        context="machine.toml",
+    )
+    machine_table = _parse_optional_table(
+        cast(dict[str, object], data).get("machine"),
+        context="machine",
+    )
+    _validate_allowed_keys(
+        machine_table,
+        _MACHINE_CONFIG_MACHINE_FIELDS,
+        context="machine",
+    )
+    name = _parse_optional_string(machine_table.get("name"), context="machine.name")
+    if name is not None and not name.strip():
+        msg = "machine.name must not be empty."
+        raise ValueError(msg)
+    return MachineConfig(name=name)
+
+
+def load_machine_config(path: Path | None = None) -> LoadedMachineConfig:
+    resolved_path = resolve_toktrail_machine_path(path)
+    data = _load_optional_toml(resolved_path, context="machine.toml")
+    if data is None:
+        config = default_machine_config()
+    else:
+        config = parse_machine_config(data)
+    env_machine_name = os.environ.get(TOKTRAIL_MACHINE_NAME_ENV)
+    if env_machine_name is not None:
+        parsed_env_name = env_machine_name.strip()
+        if not parsed_env_name:
+            msg = "TOKTRAIL_MACHINE_NAME must not be empty when set."
+            raise ValueError(msg)
+        config = MachineConfig(name=parsed_env_name)
+    return LoadedMachineConfig(
+        path=resolved_path,
+        exists=resolved_path.exists(),
+        config=config,
     )
 
 

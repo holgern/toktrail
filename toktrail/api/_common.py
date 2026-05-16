@@ -35,6 +35,8 @@ def _open_state_db(db_path: Path | None) -> tuple[sqlite3.Connection, Path]:
     try:
         conn = db_module.connect(resolved)
         db_module.migrate(conn)
+        machine_config = config_module.load_machine_config().config
+        db_module.apply_local_machine_config(conn, machine_config)
     except (OSError, sqlite3.Error, ValueError) as exc:
         msg = f"Could not open toktrail state database at {resolved}: {exc}"
         raise StateDatabaseError(msg) from exc

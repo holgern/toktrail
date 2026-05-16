@@ -7,6 +7,8 @@ from pathlib import Path
 
 TOKTRAIL_DB_ENV = "TOKTRAIL_DB"
 TOKTRAIL_CONFIG_ENV = "TOKTRAIL_CONFIG"
+TOKTRAIL_MACHINE_NAME_ENV = "TOKTRAIL_MACHINE_NAME"
+TOKTRAIL_MACHINE_CONFIG_ENV = "TOKTRAIL_MACHINE_CONFIG"
 TOKTRAIL_PRICES_ENV = "TOKTRAIL_PRICES"
 TOKTRAIL_PRICES_DIR_ENV = "TOKTRAIL_PRICES_DIR"
 TOKTRAIL_SUBSCRIPTIONS_ENV = "TOKTRAIL_SUBSCRIPTIONS"
@@ -65,6 +67,10 @@ def default_toktrail_config_path() -> Path:
     return default_toktrail_config_dir() / "config.toml"
 
 
+def default_toktrail_machine_path() -> Path:
+    return default_toktrail_config_dir() / "machine.toml"
+
+
 def default_toktrail_prices_path() -> Path:
     return default_toktrail_config_dir() / "prices.toml"
 
@@ -89,6 +95,15 @@ def resolve_toktrail_config_path(cli_value: Path | None = None) -> Path:
     if env_value:
         return Path(env_value).expanduser()
     return default_toktrail_config_path()
+
+
+def resolve_toktrail_machine_path(cli_value: Path | None = None) -> Path:
+    if cli_value is not None:
+        return cli_value.expanduser()
+    env_value = os.environ.get(TOKTRAIL_MACHINE_CONFIG_ENV)
+    if env_value:
+        return Path(env_value).expanduser()
+    return default_toktrail_machine_path()
 
 
 def resolve_toktrail_prices_path(cli_value: Path | None = None) -> Path:

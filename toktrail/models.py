@@ -87,6 +87,7 @@ class UsageEvent:
     tokens: TokenBreakdown
     source_cost_usd: Decimal
     raw_json: str | None
+    origin_machine_id: str | None = None
 
 
 @dataclass(frozen=True)

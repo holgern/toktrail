@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import subprocess
+import tarfile
 from decimal import Decimal
 from pathlib import Path
 from shutil import which
@@ -156,6 +158,72 @@ def test_git_sync_export_writes_immutable_archive_under_machine_id(
     import_result = import_repo_archives(db_b, repo, dry_run=False)
     assert import_result.archives_imported == 1
     assert _usage_total_tokens(db_a) == _usage_total_tokens(db_b)
+
+
+def test_git_sync_export_manifest_includes_machine_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = tmp_path / "repo"
+    db_a = tmp_path / "a.db"
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("config_version = 1\n", encoding="utf-8")
+    monkeypatch.setenv("TOKTRAIL_MACHINE_NAME", "thinkpad")
+
+    ensure_git_repo(repo, remote_url=None, branch="main")
+    _configure_git_identity(repo)
+    _seed_db(db_a, event=_event("1", created_ms=1_777_801_200_000))
+
+    result = export_repo_archive(
+        db_a,
+        repo,
+        archive_dir="archives",
+        config_path=config_path,
+        include_config=False,
+        redact_raw_json=True,
+        commit_message=None,
+        remote="origin",
+        branch="main",
+        push=False,
+        allow_dirty=False,
+    )
+
+    with tarfile.open(result.archive_path, "r:gz") as tar:
+        manifest_member = tar.extractfile("manifest.json")
+        assert manifest_member is not None
+        manifest = json.loads(manifest_member.read().decode("utf-8"))
+    assert manifest["machine_name"] == "thinkpad"
+    assert result.export_result.machine_name == "thinkpad"
+
+
+def test_git_sync_commit_message_uses_machine_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = tmp_path / "repo"
+    db_a = tmp_path / "a.db"
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("config_version = 1\n", encoding="utf-8")
+    monkeypatch.setenv("TOKTRAIL_MACHINE_NAME", "desktop")
+
+    ensure_git_repo(repo, remote_url=None, branch="main")
+    _configure_git_identity(repo)
+    _seed_db(db_a, event=_event("1", created_ms=1_777_801_200_000))
+
+    export_repo_archive(
+        db_a,
+        repo,
+        archive_dir="archives",
+        config_path=config_path,
+        include_config=False,
+        redact_raw_json=True,
+        commit_message=None,
+        remote="origin",
+        branch="main",
+        push=False,
+        allow_dirty=False,
+    )
+
+    message = _git_output(repo, "log", "-1", "--pretty=%s").strip()
+    assert message.startswith("toktrail sync: desktop ")
 
 
 def test_git_sync_import_skips_already_imported_archive(tmp_path: Path) -> None:

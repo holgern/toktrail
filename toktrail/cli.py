@@ -46,9 +46,11 @@ from toktrail.config import (
     ContextWindowConfig,
     CostingConfig,
     LoadedCostingConfig,
+    LoadedMachineConfig,
     LoadedToktrailConfig,
     Price,
     StatuslineConfig,
+    load_machine_config,
     load_resolved_costing_config,
     load_resolved_toktrail_config,
     normalize_identity,
@@ -59,16 +61,22 @@ from toktrail.config import (
 )
 from toktrail.db import (
     InsertUsageResult,
+    apply_local_machine_config,
     archive_tracking_session,
     clear_skipped_sources,
     connect,
     create_tracking_session,
     end_tracking_session,
     get_active_tracking_session,
+    get_local_machine_id,
+    get_machine,
     get_tracking_session,
     insert_usage_events,
+    list_machines,
     list_skipped_sources,
     migrate,
+    resolve_machine_selector,
+    set_local_machine_name,
     summarize_subscription_usage,
     summarize_usage,
     unarchive_tracking_session,
@@ -85,6 +93,7 @@ from toktrail.paths import (
     new_copilot_otel_file_path,
     resolve_toktrail_config_path,
     resolve_toktrail_db_path,
+    resolve_toktrail_machine_path,
 )
 from toktrail.periods import resolve_time_range
 from toktrail.price_parser import (
@@ -132,6 +141,7 @@ prices_app = typer.Typer(help="Inspect configured and used model pricing.")
 subscriptions_app = typer.Typer(help="Inspect provider subscription limits.")
 analyze_app = typer.Typer(help="Analyze per-call cache and cost behavior.")
 stats_app = typer.Typer(help="Report aggregate usage and session statistics.")
+machine_app = typer.Typer(help="Inspect and configure local machine identity.")
 
 app.add_typer(run_app, name="run")
 app.add_typer(sources_app, name="sources")
@@ -143,6 +153,7 @@ app.add_typer(prices_app, name="prices")
 app.add_typer(subscriptions_app, name="subscriptions")
 app.add_typer(analyze_app, name="analyze")
 app.add_typer(stats_app, name="stats")
+app.add_typer(machine_app, name="machine")
 app.add_typer(sync_app, name="sync")
 statusline_app.add_typer(statusline_config_app, name="config")
 
@@ -222,6 +233,13 @@ ConfigPathOption = Annotated[
     Path | None,
     typer.Option("--config", help="Override toktrail config TOML path."),
 ]
+MachineConfigPathOption = Annotated[
+    Path | None,
+    typer.Option(
+        "--machine-config",
+        help="Override machine config TOML path.",
+    ),
+]
 PricesPathOption = Annotated[
     Path | None,
     typer.Option("--prices", help="Override toktrail prices TOML path."),
@@ -240,6 +258,10 @@ SubscriptionsPathOption = Annotated[
 RunArgument = Annotated[int | None, typer.Argument()]
 RunOption = Annotated[int | None, typer.Option("--run", "--run-id")]
 SourceSessionOption = Annotated[str | None, typer.Option("--source-session")]
+MachineOption = Annotated[
+    str | None,
+    typer.Option("--machine", help="Filter by machine name or machine id."),
+]
 NameOption = Annotated[str | None, typer.Option("--name")]
 JsonOption = Annotated[bool, typer.Option("--json")]
 HarnessOption = Annotated[str | None, typer.Option("--harness")]
@@ -404,6 +426,7 @@ def main(
     ctx: typer.Context,
     db_path: DbPathOption = None,
     config_path: ConfigPathOption = None,
+    machine_config_path: MachineConfigPathOption = None,
     prices_path: PricesPathOption = None,
     prices_dir_path: PricesDirOption = None,
     subscriptions_path: SubscriptionsPathOption = None,
@@ -411,6 +434,7 @@ def main(
     ctx.obj = {
         "db_path": db_path,
         "config_path": config_path,
+        "machine_config_path": machine_config_path,
         "prices_path": prices_path,
         "prices_dir_path": prices_dir_path,
         "subscriptions_path": subscriptions_path,
@@ -422,8 +446,179 @@ def init(ctx: typer.Context) -> None:
     db_path = _resolve_state_db(ctx)
     conn = connect(db_path)
     migrate(conn)
+    loaded_machine = _load_machine_config_or_exit(ctx)
+    apply_local_machine_config(conn, loaded_machine.config)
     conn.close()
     typer.echo(f"Initialized toktrail database: {db_path}")
+
+
+@machine_app.command("status")
+def machine_status(ctx: typer.Context, json_output: JsonOption = False) -> None:
+    loaded_machine = _load_machine_config_or_exit(ctx)
+    conn = _open_toktrail_connection(ctx)
+    try:
+        local_machine_id = get_local_machine_id(conn)
+        machine = get_machine(conn, local_machine_id)
+    finally:
+        conn.close()
+    if machine is None:
+        _exit_with_error("Local machine record not found.")
+    if json_output:
+        payload = {
+            "machine_id": machine.machine_id,
+            "name": machine.name,
+            "name_key": machine.name_key,
+            "first_seen_ms": machine.first_seen_ms,
+            "last_seen_ms": machine.last_seen_ms,
+            "is_local": machine.is_local,
+            "created_at_ms": machine.created_at_ms,
+            "updated_at_ms": machine.updated_at_ms,
+            "imported_at_ms": machine.imported_at_ms,
+            "label": machine.label,
+        }
+        payload["config_path"] = str(loaded_machine.path)
+        payload["config_exists"] = loaded_machine.exists
+        typer.echo(json.dumps(payload, indent=2))
+        return
+    typer.echo(f"id:    {machine.machine_id}")
+    typer.echo(f"name:  {machine.name or machine.label}")
+    typer.echo("local: yes")
+
+
+@machine_app.command("list")
+def machine_list(
+    ctx: typer.Context,
+    json_output: JsonOption = False,
+    utc: UtcOption = False,
+    rich_output: RichOption = False,
+) -> None:
+    conn = _open_toktrail_connection(ctx)
+    try:
+        machines = list_machines(conn)
+        report = summarize_usage(conn, UsageReportFilter())
+        usage_by_machine = {row.machine_id: row for row in report.by_machine}
+    finally:
+        conn.close()
+    rows_payload = []
+    for machine in machines:
+        usage = usage_by_machine.get(machine.machine_id)
+        rows_payload.append(
+            {
+                "machine": machine.label,
+                "machine_id": machine.machine_id,
+                "local": machine.is_local,
+                "first_seen_ms": machine.first_seen_ms,
+                "last_seen_ms": machine.last_seen_ms,
+                "message_count": 0 if usage is None else usage.message_count,
+                "tokens": TokenBreakdown() if usage is None else usage.tokens,
+                "costs": CostTotals() if usage is None else usage.costs,
+            }
+        )
+    if json_output:
+        typer.echo(
+            json.dumps(
+                [
+                    {
+                        "machine": row["machine"],
+                        "machine_id": row["machine_id"],
+                        "local": row["local"],
+                        "first_seen_ms": row["first_seen_ms"],
+                        "last_seen_ms": row["last_seen_ms"],
+                        "message_count": row["message_count"],
+                        "tokens": cast(TokenBreakdown, row["tokens"]).as_dict(),
+                        "costs": cast(CostTotals, row["costs"]).as_dict(),
+                    }
+                    for row in rows_payload
+                ],
+                indent=2,
+            )
+        )
+        return
+    _print_table(
+        [
+            {
+                "machine": str(row["machine"]),
+                "id": str(row["machine_id"])[:8],
+                "local": "yes" if bool(row["local"]) else "no",
+                "first_seen": format_epoch_ms_compact(
+                    cast(int, row["first_seen_ms"]),
+                    utc=utc,
+                ),
+                "last_seen": format_epoch_ms_compact(
+                    cast(int, row["last_seen_ms"]),
+                    utc=utc,
+                ),
+                "msgs": _format_int(cast(int, row["message_count"])),
+                "total": _format_int(cast(TokenBreakdown, row["tokens"]).total),
+                "actual": _format_cost(
+                    cast(CostTotals, row["costs"]).actual_cost_usd,
+                ),
+                "virtual": _format_cost(
+                    cast(CostTotals, row["costs"]).virtual_cost_usd,
+                ),
+            }
+            for row in rows_payload
+        ],
+        [
+            "machine",
+            "id",
+            "local",
+            "first_seen",
+            "last_seen",
+            "msgs",
+            "total",
+            "actual",
+            "virtual",
+        ],
+        {
+            "machine": "machine",
+            "id": "id",
+            "local": "local",
+            "first_seen": "first seen",
+            "last_seen": "last seen",
+            "msgs": "msgs",
+            "total": "total",
+            "actual": "actual",
+            "virtual": "virtual",
+        },
+        rich_output=rich_output,
+        numeric_columns={"msgs", "total", "actual", "virtual"},
+    )
+
+
+@machine_app.command("set-name")
+def machine_set_name(ctx: typer.Context, name: str) -> None:
+    cleaned_name = name.strip()
+    if not cleaned_name:
+        _exit_with_error("Machine name must not be empty.")
+    path = _resolve_machine_config_path(ctx)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "[machine]\nname = " + json.dumps(cleaned_name) + "\n",
+        encoding="utf-8",
+    )
+    conn = _open_toktrail_connection(ctx)
+    try:
+        set_local_machine_name(conn, cleaned_name)
+        conn.commit()
+    finally:
+        conn.close()
+    typer.echo(f"Updated machine name: {cleaned_name}")
+
+
+@machine_app.command("clear-name")
+def machine_clear_name(ctx: typer.Context) -> None:
+    path = _resolve_machine_config_path(ctx)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("[machine]\n", encoding="utf-8")
+    conn = _open_toktrail_connection(ctx)
+    try:
+        loaded_machine = _load_machine_config_or_exit(ctx)
+        apply_local_machine_config(conn, loaded_machine.config)
+        conn.commit()
+    finally:
+        conn.close()
+    typer.echo("Cleared machine name.")
 
 
 @run_app.command()
@@ -524,6 +719,7 @@ def status(
     json_output: JsonOption = False,
     harness: HarnessOption = None,
     source_session_id: SourceSessionOption = None,
+    machine: MachineOption = None,
     provider_id: ProviderOption = None,
     model_id: ModelOption = None,
     thinking_level: ThinkingOption = None,
@@ -1232,11 +1428,13 @@ def stats(
 @usage_app.command("last-month")
 @usage_app.command("sessions")
 @usage_app.command("runs")
-def usage(
+@usage_app.command("machines")
+def usage(  # noqa: C901
     ctx: typer.Context,
     json_output: JsonOption = False,
     harness: HarnessOption = None,
     source_session_id: SourceSessionOption = None,
+    machine: MachineOption = None,
     provider_id: ProviderOption = None,
     model_id: ModelOption = None,
     thinking_level: ThinkingOption = None,
@@ -1307,6 +1505,7 @@ def usage(
             json_output=json_output,
             harness=harness,
             source_session_id=source_session_id,
+            machine=machine,
             provider_id=provider_id,
             model_id=model_id,
             thinking_level=thinking_level,
@@ -1353,6 +1552,7 @@ def usage(
             json_output=json_output,
             harness=harness,
             source_session_id=source_session_id,
+            machine=machine,
             provider_id=provider_id,
             model_id=model_id,
             thinking_level=thinking_level,
@@ -1385,6 +1585,50 @@ def usage(
             )
         return
 
+    if normalized_view in {"machines", "machine"}:
+        machine_period = _resolve_usage_session_period_or_exit(
+            period=session_period,
+            today=session_today,
+            yesterday=session_yesterday,
+            this_week=session_this_week,
+            last_week=session_last_week,
+            this_month=session_this_month,
+            last_month=session_last_month,
+        )
+        payload = _usage_machines(
+            ctx=ctx,
+            json_output=json_output,
+            period=machine_period,
+            harness=harness,
+            source_session_id=source_session_id,
+            machine=machine,
+            provider_id=provider_id,
+            model_id=model_id,
+            thinking_level=thinking_level,
+            agent=agent,
+            since=since,
+            until=until,
+            timezone_name=timezone_name,
+            utc=utc,
+            split_thinking=split_thinking,
+            rich_output=rich_output,
+        )
+        if json_output:
+            if payload is None:
+                msg = "Usage machines payload unexpectedly missing."
+                raise TypeError(msg)
+            typer.echo(
+                json.dumps(
+                    _wrap_refresh_json_payload(
+                        payload,
+                        refresh_results=refresh_results,
+                        include_refresh=refresh_details,
+                    ),
+                    indent=2,
+                )
+            )
+        return
+
     if normalized_view in {"sessions", "session"}:
         if instances:
             _exit_with_error("--instances is not supported for sessions view.")
@@ -1402,6 +1646,7 @@ def usage(
             json_output=json_output,
             harness=harness,
             source_session_id=source_session_id,
+            machine=machine,
             provider_id=provider_id,
             model_id=model_id,
             thinking_level=thinking_level,
@@ -1445,6 +1690,7 @@ def usage(
             ctx=ctx,
             json_output=json_output,
             provider_id=provider_id,
+            machine=machine,
             model_id=model_id,
             thinking_level=thinking_level,
             agent=agent,
@@ -1477,7 +1723,7 @@ def usage(
         return
 
     _exit_with_error(
-        "Unsupported usage view. Use daily, weekly, monthly, sessions, runs, "
+        "Unsupported usage view. Use daily, weekly, monthly, sessions, runs, machines, "
         "summary, today, yesterday, this-week, last-week, this-month, or "
         "last-month."
     )
@@ -1541,6 +1787,7 @@ def _usage_series(
     json_output: bool,
     harness: str | None,
     source_session_id: str | None,
+    machine: str | None,
     provider_id: str | None,
     model_id: str | None,
     thinking_level: str | None,
@@ -1575,11 +1822,13 @@ def _usage_series(
     costing_config = _load_costing_config_or_exit(ctx)
     conn = _open_toktrail_connection(ctx)
     try:
+        machine_id = _resolve_machine_id_or_exit(conn, machine)
         series_report = summarize_usage_series(
             conn,
             UsageSeriesFilter(
                 granularity=view,
                 tracking_session_id=None,
+                machine_id=machine_id,
                 harness=harness,
                 source_session_id=source_session_id,
                 provider_id=provider_id,
@@ -1858,12 +2107,162 @@ def _print_usage_series_bucket_table(
             )
 
 
+def _usage_machines(
+    *,
+    ctx: typer.Context,
+    json_output: bool,
+    period: str | None,
+    harness: str | None,
+    source_session_id: str | None,
+    machine: str | None,
+    provider_id: str | None,
+    model_id: str | None,
+    thinking_level: str | None,
+    agent: str | None,
+    since: str | None,
+    until: str | None,
+    timezone_name: str | None,
+    utc: bool,
+    split_thinking: bool,
+    rich_output: bool,
+) -> dict[str, object] | None:
+    try:
+        resolved_range = resolve_time_range(
+            period=period,
+            timezone_name=timezone_name,
+            utc=utc,
+            since_text=since,
+            until_text=until,
+        )
+    except ValueError as exc:
+        _exit_with_error(str(exc))
+
+    costing_config = _load_costing_config_or_exit(ctx)
+    conn = _open_toktrail_connection(ctx)
+    try:
+        machine_id = _resolve_machine_id_or_exit(conn, machine)
+        report = summarize_usage(
+            conn,
+            UsageReportFilter(
+                tracking_session_id=None,
+                machine_id=machine_id,
+                harness=harness,
+                source_session_id=source_session_id,
+                provider_id=provider_id,
+                model_id=model_id,
+                thinking_level=thinking_level,
+                agent=agent,
+                since_ms=resolved_range.since_ms,
+                until_ms=resolved_range.until_ms,
+                split_thinking=split_thinking,
+            ),
+            costing_config=costing_config,
+        )
+    finally:
+        conn.close()
+
+    if json_output:
+        payload = report.as_dict()
+        filters = payload.get("filters")
+        if isinstance(filters, dict):
+            if resolved_range.period is not None:
+                filters["period"] = resolved_range.period
+            if (
+                resolved_range.period is not None
+                or timezone_name is not None
+                or utc
+                or since is not None
+                or until is not None
+            ):
+                filters["timezone"] = resolved_range.timezone
+        return payload
+
+    title = "toktrail usage machines"
+    if resolved_range.period is not None:
+        title = f"{title} ({resolved_range.period})"
+    typer.echo(title)
+    _print_usage_machine_rows(report, rich_output=rich_output)
+    return None
+
+
+def _print_usage_machine_rows(report: InternalRunReport, *, rich_output: bool) -> None:
+    typer.echo("")
+    if not report.by_machine:
+        typer.echo("No usage data.")
+        return
+    _print_table(
+        [
+            {
+                "machine": row.machine_label,
+                "id": row.machine_id[:8] if row.machine_id is not None else "-",
+                "msgs": _format_int(row.message_count),
+                "input": _format_int(row.tokens.input),
+                "output": _format_int(row.tokens.output),
+                "reasoning": _format_int(row.tokens.reasoning),
+                "cache_r": _format_int(row.tokens.cache_read),
+                "cache_w": _format_int(row.tokens.cache_write),
+                "total": _format_int(row.tokens.total),
+                "actual": _format_cost(row.costs.actual_cost_usd),
+                "virtual": _format_cost(row.costs.virtual_cost_usd),
+                "savings": _format_cost(row.costs.savings_usd),
+                "unpriced": _format_int(row.costs.unpriced_count),
+            }
+            for row in report.by_machine
+        ],
+        [
+            "machine",
+            "id",
+            "msgs",
+            "input",
+            "output",
+            "reasoning",
+            "cache_r",
+            "cache_w",
+            "total",
+            "actual",
+            "virtual",
+            "savings",
+            "unpriced",
+        ],
+        {
+            "machine": "machine",
+            "id": "id",
+            "msgs": "msgs",
+            "input": "input",
+            "output": "output",
+            "reasoning": "reasoning",
+            "cache_r": "cache_r",
+            "cache_w": "cache_w",
+            "total": "total",
+            "actual": "actual",
+            "virtual": "virtual",
+            "savings": "savings",
+            "unpriced": "unpriced",
+        },
+        rich_output=rich_output,
+        numeric_columns={
+            "msgs",
+            "input",
+            "output",
+            "reasoning",
+            "cache_r",
+            "cache_w",
+            "total",
+            "actual",
+            "virtual",
+            "savings",
+            "unpriced",
+        },
+    )
+
+
 def _usage_sessions(
     *,
     ctx: typer.Context,
     json_output: bool,
     harness: str | None,
     source_session_id: str | None,
+    machine: str | None,
     provider_id: str | None,
     model_id: str | None,
     thinking_level: str | None,
@@ -1912,9 +2311,11 @@ def _usage_sessions(
     costing_config = _load_costing_config_or_exit(ctx)
     conn = _open_toktrail_connection(ctx)
     try:
+        machine_id = _resolve_machine_id_or_exit(conn, machine)
         report = summarize_usage_sessions(
             conn,
             UsageSessionsFilter(
+                machine_id=machine_id,
                 harness=harness,
                 source_session_id=source_session_id,
                 provider_id=provider_id,
@@ -1994,7 +2395,10 @@ def _print_usage_sessions(
             if idx:
                 typer.echo("")
             session_time = format_epoch_ms_compact(session.last_ms, utc=utc)
-            typer.echo(f"{session_time}  {session.key}")
+            typer.echo(
+                f"{session_time}  {session.machine_label}  "
+                f"{session.harness}/{session.source_session_id}"
+            )
             model_line = _format_session_model_line(session, rich_output=rich_output)
             typer.echo(f"   {model_line}")
             token_line = _format_token_usage_line(
@@ -2023,6 +2427,7 @@ def _print_usage_sessions(
     if compact:
         rows = [
             {
+                "machine": session.machine_label,
                 "session": session.key,
                 "last": format_epoch_ms_compact(session.last_ms, utc=utc),
                 "msgs": _format_int(session.message_count),
@@ -2037,6 +2442,7 @@ def _print_usage_sessions(
         _print_table(
             rows,
             [
+                "machine",
                 "session",
                 "last",
                 "msgs",
@@ -2047,6 +2453,7 @@ def _print_usage_sessions(
                 "models",
             ],
             {
+                "machine": "machine",
                 "session": "session",
                 "last": "last",
                 "msgs": "msgs",
@@ -2059,11 +2466,12 @@ def _print_usage_sessions(
             rich_output=rich_output,
             numeric_columns={"msgs", "total", "actual", "virtual", "savings"},
             wrap_columns={"models"},
-            max_widths={"models": 48},
+            max_widths={"models": 48, "session": 48},
         )
     else:
         rows = [
             {
+                "machine": session.machine_label,
                 "session": session.key,
                 "last": format_epoch_ms_compact(session.last_ms, utc=utc),
                 "msgs": _format_int(session.message_count),
@@ -2086,6 +2494,7 @@ def _print_usage_sessions(
         _print_table(
             rows,
             [
+                "machine",
                 "session",
                 "last",
                 "msgs",
@@ -2104,6 +2513,7 @@ def _print_usage_sessions(
                 "unpriced",
             ],
             {
+                "machine": "machine",
                 "session": "session",
                 "last": "last",
                 "msgs": "msgs",
@@ -2137,8 +2547,8 @@ def _print_usage_sessions(
                 "savings",
                 "unpriced",
             },
-            wrap_columns={"models"},
-            max_widths={"models": 48},
+            wrap_columns={"session", "models"},
+            max_widths={"session": 48, "models": 48},
         )
 
     if breakdown:
@@ -2213,6 +2623,7 @@ def _usage_runs(
     *,
     ctx: typer.Context,
     json_output: bool,
+    machine: str | None,
     provider_id: str | None,
     model_id: str | None,
     thinking_level: str | None,
@@ -2240,9 +2651,11 @@ def _usage_runs(
     costing_config = _load_costing_config_or_exit(ctx)
     conn = _open_toktrail_connection(ctx)
     try:
+        machine_id = _resolve_machine_id_or_exit(conn, machine)
         runs_report = summarize_usage_runs(
             conn,
             UsageRunsFilter(
+                machine_id=machine_id,
                 provider_id=provider_id,
                 model_id=model_id,
                 thinking_level=thinking_level,
@@ -2290,6 +2703,7 @@ def _print_usage_runs(
     rows = [
         {
             "run": _format_int(run.run_id),
+            "machine": run.machine_label,
             "name": run.name or "-",
             "started": format_epoch_ms_compact(run.started_at_ms, utc=utc),
             "ended": format_epoch_ms_compact(run.ended_at_ms, utc=utc)
@@ -2316,6 +2730,7 @@ def _print_usage_runs(
         rows,
         [
             "run",
+            "machine",
             "name",
             "started",
             "ended",
@@ -2336,6 +2751,7 @@ def _print_usage_runs(
         ],
         {
             "run": "run",
+            "machine": "machine",
             "name": "name",
             "started": "started",
             "ended": "ended",
@@ -2383,6 +2799,7 @@ def _usage_aggregate(
     json_output: bool,
     harness: str | None,
     source_session_id: str | None,
+    machine: str | None,
     provider_id: str | None,
     model_id: str | None,
     thinking_level: str | None,
@@ -2420,10 +2837,12 @@ def _usage_aggregate(
     )
     conn = _open_toktrail_connection(ctx)
     try:
+        machine_id = _resolve_machine_id_or_exit(conn, machine)
         report = summarize_usage(
             conn,
             UsageReportFilter(
                 tracking_session_id=None,
+                machine_id=machine_id,
                 harness=harness,
                 source_session_id=source_session_id,
                 provider_id=provider_id,
@@ -2657,6 +3076,43 @@ def _print_usage_summary(
             ["harness", "tokens", "cached_input", "actual", "virtual", "savings"],
             {
                 "harness": "harness",
+                "tokens": "tokens",
+                "cached_input": "cached_input",
+                "actual": "actual",
+                "virtual": "virtual",
+                "savings": "savings",
+            },
+            rich_output=rich_output,
+            numeric_columns={"tokens", "cached_input", "actual", "virtual", "savings"},
+        )
+    else:
+        typer.echo("  (none)")
+
+    typer.echo("")
+    typer.echo("By machine")
+    by_machine = report.by_machine
+    if by_machine:
+        _print_table(
+            [
+                {
+                    "machine": machine_row.machine_label,
+                    "id": machine_row.machine_id[:8]
+                    if machine_row.machine_id is not None
+                    else "-",
+                    "tokens": _format_int(machine_row.total_tokens),
+                    "cached_input": _format_int(machine_row.tokens.cache_read)
+                    if machine_row.tokens.cache_read
+                    else "",
+                    "actual": _format_cost(machine_row.costs.actual_cost_usd),
+                    "virtual": _format_cost(machine_row.costs.virtual_cost_usd),
+                    "savings": _format_cost(machine_row.costs.savings_usd),
+                }
+                for machine_row in by_machine
+            ],
+            ["machine", "id", "tokens", "cached_input", "actual", "virtual", "savings"],
+            {
+                "machine": "machine",
+                "id": "id",
                 "tokens": "tokens",
                 "cached_input": "cached_input",
                 "actual": "actual",
@@ -6472,6 +6928,10 @@ def _resolve_config_path(ctx: typer.Context) -> Path:
     return resolve_toktrail_config_path(_config_cli_path(ctx))
 
 
+def _resolve_machine_config_path(ctx: typer.Context) -> Path:
+    return resolve_toktrail_machine_path(_machine_cli_path(ctx))
+
+
 def _config_cli_path(ctx: typer.Context) -> Path | None:
     root_obj = ctx.find_root().obj or {}
     config_path = root_obj.get("config_path")
@@ -6567,7 +7027,37 @@ def _open_toktrail_connection(ctx: typer.Context) -> sqlite3.Connection:
     db_path = _resolve_state_db(ctx)
     conn = connect(db_path)
     migrate(conn)
+    loaded_machine = _load_machine_config_or_exit(ctx)
+    apply_local_machine_config(conn, loaded_machine.config)
     return conn
+
+
+def _resolve_machine_id_or_exit(
+    conn: sqlite3.Connection,
+    machine: str | None,
+) -> str | None:
+    if machine is None:
+        return None
+    try:
+        return resolve_machine_selector(conn, machine).machine_id
+    except ValueError as exc:
+        _exit_with_error(str(exc))
+
+
+def _load_machine_config_or_exit(ctx: typer.Context) -> LoadedMachineConfig:
+    try:
+        return load_machine_config(_machine_cli_path(ctx))
+    except ValueError as exc:
+        _exit_with_error(str(exc))
+
+
+def _machine_cli_path(ctx: typer.Context) -> Path | None:
+    root_obj = ctx.find_root().obj or {}
+    machine_path = root_obj.get("machine_config_path")
+    if machine_path is not None and not isinstance(machine_path, Path):
+        msg = "Unexpected CLI state for --machine-config."
+        raise TypeError(msg)
+    return machine_path
 
 
 def _exit_with_error(message: str) -> NoReturn:

@@ -54,6 +54,7 @@ storing imported usage separately under `harness=code`.
 toktrail uses these configuration files:
 
 - `config.toml` for imports and costing policy
+- `machine.toml` for local machine identity (not meant to be synced)
 - `prices.toml` for manual `[[pricing.virtual]]` and `[[pricing.actual]]` overrides
 - `prices/` for generated provider files like `prices/openai.toml`
 - `subscriptions.toml` for `[[subscriptions]]` plans/windows
@@ -188,7 +189,13 @@ Show period-based usage across canonical ledger rows, even without an active
 tracking session:
 
 ```bash
+toktrail machine set-name thinkpad
+toktrail machine status
+toktrail machine list
 toktrail usage today
+toktrail usage today --machine thinkpad
+toktrail usage machines
+toktrail usage machines --today --json
 toktrail usage today --rich
 toktrail usage last-week --utc --json
 toktrail usage summary --since 2026-05-01 --until 2026-06-01 --timezone Europe/Berlin
@@ -279,11 +286,13 @@ The canonical CLI flow is:
 toktrail init
 toktrail config init
 toktrail sources
+toktrail machine status
 toktrail run start --name <name>
 toktrail refresh
 toktrail run status
 toktrail analyze cache opencode --last
 toktrail usage today
+toktrail usage machines
 toktrail run list
 toktrail subscriptions status
 toktrail sync git sync
@@ -605,9 +614,23 @@ If `XDG_CONFIG_HOME` is set, toktrail uses:
 $XDG_CONFIG_HOME/toktrail/config.toml
 ```
 
+Local machine identity defaults to:
+
+```text
+~/.config/toktrail/machine.toml
+```
+
+If `XDG_CONFIG_HOME` is set, toktrail uses:
+
+```text
+$XDG_CONFIG_HOME/toktrail/machine.toml
+```
+
 `TOKTRAIL_CONFIG`/`--config`, `TOKTRAIL_PRICES`/`--prices`, and
 `TOKTRAIL_SUBSCRIPTIONS`/`--subscriptions` can override each config file path.
 Missing files are safe: toktrail falls back to built-in defaults.
+`TOKTRAIL_MACHINE_CONFIG`/`--machine-config` overrides `machine.toml`, and
+`TOKTRAIL_MACHINE_NAME` overrides the configured machine name directly.
 
 Usage imports store normalized usage metadata locally. Raw source JSON is
 disabled by default and remains opt-in local debugging data only. Use `--raw`
@@ -628,6 +651,7 @@ Amp, or Copilot JSON in CLI output.
 - savings (`virtual - actual`) plus unpriced model-group counts
 - exact unconfigured harness/provider/model diagnostics when pricing is missing
 - grouped summaries by harness, model, and agent/mode
+- grouped summaries by machine
 - collapsed thinking-level metadata by default, with `--split-thinking` to
   expand model rows when needed
 - optional filtered views by harness, source session, provider, model, agent,
@@ -638,6 +662,15 @@ Amp, or Copilot JSON in CLI output.
 ledger without requiring a tracking session. Named periods use half-open
 `[since, until)` windows for `today`, `yesterday`, `this-week`, `last-week`,
 `this-month`, and `last-month`.
+
+Machine-aware usage views:
+
+- `toktrail usage machines` groups usage by origin machine
+- `toktrail usage today --machine <selector>` filters by machine
+- `toktrail usage sessions --machine <selector>` and
+  `toktrail usage runs --machine <selector>` apply the same filter
+- machine selectors accept full IDs, unambiguous ID prefixes (8+ chars),
+  exact names, and unambiguous normalized name prefixes
 
 `toktrail run status --json` returns the same information in a machine-readable JSON
 shape for automation, including `unconfigured_models` and `display_filters`.

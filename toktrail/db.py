@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import socket
 import sqlite3
 import uuid
 from dataclasses import dataclass, field, replace
@@ -13,6 +14,7 @@ from typing import Any, cast
 from toktrail.adapters.base import ImportSourceState
 from toktrail.config import (
     CostingConfig,
+    MachineConfig,
     SubscriptionConfig,
     SubscriptionWindowConfig,
     default_costing_config,
@@ -39,6 +41,7 @@ from toktrail.reporting import (
     ActivitySummaryRow,
     CostTotals,
     HarnessSummaryRow,
+    MachineSummaryRow,
     ModelSummaryRow,
     ProviderSummaryRow,
     RunReport,
@@ -62,7 +65,7 @@ from toktrail.reporting import (
     UsageSessionsReport,
 )
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 _PERIOD_SORT: dict[str, int] = {
     "5h": 0,
     "daily": 1,
@@ -83,6 +86,23 @@ class InsertUsageResult:
 
 
 @dataclass(frozen=True)
+class Machine:
+    machine_id: str
+    name: str | None
+    name_key: str | None
+    first_seen_ms: int
+    last_seen_ms: int
+    is_local: bool
+    created_at_ms: int
+    updated_at_ms: int
+    imported_at_ms: int | None = None
+
+    @property
+    def label(self) -> str:
+        return self.name or f"machine:{self.machine_id[:8]}"
+
+
+@dataclass(frozen=True)
 class _UsageWhere:
     source_clause: str
     where_clause: str
@@ -92,6 +112,7 @@ class _UsageWhere:
 @dataclass(frozen=True)
 class _AggregateRow:
     group: tuple[object, ...]
+    origin_machine_id: str | None
     harness: str
     source_session_id: str
     provider_id: str
@@ -124,6 +145,38 @@ class _AggregateRow:
 
 def _now_ms() -> int:
     return int(time() * 1000)
+
+
+def _machine_name_key(name: str | None) -> str | None:
+    if name is None:
+        return None
+    return normalize_identity(name)
+
+
+def _validate_machine_name(name: str | None) -> str | None:
+    if name is None:
+        return None
+    normalized = name.strip()
+    if not normalized:
+        return None
+    if len(normalized) > 80:
+        msg = "Machine name must be at most 80 characters."
+        raise ValueError(msg)
+    if any(ord(ch) < 32 or ord(ch) == 127 for ch in normalized):
+        msg = "Machine name cannot contain control characters."
+        raise ValueError(msg)
+    return normalized
+
+
+def default_hostname_name() -> str | None:
+    raw = socket.gethostname().strip()
+    if not raw:
+        return None
+    try:
+        _machine_name_key(raw)
+    except ValueError:
+        return None
+    return raw
 
 
 def _json_tuple(value: str | None) -> tuple[str, ...]:
@@ -195,6 +248,9 @@ def migrate(conn: sqlite3.Connection) -> None:
     if current_version == 8:
         _migrate_v8_to_v9(conn)
         current_version = 9
+    if current_version == 9:
+        _migrate_v9_to_v10(conn)
+        current_version = 10
 
     _ensure_machine_id(conn)
     conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
@@ -336,7 +392,20 @@ def _ensure_machine_id(conn: sqlite3.Connection) -> str:
         _write_state_metadata(conn, _STATE_METADATA_MACHINE_ID_KEY, machine_id)
     created_at_ms = _read_state_metadata(conn, _STATE_METADATA_CREATED_AT_MS_KEY)
     if created_at_ms is None:
-        _write_state_metadata(conn, _STATE_METADATA_CREATED_AT_MS_KEY, str(_now_ms()))
+        created_at_ms = str(_now_ms())
+        _write_state_metadata(conn, _STATE_METADATA_CREATED_AT_MS_KEY, created_at_ms)
+    try:
+        machine_seen_ms = int(created_at_ms)
+    except ValueError:
+        machine_seen_ms = _now_ms()
+    _create_machines_table(conn)
+    upsert_machine(
+        conn,
+        machine_id=machine_id,
+        name=None,
+        seen_ms=machine_seen_ms,
+        is_local=True,
+    )
     return machine_id
 
 
@@ -384,6 +453,24 @@ def _create_schema(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_runs_active_archived_started
         ON runs(ended_at_ms, archived_at_ms, started_at_ms);
 
+        CREATE TABLE IF NOT EXISTS machines (
+            machine_id TEXT PRIMARY KEY,
+            name TEXT,
+            name_key TEXT,
+            first_seen_ms INTEGER NOT NULL,
+            last_seen_ms INTEGER NOT NULL,
+            is_local INTEGER NOT NULL DEFAULT 0,
+            created_at_ms INTEGER NOT NULL,
+            updated_at_ms INTEGER NOT NULL,
+            imported_at_ms INTEGER
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_machines_name_key
+        ON machines(name_key);
+
+        CREATE INDEX IF NOT EXISTS idx_machines_last_seen
+        ON machines(last_seen_ms);
+
         CREATE TABLE IF NOT EXISTS source_sessions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             sync_id TEXT NOT NULL UNIQUE,
@@ -417,6 +504,7 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             source_dedup_key TEXT,
             global_dedup_key TEXT,
             fingerprint_hash TEXT NOT NULL,
+            origin_machine_id TEXT,
             role TEXT NOT NULL DEFAULT 'assistant',
             provider_id TEXT NOT NULL DEFAULT 'unknown',
             provider_key TEXT NOT NULL DEFAULT 'unknown',
@@ -444,6 +532,9 @@ def _create_schema(conn: sqlite3.Connection) -> None:
 
         CREATE INDEX IF NOT EXISTS idx_usage_events_harness_session
         ON usage_events(harness, source_session_id, created_ms);
+
+        CREATE INDEX IF NOT EXISTS idx_usage_events_origin_machine_created
+        ON usage_events(origin_machine_id, created_ms);
 
         CREATE INDEX IF NOT EXISTS idx_usage_events_fingerprint
         ON usage_events(harness, fingerprint_hash);
@@ -755,6 +846,19 @@ def _migrate_v8_to_v9(conn: sqlite3.Connection) -> None:
     _create_sync_imports_table(conn)
 
 
+def _migrate_v9_to_v10(conn: sqlite3.Connection) -> None:
+    _create_machines_table(conn)
+    _add_column_if_missing(conn, "usage_events", "origin_machine_id", "TEXT")
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_usage_events_origin_machine_created
+        ON usage_events(origin_machine_id, created_ms)
+        """
+    )
+    local_machine_id = _ensure_machine_id(conn)
+    _backfill_usage_event_origin_machine_ids(conn, local_machine_id=local_machine_id)
+
+
 def _migrate_v6_to_v7(conn: sqlite3.Connection) -> None:
     _add_column_if_missing(
         conn,
@@ -829,6 +933,100 @@ def _create_sync_imports_table(conn: sqlite3.Connection) -> None:
         ON sync_imports(exported_at_ms)
         """
     )
+
+
+def _create_machines_table(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS machines (
+            machine_id TEXT PRIMARY KEY,
+            name TEXT,
+            name_key TEXT,
+            first_seen_ms INTEGER NOT NULL,
+            last_seen_ms INTEGER NOT NULL,
+            is_local INTEGER NOT NULL DEFAULT 0,
+            created_at_ms INTEGER NOT NULL,
+            updated_at_ms INTEGER NOT NULL,
+            imported_at_ms INTEGER
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_machines_name_key
+        ON machines(name_key)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_machines_last_seen
+        ON machines(last_seen_ms)
+        """
+    )
+
+
+def _backfill_usage_event_origin_machine_ids(
+    conn: sqlite3.Connection,
+    *,
+    local_machine_id: str,
+) -> None:
+    upsert_machine(
+        conn,
+        machine_id=local_machine_id,
+        name=None,
+        seen_ms=_now_ms(),
+        is_local=True,
+    )
+    conn.execute(
+        """
+        UPDATE usage_events
+        SET origin_machine_id = (
+            SELECT r.origin_machine_id
+            FROM run_events AS re
+            JOIN runs AS r ON r.id = re.tracking_session_id
+            WHERE re.usage_event_id = usage_events.id
+              AND r.origin_machine_id IS NOT NULL
+            ORDER BY r.started_at_ms DESC
+            LIMIT 1
+        )
+        WHERE origin_machine_id IS NULL
+          AND EXISTS (
+              SELECT 1
+              FROM run_events AS re
+              JOIN runs AS r ON r.id = re.tracking_session_id
+              WHERE re.usage_event_id = usage_events.id
+                AND r.origin_machine_id IS NOT NULL
+          )
+        """
+    )
+    conn.execute(
+        """
+        UPDATE usage_events
+        SET origin_machine_id = ?
+        WHERE origin_machine_id IS NULL
+        """,
+        (local_machine_id,),
+    )
+    machine_ids = conn.execute(
+        """
+        SELECT DISTINCT origin_machine_id
+        FROM runs
+        WHERE origin_machine_id IS NOT NULL
+        UNION
+        SELECT DISTINCT origin_machine_id
+        FROM usage_events
+        WHERE origin_machine_id IS NOT NULL
+        """
+    ).fetchall()
+    for row in machine_ids:
+        machine_id = str(row["origin_machine_id"])
+        upsert_machine(
+            conn,
+            machine_id=machine_id,
+            name=None,
+            seen_ms=_now_ms(),
+            is_local=(machine_id == local_machine_id),
+        )
 
 
 def has_imported_sync_archive(
@@ -1086,8 +1284,322 @@ def unarchive_tracking_session(conn: sqlite3.Connection, session_id: int) -> Non
     conn.commit()
 
 
-def get_machine_id(conn: sqlite3.Connection) -> str:
+def _machine_from_row(row: sqlite3.Row) -> Machine:
+    return Machine(
+        machine_id=str(row["machine_id"]),
+        name=str(row["name"]) if row["name"] is not None else None,
+        name_key=str(row["name_key"]) if row["name_key"] is not None else None,
+        first_seen_ms=_required_int(row["first_seen_ms"]),
+        last_seen_ms=_required_int(row["last_seen_ms"]),
+        is_local=bool(_required_int(row["is_local"])),
+        created_at_ms=_required_int(row["created_at_ms"]),
+        updated_at_ms=_required_int(row["updated_at_ms"]),
+        imported_at_ms=_optional_int(row["imported_at_ms"]),
+    )
+
+
+def get_local_machine_id(conn: sqlite3.Connection) -> str:
     return _ensure_machine_id(conn)
+
+
+def upsert_machine(
+    conn: sqlite3.Connection,
+    *,
+    machine_id: str,
+    name: str | None,
+    seen_ms: int,
+    is_local: bool,
+    imported_at_ms: int | None = None,
+) -> Machine:
+    _create_machines_table(conn)
+    now_ms = _now_ms()
+    normalized_name = _validate_machine_name(name)
+    normalized_key = _machine_name_key(normalized_name)
+    if is_local:
+        conn.execute(
+            """
+            UPDATE machines
+            SET is_local = 0,
+                updated_at_ms = ?
+            WHERE machine_id <> ?
+              AND is_local = 1
+            """,
+            (now_ms, machine_id),
+        )
+    existing_row = conn.execute(
+        """
+        SELECT
+            machine_id,
+            name,
+            name_key,
+            first_seen_ms,
+            last_seen_ms,
+            is_local,
+            created_at_ms,
+            updated_at_ms,
+            imported_at_ms
+        FROM machines
+        WHERE machine_id = ?
+        """,
+        (machine_id,),
+    ).fetchone()
+    if existing_row is None:
+        conn.execute(
+            """
+            INSERT INTO machines (
+                machine_id,
+                name,
+                name_key,
+                first_seen_ms,
+                last_seen_ms,
+                is_local,
+                created_at_ms,
+                updated_at_ms,
+                imported_at_ms
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                machine_id,
+                normalized_name,
+                normalized_key,
+                seen_ms,
+                seen_ms,
+                1 if is_local else 0,
+                now_ms,
+                now_ms,
+                imported_at_ms,
+            ),
+        )
+    else:
+        existing = _machine_from_row(existing_row)
+        merged_name = normalized_name if name is not None else existing.name
+        merged_key = _machine_name_key(merged_name)
+        merged_first_seen = min(existing.first_seen_ms, seen_ms)
+        merged_last_seen = max(existing.last_seen_ms, seen_ms)
+        merged_imported_at = _max_optional_int(
+            existing.imported_at_ms,
+            imported_at_ms,
+        )
+        conn.execute(
+            """
+            UPDATE machines
+            SET name = ?,
+                name_key = ?,
+                first_seen_ms = ?,
+                last_seen_ms = ?,
+                is_local = ?,
+                updated_at_ms = ?,
+                imported_at_ms = ?
+            WHERE machine_id = ?
+            """,
+            (
+                merged_name,
+                merged_key,
+                merged_first_seen,
+                merged_last_seen,
+                1 if is_local else 0,
+                now_ms,
+                merged_imported_at,
+                machine_id,
+            ),
+        )
+    row = conn.execute(
+        """
+        SELECT
+            machine_id,
+            name,
+            name_key,
+            first_seen_ms,
+            last_seen_ms,
+            is_local,
+            created_at_ms,
+            updated_at_ms,
+            imported_at_ms
+        FROM machines
+        WHERE machine_id = ?
+        """,
+        (machine_id,),
+    ).fetchone()
+    if row is None:
+        msg = f"Machine row not found after upsert: {machine_id}"
+        raise ValueError(msg)
+    return _machine_from_row(row)
+
+
+def set_local_machine_name(conn: sqlite3.Connection, name: str | None) -> Machine:
+    local_machine_id = _ensure_machine_id(conn)
+    if isinstance(name, str) and not name.strip():
+        msg = "Machine name must not be empty. Use clear-name to unset."
+        raise ValueError(msg)
+    return upsert_machine(
+        conn,
+        machine_id=local_machine_id,
+        name=_validate_machine_name(name),
+        seen_ms=_now_ms(),
+        is_local=True,
+    )
+
+
+def apply_local_machine_config(
+    conn: sqlite3.Connection,
+    machine_config: MachineConfig,
+) -> Machine:
+    local_machine_id = _ensure_machine_id(conn)
+    effective_name = machine_config.name or default_hostname_name()
+    if effective_name is None:
+        effective_name = f"machine:{local_machine_id[:8]}"
+    return upsert_machine(
+        conn,
+        machine_id=local_machine_id,
+        name=effective_name,
+        seen_ms=_now_ms(),
+        is_local=True,
+    )
+
+
+def get_machine(conn: sqlite3.Connection, machine_id: str) -> Machine | None:
+    row = conn.execute(
+        """
+        SELECT
+            machine_id,
+            name,
+            name_key,
+            first_seen_ms,
+            last_seen_ms,
+            is_local,
+            created_at_ms,
+            updated_at_ms,
+            imported_at_ms
+        FROM machines
+        WHERE machine_id = ?
+        """,
+        (machine_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    return _machine_from_row(row)
+
+
+def list_machines(conn: sqlite3.Connection) -> tuple[Machine, ...]:
+    _ensure_machine_id(conn)
+    rows = conn.execute(
+        """
+        SELECT
+            machine_id,
+            name,
+            name_key,
+            first_seen_ms,
+            last_seen_ms,
+            is_local,
+            created_at_ms,
+            updated_at_ms,
+            imported_at_ms
+        FROM machines
+        ORDER BY is_local DESC, last_seen_ms DESC, machine_id ASC
+        """
+    ).fetchall()
+    return tuple(_machine_from_row(row) for row in rows)
+
+
+def machine_label_map(conn: sqlite3.Connection) -> dict[str, str]:
+    rows = list_machines(conn)
+    name_key_counts: dict[str, int] = {}
+    for machine in rows:
+        if machine.name is None or machine.name_key is None:
+            continue
+        name_key_counts[machine.name_key] = name_key_counts.get(machine.name_key, 0) + 1
+    labels: dict[str, str] = {}
+    for machine in rows:
+        label = machine.label
+        if (
+            machine.name is not None
+            and machine.name_key is not None
+            and name_key_counts.get(machine.name_key, 0) > 1
+        ):
+            label = f"{machine.name} ({machine.machine_id[:8]})"
+        labels[machine.machine_id] = label
+    return labels
+
+
+def resolve_machine_selector(conn: sqlite3.Connection, selector: str) -> Machine:
+    raw = selector.strip()
+    if not raw:
+        msg = "Machine selector must not be empty."
+        raise ValueError(msg)
+    exact = get_machine(conn, raw)
+    if exact is not None:
+        return exact
+
+    matches: dict[str, Machine] = {}
+    if len(raw) >= 8:
+        prefix_rows = conn.execute(
+            """
+            SELECT
+                machine_id,
+                name,
+                name_key,
+                first_seen_ms,
+                last_seen_ms,
+                is_local,
+                created_at_ms,
+                updated_at_ms,
+                imported_at_ms
+            FROM machines
+            WHERE machine_id LIKE ?
+            """,
+            (f"{raw}%",),
+        ).fetchall()
+        for row in prefix_rows:
+            machine = _machine_from_row(row)
+            matches[machine.machine_id] = machine
+
+    normalized_selector: str | None
+    try:
+        normalized_selector = normalize_identity(raw)
+    except ValueError:
+        normalized_selector = None
+    if normalized_selector is not None:
+        name_rows = conn.execute(
+            """
+            SELECT
+                machine_id,
+                name,
+                name_key,
+                first_seen_ms,
+                last_seen_ms,
+                is_local,
+                created_at_ms,
+                updated_at_ms,
+                imported_at_ms
+            FROM machines
+            WHERE name_key = ? OR name_key LIKE ?
+            """,
+            (normalized_selector, f"{normalized_selector}%"),
+        ).fetchall()
+        for row in name_rows:
+            machine = _machine_from_row(row)
+            matches[machine.machine_id] = machine
+
+    if not matches:
+        msg = f"No machine matched selector {selector!r}."
+        raise ValueError(msg)
+    if len(matches) > 1:
+        labels = machine_label_map(conn)
+        candidates = ", ".join(
+            (
+                f"{labels.get(machine.machine_id, machine.label)} "
+                f"[{machine.machine_id[:8]}]"
+            )
+            for machine in sorted(matches.values(), key=lambda item: item.machine_id)
+        )
+        msg = f"Machine selector {selector!r} is ambiguous. Candidates: {candidates}"
+        raise ValueError(msg)
+    return next(iter(matches.values()))
+
+
+def get_machine_id(conn: sqlite3.Connection) -> str:
+    return get_local_machine_id(conn)
 
 
 def _source_session_key(source_session_id: str | None) -> str:
@@ -1346,6 +1858,7 @@ def insert_usage_events(
     *,
     since_ms: int | None = None,
     link_scope: RunScope | None = None,
+    origin_machine_id: str | None = None,
 ) -> InsertUsageResult:
     filtered_events = [
         event for event in events if since_ms is None or event.created_ms >= since_ms
@@ -1363,11 +1876,20 @@ def insert_usage_events(
     link_event_keys = {(event.harness, event.global_dedup_key) for event in link_events}
     harness_session_ids: dict[tuple[str, str], int] = {}
     imported_at_ms = _now_ms()
+    local_machine_id = get_local_machine_id(conn)
+    event_origin_machine_id = origin_machine_id or local_machine_id
     rows_inserted = 0
     rows_linked = 0
     rows_scope_excluded = max(len(filtered_events) - len(link_events), 0)
 
     with conn:
+        upsert_machine(
+            conn,
+            machine_id=event_origin_machine_id,
+            name=None,
+            seen_ms=imported_at_ms,
+            is_local=(event_origin_machine_id == local_machine_id),
+        )
         if tracking_session_id is not None:
             grouped_ranges = _group_event_ranges(link_events)
             for (
@@ -1400,6 +1922,7 @@ def insert_usage_events(
                 source_dedup_key TEXT,
                 global_dedup_key TEXT NOT NULL,
                 fingerprint_hash TEXT NOT NULL,
+                origin_machine_id TEXT NOT NULL,
                 provider_id TEXT NOT NULL,
                 provider_key TEXT NOT NULL,
                 model_id TEXT NOT NULL,
@@ -1448,6 +1971,7 @@ def insert_usage_events(
                     event.source_dedup_key,
                     event.global_dedup_key,
                     event.fingerprint_hash,
+                    event_origin_machine_id,
                     event.provider_id,
                     provider_key,
                     event.model_id,
@@ -1469,7 +1993,7 @@ def insert_usage_events(
                 )
             )
         if temp_rows:
-            temp_placeholders = ", ".join("?" for _ in range(27))
+            temp_placeholders = ", ".join("?" for _ in range(28))
             conn.executemany(
                 """
                 INSERT INTO tmp_usage_import (
@@ -1482,6 +2006,7 @@ def insert_usage_events(
                     source_dedup_key,
                     global_dedup_key,
                     fingerprint_hash,
+                    origin_machine_id,
                     provider_id,
                     provider_key,
                     model_id,
@@ -1522,6 +2047,7 @@ def insert_usage_events(
                 source_dedup_key,
                 global_dedup_key,
                 fingerprint_hash,
+                origin_machine_id,
                 role,
                 provider_id,
                 provider_key,
@@ -1552,6 +2078,7 @@ def insert_usage_events(
                 source_dedup_key,
                 global_dedup_key,
                 fingerprint_hash,
+                origin_machine_id,
                 'assistant',
                 provider_id,
                 provider_key,
@@ -1670,6 +2197,7 @@ def list_usage_events(
             ue.source_dedup_key,
             ue.global_dedup_key,
             ue.fingerprint_hash,
+            ue.origin_machine_id,
             ue.provider_id,
             ue.model_id,
             ue.thinking_level,
@@ -1705,6 +2233,7 @@ def summarize_usage(
         conn,
         filters,
         group_by=(
+            "origin_machine_id",
             "harness",
             "source_session_id",
             "provider_id",
@@ -1722,6 +2251,7 @@ def summarize_usage(
     totals_costs = CostTotals()
     by_provider: dict[str, _ReportBucket] = {}
     by_harness: dict[str, _ReportBucket] = {}
+    by_machine: dict[str | None, _ReportBucket] = {}
     by_model: dict[tuple[str, str, str | None], _ReportBucket] = {}
     by_agent: dict[str, _ReportBucket] = {}
     unconfigured: dict[
@@ -1760,6 +2290,10 @@ def summarize_usage(
 
         by_provider.setdefault(atom.provider_id, _ReportBucket()).add(atom, breakdown)
         by_harness.setdefault(atom.harness, _ReportBucket()).add(atom, breakdown)
+        by_machine.setdefault(row.origin_machine_id, _ReportBucket()).add(
+            atom,
+            breakdown,
+        )
         by_model.setdefault(
             (atom.provider_id, atom.model_id, atom.thinking_level),
             _ReportBucket(),
@@ -1806,6 +2340,8 @@ def summarize_usage(
                 delta_vs_virtual_usd=sim_result.delta_vs_virtual_usd,
             )
         )
+    machine_labels = machine_label_map(conn)
+    machines_by_id = {machine.machine_id: machine for machine in list_machines(conn)}
     return RunReport(
         session=session,
         totals=SessionTotals(tokens=totals_tokens, costs=totals_costs),
@@ -1839,6 +2375,32 @@ def summarize_usage(
                     -item[1].costs.actual_cost_usd,
                     -item[1].tokens.total,
                     item[0],
+                ),
+            )
+        ],
+        by_machine=[
+            MachineSummaryRow(
+                machine_id=machine_id,
+                machine_name=(
+                    machines_by_id[machine_id].name
+                    if machine_id is not None and machine_id in machines_by_id
+                    else None
+                ),
+                machine_label=(
+                    machine_labels.get(machine_id, f"machine:{machine_id[:8]}")
+                    if machine_id is not None
+                    else "unknown"
+                ),
+                message_count=bucket.message_count,
+                tokens=bucket.tokens,
+                costs=bucket.costs,
+            )
+            for machine_id, bucket in sorted(
+                by_machine.items(),
+                key=lambda item: (
+                    -item[1].costs.actual_cost_usd,
+                    -item[1].tokens.total,
+                    item[0] or "",
                 ),
             )
         ],
@@ -2417,6 +2979,7 @@ def summarize_usage_series(
             filters={
                 "since_ms": usage_filters.since_ms,
                 "until_ms": usage_filters.until_ms,
+                "machine_id": filters.machine_id,
                 "harness": filters.harness,
                 "provider_id": filters.provider_id,
                 "model_id": filters.model_id,
@@ -2452,6 +3015,7 @@ def summarize_usage_series(
             filters={
                 "since_ms": usage_filters.since_ms,
                 "until_ms": usage_filters.until_ms,
+                "machine_id": filters.machine_id,
                 "harness": filters.harness,
                 "provider_id": filters.provider_id,
                 "model_id": filters.model_id,
@@ -2485,6 +3049,7 @@ def summarize_usage_series(
             filters={
                 "since_ms": usage_filters.since_ms,
                 "until_ms": usage_filters.until_ms,
+                "machine_id": filters.machine_id,
                 "harness": filters.harness,
                 "provider_id": filters.provider_id,
                 "model_id": filters.model_id,
@@ -2703,6 +3268,7 @@ def summarize_usage_series(
     report_filters: dict[str, object] = {
         "since_ms": usage_filters.since_ms,
         "until_ms": usage_filters.until_ms,
+        "machine_id": filters.machine_id,
         "harness": filters.harness,
         "provider_id": filters.provider_id,
         "model_id": filters.model_id,
@@ -2748,6 +3314,7 @@ def summarize_usage_sessions(
         conn,
         usage_filters,
         group_by=(
+            "origin_machine_id",
             "harness",
             "source_session_id",
             "provider_id",
@@ -2763,13 +3330,16 @@ def summarize_usage_sessions(
     config = costing_config or default_costing_config()
     runtime = compile_costing_config(config)
 
-    # Per-session aggregation keyed by (harness, source_session_id).
-    session_atoms: dict[tuple[str, str], list[_SessionAtom]] = {}
+    # Per-session aggregation keyed by (origin_machine_id, harness, source_session_id).
+    session_atoms: dict[tuple[str, str, str], list[_SessionAtom]] = {}
+    machine_labels = machine_label_map(conn)
+    machines_by_id = {machine.machine_id: machine for machine in list_machines(conn)}
 
     for row in aggregate_rows:
+        origin_machine_id = row.origin_machine_id
         harness = row.harness
         source_session_id = row.source_session_id
-        key = (harness, source_session_id)
+        key = (origin_machine_id or "", harness, source_session_id)
 
         atom = UsageCostAtom(
             harness=harness,
@@ -2802,8 +3372,23 @@ def summarize_usage_sessions(
 
     # Build session rows
     session_rows: list[UsageSessionRow] = []
-    for (harness, source_session_id), atoms in session_atoms.items():
-        session_key = f"{harness}/{source_session_id}"
+    for (
+        origin_machine_id_value,
+        harness,
+        source_session_id,
+    ), atoms in session_atoms.items():
+        origin_machine_id = origin_machine_id_value or None
+        machine_name = (
+            machines_by_id[origin_machine_id].name
+            if origin_machine_id is not None and origin_machine_id in machines_by_id
+            else None
+        )
+        machine_label = (
+            machine_labels.get(origin_machine_id, f"machine:{origin_machine_id[:8]}")
+            if origin_machine_id is not None
+            else "unknown"
+        )
+        session_key = f"{machine_label}/{harness}/{source_session_id}"
         first_ms = min(a.first_ms for a in atoms)
         last_ms = max(a.last_ms for a in atoms)
         message_count = sum(a.atom.message_count for a in atoms)
@@ -2846,6 +3431,9 @@ def summarize_usage_sessions(
         session_rows.append(
             UsageSessionRow(
                 key=session_key,
+                origin_machine_id=origin_machine_id,
+                machine_name=machine_name,
+                machine_label=machine_label,
                 harness=harness,
                 source_session_id=source_session_id,
                 first_ms=first_ms,
@@ -2884,6 +3472,7 @@ def summarize_usage_sessions(
     report_filters: dict[str, object] = {
         "since_ms": usage_filters.since_ms,
         "until_ms": usage_filters.until_ms,
+        "machine_id": filters.machine_id,
         "harness": filters.harness,
         "source_session_id": filters.source_session_id,
         "provider_id": filters.provider_id,
@@ -2951,6 +3540,9 @@ def _usage_where_parts(
     if filters.source_session_id is not None:
         clauses.append(f"{alias}.source_session_id = ?")
         params.append(filters.source_session_id)
+    if filters.machine_id is not None:
+        clauses.append(f"{alias}.origin_machine_id = ?")
+        params.append(filters.machine_id)
     if filters.provider_id is not None and filters.provider_ids:
         msg = "provider_id and provider_ids cannot both be set."
         raise ValueError(msg)
@@ -3005,6 +3597,7 @@ def _aggregate_usage_rows(
 ) -> list[_AggregateRow]:
     where = _usage_where_parts(filters)
     column_map = {
+        "origin_machine_id": "ue.origin_machine_id",
         "harness": "ue.harness",
         "source_session_id": "ue.source_session_id",
         "provider_id": "ue.provider_id",
@@ -3055,9 +3648,16 @@ def _aggregate_usage_rows(
     result: list[_AggregateRow] = []
     for row in rows:
         group_values = tuple(row[key] for key in group_by)
+        origin_machine_id = (
+            str(row["origin_machine_id"])
+            if "origin_machine_id" in row.keys()
+            and row["origin_machine_id"] is not None
+            else None
+        )
         result.append(
             _AggregateRow(
                 group=group_values,
+                origin_machine_id=origin_machine_id,
                 harness=str(row["harness"])
                 if row["harness"] is not None
                 else "unknown",
@@ -3215,6 +3815,12 @@ def _usage_event_from_row(row: sqlite3.Row) -> UsageEvent:
         tokens=_row_tokens(row),
         source_cost_usd=_required_decimal(row["source_cost_usd"]),
         raw_json=str(row["raw_json"]) if row["raw_json"] is not None else None,
+        origin_machine_id=(
+            str(row["origin_machine_id"])
+            if "origin_machine_id" in row.keys()
+            and row["origin_machine_id"] is not None
+            else None
+        ),
     )
 
 
@@ -3466,6 +4072,7 @@ class _SessionAtom:
 @dataclass(frozen=True)
 class _RunAtom:
     run_name: str | None
+    origin_machine_id: str | None
     started_at_ms: int
     ended_at_ms: int | None
     atom: UsageCostAtom
@@ -3545,6 +4152,9 @@ def summarize_usage_runs(
     if usage_filters.harness is not None:
         base_where_clauses.append("ue.harness = ?")
         base_params.append(usage_filters.harness)
+    if usage_filters.machine_id is not None:
+        base_where_clauses.append("ue.origin_machine_id = ?")
+        base_params.append(usage_filters.machine_id)
     if usage_filters.provider_id is not None:
         base_where_clauses.append("ue.provider_id = ?")
         base_params.append(usage_filters.provider_id)
@@ -3587,6 +4197,7 @@ def summarize_usage_runs(
         SELECT
             r.id AS run_id,
             r.name AS run_name,
+            r.origin_machine_id AS run_origin_machine_id,
             r.started_at_ms,
             r.ended_at_ms,
             ue.harness,
@@ -3620,6 +4231,8 @@ def summarize_usage_runs(
 
     config = costing_config or default_costing_config()
     runtime = compile_costing_config(config)
+    machine_labels = machine_label_map(conn)
+    machines_by_id = {machine.machine_id: machine for machine in list_machines(conn)}
 
     run_atoms: dict[int, list[_RunAtom]] = {}
 
@@ -3650,6 +4263,11 @@ def summarize_usage_runs(
         run_atoms.setdefault(run_id, []).append(
             _RunAtom(
                 run_name=row["run_name"],
+                origin_machine_id=(
+                    str(row["run_origin_machine_id"])
+                    if row["run_origin_machine_id"] is not None
+                    else None
+                ),
                 started_at_ms=_required_int(row["started_at_ms"]),
                 ended_at_ms=(
                     _required_int(row["ended_at_ms"])
@@ -3664,6 +4282,17 @@ def summarize_usage_runs(
     rows: list[UsageRunRow] = []
     for run_id, atoms in run_atoms.items():
         name = atoms[0].run_name
+        origin_machine_id = atoms[0].origin_machine_id
+        machine_name = (
+            machines_by_id[origin_machine_id].name
+            if origin_machine_id is not None and origin_machine_id in machines_by_id
+            else None
+        )
+        machine_label = (
+            machine_labels.get(origin_machine_id, f"machine:{origin_machine_id[:8]}")
+            if origin_machine_id is not None
+            else "unknown"
+        )
         started_at_ms = min(a.started_at_ms for a in atoms)
         ended_ms_values = [a.ended_at_ms for a in atoms if a.ended_at_ms is not None]
         ended_at_ms = max(ended_ms_values) if ended_ms_values else None
@@ -3686,6 +4315,9 @@ def summarize_usage_runs(
             UsageRunRow(
                 run_id=run_id,
                 name=name,
+                origin_machine_id=origin_machine_id,
+                machine_name=machine_name,
+                machine_label=machine_label,
                 started_at_ms=started_at_ms,
                 ended_at_ms=ended_at_ms,
                 message_count=message_count,
@@ -3717,6 +4349,7 @@ def summarize_usage_runs(
     report_filters: dict[str, object] = {
         "since_ms": usage_filters.since_ms,
         "until_ms": usage_filters.until_ms,
+        "machine_id": usage_filters.machine_id,
         "provider_id": filters.provider_id,
         "model_id": filters.model_id,
         "thinking_level": filters.thinking_level,

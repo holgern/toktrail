@@ -45,6 +45,7 @@ class CostTotals:
 @dataclass(frozen=True)
 class UsageReportFilter:
     tracking_session_id: int | None = None
+    machine_id: str | None = None
     harness: str | None = None
     source_session_id: str | None = None
     provider_id: str | None = None
@@ -64,6 +65,8 @@ class UsageReportFilter:
         values: dict[str, object] = {}
         if include_tracking_session and self.tracking_session_id is not None:
             values["run_id"] = self.tracking_session_id
+        if self.machine_id is not None:
+            values["machine_id"] = self.machine_id
         if self.harness is not None:
             values["harness"] = self.harness
         if self.source_session_id is not None:
@@ -162,6 +165,30 @@ class HarnessSummaryRow:
     def as_dict(self) -> dict[str, int | float | str]:
         return {
             "harness": self.harness,
+            "message_count": self.message_count,
+            **self.tokens.as_dict(),
+            **self.costs.as_dict(),
+        }
+
+
+@dataclass(frozen=True)
+class MachineSummaryRow:
+    machine_id: str | None
+    machine_name: str | None
+    machine_label: str
+    message_count: int
+    tokens: TokenBreakdown
+    costs: CostTotals
+
+    @property
+    def total_tokens(self) -> int:
+        return self.tokens.total
+
+    def as_dict(self) -> dict[str, int | float | str | None]:
+        return {
+            "machine_id": self.machine_id,
+            "machine_name": self.machine_name,
+            "machine_label": self.machine_label,
             "message_count": self.message_count,
             **self.tokens.as_dict(),
             **self.costs.as_dict(),
@@ -358,6 +385,7 @@ class RunReport:
     totals: SessionTotals
     by_provider: list[ProviderSummaryRow]
     by_harness: list[HarnessSummaryRow]
+    by_machine: list[MachineSummaryRow]
     by_model: list[ModelSummaryRow]
     by_activity: list[ActivitySummaryRow]
     unconfigured_models: list[UnconfiguredModelRow] = field(default_factory=list)
@@ -371,6 +399,7 @@ class RunReport:
             "totals": self.totals.as_dict(),
             "by_provider": [row.as_dict() for row in self.by_provider],
             "by_harness": [row.as_dict() for row in self.by_harness],
+            "by_machine": [row.as_dict() for row in self.by_machine],
             "by_model": [row.as_dict() for row in self.by_model],
             "by_activity": [row.as_dict() for row in self.by_activity],
             "simulations": [row.as_dict() for row in self.simulations],
@@ -500,6 +529,7 @@ class SubscriptionUsageReport:
 class UsageSeriesFilter:
     granularity: str = "daily"
     tracking_session_id: int | None = None
+    machine_id: str | None = None
     harness: str | None = None
     source_session_id: str | None = None
     provider_id: str | None = None
@@ -521,6 +551,7 @@ class UsageSeriesFilter:
     def to_usage_report_filter(self) -> UsageReportFilter:
         return UsageReportFilter(
             tracking_session_id=self.tracking_session_id,
+            machine_id=self.machine_id,
             harness=self.harness,
             source_session_id=self.source_session_id,
             provider_id=self.provider_id,
@@ -622,6 +653,7 @@ class UsageSeriesReport:
 @dataclass(frozen=True)
 class UsageSessionsFilter:
     tracking_session_id: int | None = None
+    machine_id: str | None = None
     harness: str | None = None
     source_session_id: str | None = None
     provider_id: str | None = None
@@ -638,6 +670,7 @@ class UsageSessionsFilter:
     def to_usage_report_filter(self) -> UsageReportFilter:
         return UsageReportFilter(
             tracking_session_id=self.tracking_session_id,
+            machine_id=self.machine_id,
             harness=self.harness,
             source_session_id=self.source_session_id,
             provider_id=self.provider_id,
@@ -653,6 +686,9 @@ class UsageSessionsFilter:
 @dataclass(frozen=True)
 class UsageSessionRow:
     key: str
+    origin_machine_id: str | None
+    machine_name: str | None
+    machine_label: str
     harness: str
     source_session_id: str
     first_ms: int
@@ -667,6 +703,9 @@ class UsageSessionRow:
     def as_dict(self) -> dict[str, object]:
         result: dict[str, object] = {
             "key": self.key,
+            "origin_machine_id": self.origin_machine_id,
+            "machine_name": self.machine_name,
+            "machine_label": self.machine_label,
             "harness": self.harness,
             "source_session_id": self.source_session_id,
             "first_ms": self.first_ms,
@@ -701,6 +740,7 @@ class UsageSessionsReport:
 @dataclass(frozen=True)
 class UsageRunsFilter:
     tracking_session_id: int | None = None
+    machine_id: str | None = None
     provider_id: str | None = None
     model_id: str | None = None
     thinking_level: str | None = None
@@ -717,6 +757,7 @@ class UsageRunsFilter:
     def to_usage_report_filter(self) -> UsageReportFilter:
         return UsageReportFilter(
             tracking_session_id=self.tracking_session_id,
+            machine_id=self.machine_id,
             provider_id=self.provider_id,
             model_id=self.model_id,
             thinking_level=self.thinking_level,
@@ -731,6 +772,9 @@ class UsageRunsFilter:
 class UsageRunRow:
     run_id: int
     name: str | None
+    origin_machine_id: str | None
+    machine_name: str | None
+    machine_label: str
     started_at_ms: int
     ended_at_ms: int | None
     message_count: int
@@ -743,6 +787,9 @@ class UsageRunRow:
         return {
             "run_id": self.run_id,
             "name": self.name,
+            "origin_machine_id": self.origin_machine_id,
+            "machine_name": self.machine_name,
+            "machine_label": self.machine_label,
             "started_at_ms": self.started_at_ms,
             "ended_at_ms": self.ended_at_ms,
             "message_count": self.message_count,

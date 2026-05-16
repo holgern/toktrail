@@ -21,6 +21,7 @@ from toktrail.db import (
     create_tracking_session,
     end_tracking_session,
     get_active_tracking_session,
+    get_local_machine_id,
     get_tracking_session,
     has_imported_sync_archive,
     insert_usage_events,
@@ -143,6 +144,7 @@ def test_migrate_creates_tables_and_is_idempotent(tmp_path: Path) -> None:
 
     assert {
         "runs",
+        "machines",
         "source_sessions",
         "usage_events",
         "run_events",
@@ -150,7 +152,7 @@ def test_migrate_creates_tables_and_is_idempotent(tmp_path: Path) -> None:
         "import_sources",
         "sync_imports",
     } <= table_names
-    assert user_version == 9
+    assert user_version == 10
 
 
 def test_migrate_v3_to_v4_idempotent_with_existing_column(tmp_path: Path) -> None:
@@ -166,7 +168,92 @@ def test_migrate_v3_to_v4_idempotent_with_existing_column(tmp_path: Path) -> Non
     # Re-running migrate must not crash on duplicate column.
     migrate(conn)
 
-    assert int(conn.execute("PRAGMA user_version").fetchone()[0]) == 9
+    assert int(conn.execute("PRAGMA user_version").fetchone()[0]) == 10
+
+
+def test_insert_usage_events_sets_origin_machine_id(tmp_path: Path) -> None:
+    conn = connect(tmp_path / "toktrail.db")
+    try:
+        migrate(conn)
+        local_machine_id = get_local_machine_id(conn)
+        event = make_usage_event(dedup_suffix="origin-1")
+        insert_usage_events(conn, None, [event])
+        row = conn.execute(
+            "SELECT origin_machine_id FROM usage_events LIMIT 1"
+        ).fetchone()
+    finally:
+        conn.close()
+
+    assert row is not None
+    assert row["origin_machine_id"] == local_machine_id
+
+
+def test_summarize_usage_returns_by_machine_and_filters_machine_id(
+    tmp_path: Path,
+) -> None:
+    conn = connect(tmp_path / "toktrail.db")
+    try:
+        migrate(conn)
+        local_machine_id = get_local_machine_id(conn)
+        remote_machine_id = "remote1234abcd5678"
+        insert_usage_events(
+            conn,
+            None,
+            [
+                make_usage_event(
+                    dedup_suffix="m-local-1",
+                    source_session_id="ses-machine",
+                )
+            ],
+            origin_machine_id=local_machine_id,
+        )
+        insert_usage_events(
+            conn,
+            None,
+            [
+                make_usage_event(
+                    dedup_suffix="m-remote-2",
+                    source_session_id="ses-machine",
+                )
+            ],
+            origin_machine_id=remote_machine_id,
+        )
+        report_all = summarize_usage(conn, UsageReportFilter())
+        report_local = summarize_usage(
+            conn,
+            UsageReportFilter(machine_id=local_machine_id),
+        )
+    finally:
+        conn.close()
+
+    assert len(report_all.by_machine) == 2
+    assert len(report_local.by_machine) == 1
+    assert report_local.by_machine[0].machine_id == local_machine_id
+
+
+def test_usage_sessions_groups_same_source_session_by_machine(tmp_path: Path) -> None:
+    conn = connect(tmp_path / "toktrail.db")
+    try:
+        migrate(conn)
+        local_machine_id = get_local_machine_id(conn)
+        remote_machine_id = "remote0000abcd9999"
+        insert_usage_events(
+            conn,
+            None,
+            [make_usage_event(dedup_suffix="s-local-1", source_session_id="shared")],
+            origin_machine_id=local_machine_id,
+        )
+        insert_usage_events(
+            conn,
+            None,
+            [make_usage_event(dedup_suffix="s-remote-2", source_session_id="shared")],
+            origin_machine_id=remote_machine_id,
+        )
+        report = summarize_usage_sessions(conn, UsageSessionsFilter(limit=None))
+    finally:
+        conn.close()
+
+    assert len(report.sessions) == 2
 
 
 def test_sync_import_registry_records_archive_hashes(tmp_path: Path) -> None:
