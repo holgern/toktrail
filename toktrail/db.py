@@ -1029,9 +1029,7 @@ def _backfill_usage_event_origin_machine_ids(
         )
 
 
-def has_imported_sync_archive(
-    conn: sqlite3.Connection, archive_sha256: str
-) -> bool:
+def has_imported_sync_archive(conn: sqlite3.Connection, archive_sha256: str) -> bool:
     row = conn.execute(
         """
         SELECT 1

@@ -526,12 +526,12 @@ def test_install_git_hooks_writes_managed_hooks(tmp_path: Path) -> None:
 
     assert set(result.installed) == {"post-merge", "post-checkout", "post-rewrite"}
     for hook_name in result.installed:
-            hook_path = repo / ".git" / "hooks" / hook_name
-            assert hook_path.exists()
-            text = hook_path.read_text(encoding="utf-8")
-            assert "# toktrail-managed-hook v1" in text
-            assert "sync git import-local --repo" in text
-            assert "--quiet" in text
+        hook_path = repo / ".git" / "hooks" / hook_name
+        assert hook_path.exists()
+        text = hook_path.read_text(encoding="utf-8")
+        assert "# toktrail-managed-hook v1" in text
+        assert "sync git import-local --repo" in text
+        assert "--quiet" in text
 
 
 def test_install_git_hooks_preserves_foreign_hook_without_force(tmp_path: Path) -> None:

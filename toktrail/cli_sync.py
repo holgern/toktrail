@@ -255,9 +255,7 @@ def _export_state_fingerprint(db_path: Path) -> str:
         "run_event_count": int(row[6]),
         "sync_import_count": int(row[7]),
     }
-    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode(
-        "utf-8"
-    )
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
 
 
@@ -488,7 +486,9 @@ def sync_git_init(
                 dry_run=False,
                 archive_dir=runtime.sync_git.archive_dir or DEFAULT_ARCHIVE_DIR,
                 on_conflict=_parse_sync_conflict_mode(runtime.sync_git.on_conflict),
-                remote_active=_parse_sync_remote_active_mode(runtime.sync_git.remote_active),
+                remote_active=_parse_sync_remote_active_mode(
+                    runtime.sync_git.remote_active
+                ),
             )
             import_payload = import_result.as_dict()
         status = git_sync_status(

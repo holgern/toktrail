@@ -201,11 +201,7 @@ def list_archives(
     base = resolved_repo / archive_dir
     if not base.exists():
         return []
-    archives = [
-        path
-        for path in base.rglob("*.tar.gz")
-        if path.is_file()
-    ]
+    archives = [path for path in base.rglob("*.tar.gz") if path.is_file()]
     archives.sort()
     return archives
 
@@ -593,7 +589,7 @@ def _render_import_local_hook_script(
             "--quiet",
         )
     )
-    command = " ".join(shlex.quote(part) for part in command_parts)
+    command = shlex.join(command_parts)
     return f"#!/bin/sh\n{_HOOK_MARKER}\nTOKTRAIL_GIT_HOOK=1 exec {command}\n"
 
 
