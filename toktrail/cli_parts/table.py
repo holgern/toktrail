@@ -27,7 +27,9 @@ def _render_table(
 
     lines = ["  ".join(_cell(column, headers[column]) for column in columns)]
     for row in rows:
-        lines.append("  ".join(_cell(column, row.get(column, "")) for column in columns))
+        lines.append(
+            "  ".join(_cell(column, row.get(column, "")) for column in columns)
+        )
     return "\n".join(lines)
 
 
@@ -226,4 +228,3 @@ def _print_unconfigured_model_table(
             "total",
         },
     )
-

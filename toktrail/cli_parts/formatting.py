@@ -54,4 +54,3 @@ def _format_price(value: float | None, *, fallback: str | None = None) -> str:
     if value is None:
         return f"={fallback}" if fallback is not None else "-"
     return f"${value:.2f}"
-

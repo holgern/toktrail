@@ -380,7 +380,8 @@ def _filter_price_rows(
             row
             for row in filtered
             if normalize_identity(str(row["model"])) == normalized_model
-            or normalized_model in {normalize_identity(alias) for alias in _aliases_from_row(row)}
+            or normalized_model
+            in {normalize_identity(alias) for alias in _aliases_from_row(row)}
         ]
     if filters.category is not None:
         normalized_category = normalize_identity(filters.category)
@@ -394,7 +395,8 @@ def _filter_price_rows(
         filtered = [
             row
             for row in filtered
-            if str(row.get("release_status") or "").strip().lower() == normalized_release
+            if str(row.get("release_status") or "").strip().lower()
+            == normalized_release
         ]
     if filters.query is not None:
         needle = filters.query.strip().lower()
@@ -516,4 +518,3 @@ def _sort_price_rows(
             str(row["table"]),
         ),
     )
-

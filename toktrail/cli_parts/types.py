@@ -58,4 +58,3 @@ class WatchTotals:
 class WatchDelta:
     totals: WatchTotals
     by_harness: dict[str, WatchTotals]
-

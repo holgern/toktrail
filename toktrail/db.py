@@ -2579,11 +2579,7 @@ def move_area_path(
         old_id = _required_int(row["id"])
         current_path = str(row["path"])
         relative = current_path[len(normalized_old) :].lstrip("/")
-        target_path = (
-            normalized_new
-            if not relative
-            else f"{normalized_new}/{relative}"
-        )
+        target_path = normalized_new if not relative else f"{normalized_new}/{relative}"
         target = ensure_area(conn, target_path, name=str(row["name"]))
         old_to_new_area_id[old_id] = target.id
 
@@ -2647,9 +2643,7 @@ def merge_area_paths(
         current_path = str(row["path"])
         relative = current_path[len(normalized_source) :].lstrip("/")
         mapped_path = (
-            normalized_target
-            if not relative
-            else f"{normalized_target}/{relative}"
+            normalized_target if not relative else f"{normalized_target}/{relative}"
         )
         mapped = ensure_area(conn, mapped_path, name=str(row["name"]))
         source_to_target[source_id] = mapped.id
@@ -4885,13 +4879,16 @@ def summarize_usage_sessions(
         for row in list_source_session_metadata(conn)
     }
     where = _usage_where_parts(usage_filters, alias="ue")
-    source_query = """
+    source_query = (
+        """
         SELECT
             ue.origin_machine_id,
             ue.harness,
             ue.source_session_id,
             ue.source_row_id
-        """ + where.source_clause
+        """
+        + where.source_clause
+    )
     if where.where_clause:
         source_query += where.where_clause + " AND ue.source_row_id IS NOT NULL"
     else:

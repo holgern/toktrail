@@ -10,7 +10,6 @@ import sqlite3
 import subprocess
 import time
 from dataclasses import replace
-from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Literal, NoReturn, cast
 
@@ -42,7 +41,6 @@ from toktrail.api.reports import stats_report as stats_report_api
 from toktrail.api.sessions import list_runs
 from toktrail.api.sources import capture_source_snapshot
 from toktrail.api.statusline import statusline_report as statusline_report_api
-from toktrail.cli_sync import maybe_auto_export_to_git_repo, sync_app
 from toktrail.cli_parts.filters import (
     _aliases_from_row,
     _as_float_or_none,
@@ -65,19 +63,18 @@ from toktrail.cli_parts.formatting import (
     _format_signed_int,
     _format_token_delta,
 )
+from toktrail.cli_parts.machines import register_machine_commands
 from toktrail.cli_parts.table import (
     _print_model_table,
     _print_table,
     _print_unconfigured_model_table,
 )
-from toktrail.cli_parts.machines import register_machine_commands
 from toktrail.cli_parts.types import (
     ImportExecutionResult,
-    PriceDisplayFilter,
-    ReportDisplayFilter,
     WatchDelta,
     WatchTotals,
 )
+from toktrail.cli_sync import maybe_auto_export_to_git_repo, sync_app
 from toktrail.config import (
     DEFAULT_TEMPLATE_NAME,
     ContextWindowConfig,
@@ -111,11 +108,9 @@ from toktrail.db import (
     get_active_tracking_session,
     get_area_by_path,
     get_local_machine_id,
-    get_machine,
     get_tracking_session,
     insert_usage_events,
     list_areas,
-    list_machines,
     list_skipped_sources,
     merge_area_paths,
     migrate,
@@ -124,7 +119,6 @@ from toktrail.db import (
     persist_source_session_metadata,
     resolve_machine_selector,
     set_active_area,
-    set_local_machine_name,
     summarize_subscription_usage,
     summarize_usage,
     summarize_usage_areas,
@@ -3578,7 +3572,9 @@ def _usage_areas(
         leaves=leaves,
         percent=percent,
         share_by=share_by,
-        unassigned_warning_threshold=_load_resolved_toktrail_config_or_exit(ctx).config.areas.unassigned_warning_threshold,
+        unassigned_warning_threshold=_load_resolved_toktrail_config_or_exit(
+            ctx
+        ).config.areas.unassigned_warning_threshold,
     )
     return None
 
@@ -3638,9 +3634,7 @@ def _print_usage_areas(  # noqa: C901
 
     if leaves:
         filtered_areas = [
-            row
-            for row in report.areas
-            if row.path is None or _direct_msg(row) > 0
+            row for row in report.areas if row.path is None or _direct_msg(row) > 0
         ]
     else:
         filtered_areas = list(report.areas)
@@ -3969,10 +3963,9 @@ def _usage_aggregate(
         and area is None
         and not unassigned_area
     ):
-        threshold = (
-            _load_resolved_toktrail_config_or_exit(ctx)
-            .config.areas.unassigned_warning_threshold
-        )
+        threshold = _load_resolved_toktrail_config_or_exit(
+            ctx
+        ).config.areas.unassigned_warning_threshold
         ratio = unassigned_total / report.totals.tokens.total
         if threshold > 0 and ratio >= threshold:
             typer.echo(

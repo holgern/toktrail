@@ -7428,8 +7428,7 @@ def test_cli_area_assign_and_unassign_by_session_key(tmp_path: Path) -> None:
     )
     assert sessions_after_unassign.exit_code == 0, sessions_after_unassign.output
     assert (
-        json.loads(sessions_after_unassign.output)["sessions"][0]["area_path"]
-        is None
+        json.loads(sessions_after_unassign.output)["sessions"][0]["area_path"] is None
     )
 
 

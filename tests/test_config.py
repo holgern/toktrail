@@ -484,9 +484,7 @@ priority = 100
     assert len(config.areas.rules) == 1
     assert config.areas.rules[0].area == "work/odoo"
     assert config.areas.rules[0].cwd_globs == ("~/work/odoo/**",)
-    assert config.areas.rules[0].git_remotes == (
-        "git@github.com:company/odoo*.git",
-    )
+    assert config.areas.rules[0].git_remotes == ("git@github.com:company/odoo*.git",)
     assert config.areas.rules[0].priority == 100
 
 

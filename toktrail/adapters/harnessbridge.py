@@ -405,10 +405,7 @@ def _build_session_metadata_from_event(
     event: UsageEvent,
 ) -> SourceSessionMetadata:
     source_dir = (
-        header.source_dir
-        or header.cwd
-        or header.git_root
-        or str(file_path.parent)
+        header.source_dir or header.cwd or header.git_root or str(file_path.parent)
     )
     return SourceSessionMetadata(
         harness=event.harness,

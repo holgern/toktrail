@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Callable
 from pathlib import Path
-from typing import Annotated, Callable, cast
+from typing import Annotated, cast
 
 import typer
 
@@ -132,12 +133,20 @@ def register_machine_commands(
                     "machine": str(row["machine"]),
                     "id": str(row["machine_id"])[:8],
                     "local": "yes" if bool(row["local"]) else "no",
-                    "first_seen": format_epoch_ms_compact(cast(int, row["first_seen_ms"]), utc=utc),
-                    "last_seen": format_epoch_ms_compact(cast(int, row["last_seen_ms"]), utc=utc),
+                    "first_seen": format_epoch_ms_compact(
+                        cast(int, row["first_seen_ms"]), utc=utc
+                    ),
+                    "last_seen": format_epoch_ms_compact(
+                        cast(int, row["last_seen_ms"]), utc=utc
+                    ),
                     "msgs": _format_int(cast(int, row["message_count"])),
                     "total": _format_int(cast(TokenBreakdown, row["tokens"]).total),
-                    "actual": _format_cost(cast(CostTotals, row["costs"]).actual_cost_usd),
-                    "virtual": _format_cost(cast(CostTotals, row["costs"]).virtual_cost_usd),
+                    "actual": _format_cost(
+                        cast(CostTotals, row["costs"]).actual_cost_usd
+                    ),
+                    "virtual": _format_cost(
+                        cast(CostTotals, row["costs"]).virtual_cost_usd
+                    ),
                 }
                 for row in rows_payload
             ],
@@ -174,7 +183,9 @@ def register_machine_commands(
             exit_with_error("Machine name must not be empty.")
         path = resolve_machine_config_path(ctx)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("[machine]\nname = " + json.dumps(cleaned_name) + "\n", encoding="utf-8")
+        path.write_text(
+            "[machine]\nname = " + json.dumps(cleaned_name) + "\n", encoding="utf-8"
+        )
         conn = open_toktrail_connection(ctx)
         try:
             set_local_machine_name(conn, cleaned_name)
