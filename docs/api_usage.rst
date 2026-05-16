@@ -32,6 +32,43 @@ source paths to refresh.
    for provider in report.by_provider:
        print(provider.provider_id, provider.tokens.total, provider.costs.virtual_cost_usd)
 
+Area management and area-filtered reports
+-----------------------------------------
+
+Use the stable area APIs to classify source sessions and filter reports by
+hierarchical area paths.
+
+.. code-block:: python
+
+   from pathlib import Path
+
+   from toktrail.api import (
+       assign_area_to_session,
+       create_area,
+       set_active_area,
+       usage_areas_report,
+       usage_report,
+   )
+
+   db_path = Path(".toktrail/toktrail.db")
+
+   create_area("work/odoo", db_path=db_path)
+   set_active_area("work/odoo", db_path=db_path)
+   assign_area_to_session(
+       "work/odoo",
+       harness="opencode",
+       source_session_id="ses-1",
+       db_path=db_path,
+   )
+
+   rollup = usage_report(db_path, period="today", area="work")
+   exact = usage_report(db_path, period="today", area="work", area_exact=True)
+   unassigned = usage_report(db_path, period="today", unassigned_area=True)
+   by_area = usage_areas_report(db_path, period="today")
+
+   print(rollup.totals.tokens.total, exact.totals.tokens.total)
+   print(unassigned.totals.tokens.total, len(by_area.areas))
+
 Scan a harness source without writing state
 -------------------------------------------
 

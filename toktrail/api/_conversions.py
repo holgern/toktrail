@@ -3,6 +3,9 @@ from __future__ import annotations
 from toktrail.adapters.base import SourceSessionSummary as InternalSourceSessionSummary
 from toktrail.api.models import (
     ActivitySummaryRow,
+    Area,
+    AreaSessionAssignment,
+    AreaSummaryRow,
     CostTotals,
     HarnessSummaryRow,
     Machine,
@@ -23,12 +26,19 @@ from toktrail.api.models import (
     SubscriptionUsageRow,
     TokenBreakdown,
     UnconfiguredModelRow,
+    UsageAreasReport,
     UsageEvent,
     UsageSeriesBucket,
     UsageSeriesInstance,
     UsageSeriesReport,
     UsageSessionRow,
     UsageSessionsReport,
+)
+from toktrail.db import (
+    Area as InternalArea,
+)
+from toktrail.db import (
+    AreaSessionAssignment as InternalAreaSessionAssignment,
 )
 from toktrail.models import (
     Run as InternalTrackingSession,
@@ -44,6 +54,9 @@ from toktrail.models import (
 )
 from toktrail.reporting import (
     ActivitySummaryRow as InternalActivitySummaryRow,
+)
+from toktrail.reporting import (
+    AreaSummaryRow as InternalAreaSummaryRow,
 )
 from toktrail.reporting import (
     CostTotals as InternalCostTotals,
@@ -80,6 +93,9 @@ from toktrail.reporting import (
 )
 from toktrail.reporting import (
     UnconfiguredModelRow as InternalUnconfiguredModelRow,
+)
+from toktrail.reporting import (
+    UsageAreasReport as InternalUsageAreasReport,
 )
 from toktrail.reporting import (
     UsageSessionRow as InternalUsageSessionRow,
@@ -485,6 +501,9 @@ def _to_public_usage_session_row(
         machine_label=value.machine_label,
         harness=value.harness,
         source_session_id=value.source_session_id,
+        area_id=value.area_id,
+        area_path=value.area_path,
+        area_name=value.area_name,
         first_ms=value.first_ms,
         last_ms=value.last_ms,
         message_count=value.message_count,
@@ -493,6 +512,49 @@ def _to_public_usage_session_row(
         models=value.models,
         providers=value.providers,
         by_model=tuple(_to_public_model_row(m) for m in value.by_model),
+    )
+
+
+def _to_public_area(value: object) -> Area:
+    assert isinstance(value, InternalArea)
+    return Area(
+        id=value.id,
+        sync_id=value.sync_id,
+        parent_id=value.parent_id,
+        slug=value.slug,
+        name=value.name,
+        path=value.path,
+        archived_at_ms=value.archived_at_ms,
+        created_at_ms=value.created_at_ms,
+        updated_at_ms=value.updated_at_ms,
+        imported_at_ms=value.imported_at_ms,
+    )
+
+
+def _to_public_area_session_assignment(value: object) -> AreaSessionAssignment:
+    assert isinstance(value, InternalAreaSessionAssignment)
+    return AreaSessionAssignment(
+        id=value.id,
+        sync_id=value.sync_id,
+        area_id=value.area_id,
+        origin_machine_id=value.origin_machine_id,
+        harness=value.harness,
+        source_session_id=value.source_session_id,
+        assigned_at_ms=value.assigned_at_ms,
+        updated_at_ms=value.updated_at_ms,
+        imported_at_ms=value.imported_at_ms,
+    )
+
+
+def _to_public_area_summary_row(value: InternalAreaSummaryRow) -> AreaSummaryRow:
+    return AreaSummaryRow(
+        area_id=value.area_id,
+        path=value.path,
+        name=value.name,
+        depth=value.depth,
+        message_count=value.message_count,
+        tokens=_to_public_token_breakdown(value.tokens),
+        costs=_to_public_cost_totals(value.costs),
     )
 
 
@@ -526,8 +588,24 @@ def _to_public_usage_sessions_report(
     )
 
 
+def _to_public_usage_areas_report(
+    value: InternalUsageAreasReport,
+) -> UsageAreasReport:
+    return UsageAreasReport(
+        filters=value.filters,
+        areas=tuple(_to_public_area_summary_row(area) for area in value.areas),
+        totals=_to_public_session_totals(
+            value.totals,
+            message_count=sum(area.message_count for area in value.areas),
+        ),
+    )
+
+
 __all__ = [
     "_to_public_activity_row",
+    "_to_public_area",
+    "_to_public_area_session_assignment",
+    "_to_public_area_summary_row",
     "_to_public_cost_totals",
     "_to_public_harness_row",
     "_to_public_machine",
@@ -546,5 +624,6 @@ __all__ = [
     "_to_public_state_export_result",
     "_to_public_state_import_result",
     "_to_public_usage_session_row",
+    "_to_public_usage_areas_report",
     "_to_public_usage_sessions_report",
 ]

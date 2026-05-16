@@ -23,9 +23,11 @@ from toktrail.api.sessions import init_state, start_run
 from toktrail.cli import app
 from toktrail.db import (
     archive_tracking_session,
+    assign_area_to_source_session,
     connect,
     create_tracking_session,
     end_tracking_session,
+    ensure_area,
     get_local_machine_id,
     insert_usage_events,
     migrate,
@@ -7086,14 +7088,293 @@ def test_cli_usage_runs_json_shape(tmp_path) -> None:
     assert "totals" in payload
 
 
-def test_cli_usage_project_rejected(tmp_path) -> None:
+def test_cli_area_create_list_use_status(tmp_path) -> None:
     runner = CliRunner()
     state_db = tmp_path / "toktrail.db"
     runner.invoke(app, ["--db", str(state_db), "init"])
 
+    create_result = runner.invoke(
+        app,
+        ["--db", str(state_db), "area", "create", "privat/toktrail"],
+    )
+    assert create_result.exit_code == 0, create_result.output
+
+    list_result = runner.invoke(app, ["--db", str(state_db), "area", "list"])
+    assert list_result.exit_code == 0, list_result.output
+    assert "privat/toktrail" in list_result.output
+
+    use_result = runner.invoke(
+        app,
+        ["--db", str(state_db), "area", "use", "privat/toktrail"],
+    )
+    assert use_result.exit_code == 0, use_result.output
+    assert "Active area: privat/toktrail" in use_result.output
+
+    status_result = runner.invoke(app, ["--db", str(state_db), "area", "status"])
+    assert status_result.exit_code == 0, status_result.output
+    assert "privat/toktrail" in status_result.output
+
+
+def test_cli_area_assign_and_unassign_old_session(tmp_path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    conn = connect(state_db)
+    try:
+        migrate(conn)
+        insert_usage_events(
+            conn,
+            None,
+            [
+                make_cli_usage_event(
+                    "assign",
+                    source_session_id="ses-assign",
+                    created_ms=_future_ms(),
+                    tokens=TokenBreakdown(input=10, output=2),
+                )
+            ],
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    assign_result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "area",
+            "assign",
+            "privat/toktrail",
+            "--harness",
+            "opencode",
+            "--source-session-id",
+            "ses-assign",
+        ],
+    )
+    assert assign_result.exit_code == 0, assign_result.output
+
+    sessions_assigned = runner.invoke(
+        app,
+        ["--db", str(state_db), "usage", "sessions", "--json", "--no-refresh"],
+    )
+    assert sessions_assigned.exit_code == 0, sessions_assigned.output
+    assigned_payload = json.loads(sessions_assigned.output)
+    assert assigned_payload["sessions"][0]["area_path"] == "privat/toktrail"
+
+    unassign_result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "area",
+            "unassign",
+            "--harness",
+            "opencode",
+            "--source-session-id",
+            "ses-assign",
+        ],
+    )
+    assert unassign_result.exit_code == 0, unassign_result.output
+
+    sessions_unassigned = runner.invoke(
+        app,
+        ["--db", str(state_db), "usage", "sessions", "--json", "--no-refresh"],
+    )
+    assert sessions_unassigned.exit_code == 0, sessions_unassigned.output
+    unassigned_payload = json.loads(sessions_unassigned.output)
+    assert unassigned_payload["sessions"][0]["area_path"] is None
+
+
+def test_cli_usage_summary_area_filters(tmp_path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    conn = connect(state_db)
+    try:
+        migrate(conn)
+        insert_usage_events(
+            conn,
+            None,
+            [
+                make_cli_usage_event(
+                    "area-child",
+                    source_session_id="ses-area-child",
+                    created_ms=_future_ms(),
+                    tokens=TokenBreakdown(input=100, output=20),
+                ),
+                make_cli_usage_event(
+                    "area-unassigned",
+                    source_session_id="ses-area-unassigned",
+                    created_ms=_future_ms(),
+                    tokens=TokenBreakdown(input=50, output=5),
+                ),
+            ],
+        )
+        machine_id = get_local_machine_id(conn)
+        area = ensure_area(conn, "work/odoo")
+        assign_area_to_source_session(
+            conn,
+            area_id=area.id,
+            origin_machine_id=machine_id,
+            harness="opencode",
+            source_session_id="ses-area-child",
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    parent_result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "usage",
+            "summary",
+            "--area",
+            "work",
+            "--json",
+            "--no-refresh",
+        ],
+    )
+    assert parent_result.exit_code == 0, parent_result.output
+    parent_payload = json.loads(parent_result.output)
+    assert parent_payload["totals"]["total"] == 120
+
+    exact_result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "usage",
+            "summary",
+            "--area",
+            "work",
+            "--area-exact",
+            "--json",
+            "--no-refresh",
+        ],
+    )
+    assert exact_result.exit_code == 0, exact_result.output
+    exact_payload = json.loads(exact_result.output)
+    assert exact_payload["totals"]["total"] == 0
+
+    unassigned_result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "usage",
+            "summary",
+            "--unassigned-area",
+            "--json",
+            "--no-refresh",
+        ],
+    )
+    assert unassigned_result.exit_code == 0, unassigned_result.output
+    unassigned_payload = json.loads(unassigned_result.output)
+    assert unassigned_payload["totals"]["total"] == 55
+
+    conflict_result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "usage",
+            "summary",
+            "--area",
+            "work",
+            "--unassigned-area",
+            "--no-refresh",
+        ],
+    )
+    assert conflict_result.exit_code != 0
+    assert "Use either --area or --unassigned-area, not both." in conflict_result.output
+
+
+def test_cli_usage_sessions_table_shows_area_column(tmp_path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    conn = connect(state_db)
+    try:
+        migrate(conn)
+        insert_usage_events(
+            conn,
+            None,
+            [
+                make_cli_usage_event(
+                    "table-area",
+                    source_session_id="ses-table-area",
+                    created_ms=_future_ms(),
+                    tokens=TokenBreakdown(input=8, output=1),
+                )
+            ],
+        )
+        machine_id = get_local_machine_id(conn)
+        area = ensure_area(conn, "work/odoo")
+        assign_area_to_source_session(
+            conn,
+            area_id=area.id,
+            origin_machine_id=machine_id,
+            harness="opencode",
+            source_session_id="ses-table-area",
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
     result = runner.invoke(
         app,
-        ["--db", str(state_db), "usage", "daily", "--project", "myproj"],
+        ["--db", str(state_db), "usage", "sessions", "--table", "--no-refresh"],
     )
-    assert result.exit_code != 0
-    assert "No such option: --project" in _strip_ansi(result.output)
+    assert result.exit_code == 0, result.output
+    assert "area" in result.output
+    assert "work/odoo" in result.output
+
+
+def test_cli_usage_areas_json_shape(tmp_path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    conn = connect(state_db)
+    try:
+        migrate(conn)
+        insert_usage_events(
+            conn,
+            None,
+            [
+                make_cli_usage_event(
+                    "areas-child",
+                    source_session_id="ses-areas-child",
+                    created_ms=_future_ms(),
+                    tokens=TokenBreakdown(input=20, output=4),
+                ),
+                make_cli_usage_event(
+                    "areas-unassigned",
+                    source_session_id="ses-areas-unassigned",
+                    created_ms=_future_ms(),
+                    tokens=TokenBreakdown(input=12, output=3),
+                ),
+            ],
+        )
+        machine_id = get_local_machine_id(conn)
+        area = ensure_area(conn, "work/odoo")
+        assign_area_to_source_session(
+            conn,
+            area_id=area.id,
+            origin_machine_id=machine_id,
+            harness="opencode",
+            source_session_id="ses-areas-child",
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = runner.invoke(
+        app,
+        ["--db", str(state_db), "usage", "areas", "--json", "--no-refresh"],
+    )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["type"] == "usage_areas"
+    assert "areas" in payload
+    assert "totals" in payload
+    assert any(row["path"] == "work" for row in payload["areas"])
+    assert any(row["path"] == "work/odoo" for row in payload["areas"])

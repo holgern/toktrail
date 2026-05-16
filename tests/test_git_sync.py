@@ -10,9 +10,12 @@ from shutil import which
 import pytest
 
 from toktrail.db import (
+    assign_area_to_source_session,
     connect,
     create_tracking_session,
     end_tracking_session,
+    ensure_area,
+    get_local_machine_id,
     insert_usage_events,
     migrate,
     summarize_usage,
@@ -310,6 +313,78 @@ def test_git_sync_two_machine_round_trip(tmp_path: Path) -> None:
     import_repo_archives(db_a, repo_a, dry_run=False)
 
     assert _usage_total_tokens(db_a) == _usage_total_tokens(db_b)
+
+
+def test_git_sync_round_trip_preserves_areas(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    db_a = tmp_path / "a.db"
+    db_b = tmp_path / "b.db"
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("config_version = 1\n", encoding="utf-8")
+
+    ensure_git_repo(repo, remote_url=None, branch="main")
+    _configure_git_identity(repo)
+    _seed_db(db_a, event=_event("area-1", created_ms=1_777_801_200_000))
+
+    conn = connect(db_a)
+    try:
+        migrate(conn)
+        area = ensure_area(conn, "work/odoo")
+        assign_area_to_source_session(
+            conn,
+            area_id=area.id,
+            origin_machine_id=get_local_machine_id(conn),
+            harness="opencode",
+            source_session_id="ses-1",
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    export_repo_archive(
+        db_a,
+        repo,
+        archive_dir="archives",
+        config_path=config_path,
+        include_config=False,
+        redact_raw_json=True,
+        commit_message="sync",
+        remote="origin",
+        branch="main",
+        push=False,
+        allow_dirty=False,
+    )
+    import_repo_archives(db_b, repo, dry_run=False)
+
+    conn = connect(db_b)
+    try:
+        migrate(conn)
+        assignment = conn.execute(
+            """
+            SELECT a.path
+            FROM area_session_assignments asa
+            JOIN areas a ON a.id = asa.area_id
+            WHERE asa.harness = ?
+              AND asa.source_session_id = ?
+            """,
+            ("opencode", "ses-1"),
+        ).fetchone()
+        usage = conn.execute(
+            """
+            SELECT a.path
+            FROM usage_events ue
+            JOIN areas a ON a.id = ue.area_id
+            WHERE ue.global_dedup_key = ?
+            """,
+            ("opencode:msg-area-1",),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    assert assignment is not None
+    assert assignment["path"] == "work/odoo"
+    assert usage is not None
+    assert usage["path"] == "work/odoo"
 
 
 def test_git_sync_redacts_raw_json_by_default(tmp_path: Path) -> None:

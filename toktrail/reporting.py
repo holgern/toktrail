@@ -56,6 +56,10 @@ class UsageReportFilter:
     since_ms: int | None = None
     until_ms: int | None = None
     split_thinking: bool = False
+    area: str | None = None
+    area_exact: bool = False
+    unassigned_area: bool = False
+    area_ids: tuple[int, ...] = field(default_factory=tuple, repr=False, compare=False)
 
     def as_dict(
         self,
@@ -85,6 +89,12 @@ class UsageReportFilter:
             values["since_ms"] = self.since_ms
         if self.until_ms is not None:
             values["until_ms"] = self.until_ms
+        if self.area is not None:
+            values["area"] = self.area
+        if self.area_exact:
+            values["area_exact"] = True
+        if self.unassigned_area:
+            values["unassigned_area"] = True
         if self.split_thinking:
             values["split_thinking"] = True
         return values
@@ -539,7 +549,9 @@ class UsageSeriesFilter:
     since_ms: int | None = None
     until_ms: int | None = None
     split_thinking: bool = False
-    project: str | None = None
+    area: str | None = None
+    area_exact: bool = False
+    unassigned_area: bool = False
     instances: bool = False
     breakdown: bool = False
     start_of_week: str = "monday"
@@ -561,6 +573,9 @@ class UsageSeriesFilter:
             since_ms=self.since_ms,
             until_ms=self.until_ms,
             split_thinking=self.split_thinking,
+            area=self.area,
+            area_exact=self.area_exact,
+            unassigned_area=self.unassigned_area,
         )
 
 
@@ -663,6 +678,9 @@ class UsageSessionsFilter:
     since_ms: int | None = None
     until_ms: int | None = None
     split_thinking: bool = False
+    area: str | None = None
+    area_exact: bool = False
+    unassigned_area: bool = False
     limit: int | None = 10
     order: str = "desc"
     breakdown: bool = False
@@ -680,6 +698,9 @@ class UsageSessionsFilter:
             since_ms=self.since_ms,
             until_ms=self.until_ms,
             split_thinking=self.split_thinking,
+            area=self.area,
+            area_exact=self.area_exact,
+            unassigned_area=self.unassigned_area,
         )
 
 
@@ -691,6 +712,9 @@ class UsageSessionRow:
     machine_label: str
     harness: str
     source_session_id: str
+    area_id: int | None
+    area_path: str | None
+    area_name: str | None
     first_ms: int
     last_ms: int
     message_count: int
@@ -708,6 +732,9 @@ class UsageSessionRow:
             "machine_label": self.machine_label,
             "harness": self.harness,
             "source_session_id": self.source_session_id,
+            "area_id": self.area_id,
+            "area_path": self.area_path,
+            "area_name": self.area_name,
             "first_ms": self.first_ms,
             "last_ms": self.last_ms,
             "message_count": self.message_count,
@@ -748,6 +775,9 @@ class UsageRunsFilter:
     since_ms: int | None = None
     until_ms: int | None = None
     split_thinking: bool = False
+    area: str | None = None
+    area_exact: bool = False
+    unassigned_area: bool = False
     limit: int | None = 10
     order: str = "desc"
     last: bool = False
@@ -765,6 +795,9 @@ class UsageRunsFilter:
             since_ms=self.since_ms,
             until_ms=self.until_ms,
             split_thinking=self.split_thinking,
+            area=self.area,
+            area_exact=self.area_exact,
+            unassigned_area=self.unassigned_area,
         )
 
 
@@ -812,5 +845,42 @@ class UsageRunsReport:
             "order": self.filters.get("order", "desc"),
             "filters": dict(self.filters),
             "runs": [row.as_dict() for row in self.runs],
+            "totals": self.totals.as_dict(),
+        }
+
+
+@dataclass(frozen=True)
+class AreaSummaryRow:
+    area_id: int | None
+    path: str | None
+    name: str | None
+    depth: int
+    message_count: int
+    tokens: TokenBreakdown
+    costs: CostTotals
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "area_id": self.area_id,
+            "path": self.path,
+            "name": self.name,
+            "depth": self.depth,
+            "message_count": self.message_count,
+            "tokens": self.tokens.as_dict(),
+            "costs": self.costs.as_dict(),
+        }
+
+
+@dataclass(frozen=True)
+class UsageAreasReport:
+    filters: dict[str, object]
+    areas: tuple[AreaSummaryRow, ...]
+    totals: SessionTotals
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "type": "usage_areas",
+            "filters": dict(self.filters),
+            "areas": [row.as_dict() for row in self.areas],
             "totals": self.totals.as_dict(),
         }

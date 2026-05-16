@@ -11,6 +11,15 @@ from toktrail.api.config import (
     resolve_toktrail_config_path,
 )
 from toktrail.api.analysis import session_cache_analysis
+from toktrail.api.areas import (
+    assign_area_to_session,
+    clear_active_area,
+    create_area,
+    get_active_area,
+    list_areas,
+    set_active_area,
+    unassign_area_from_session,
+)
 from toktrail.api.environment import prepare_environment
 from toktrail.api.events import record_usage_event, record_usage_events
 from toktrail.api.harnesses import (
@@ -28,6 +37,9 @@ from toktrail.api.machines import (
 )
 from toktrail.api.models import (
     ActivitySummaryRow,
+    Area,
+    AreaSessionAssignment,
+    AreaSummaryRow,
     CacheCallRow,
     CacheClusterRow,
     CostTotals,
@@ -68,6 +80,7 @@ from toktrail.api.models import (
     UsageSeriesBucket,
     UsageSeriesInstance,
     UsageSeriesReport,
+    UsageAreasReport,
     UsageSessionRow,
     UsageSessionsReport,
 )
@@ -91,6 +104,7 @@ from toktrail.api.reports import (
     subscription_usage_report,
     usage_report,
     usage_series_report,
+    usage_areas_report,
     usage_sessions_report,
     usage_runs_report,
 )
@@ -121,6 +135,9 @@ from toktrail.api.workflow import finalize_manual_run, prepare_manual_run
 
 __all__ = [
     "ActivitySummaryRow",
+    "Area",
+    "AreaSessionAssignment",
+    "AreaSummaryRow",
     "CacheCallRow",
     "CacheClusterRow",
     "CostTotals",
@@ -161,12 +178,16 @@ __all__ = [
     "UsageSeriesBucket",
     "UsageSeriesInstance",
     "UsageSeriesReport",
+    "UsageAreasReport",
     "UsageSessionRow",
     "UsageSessionsReport",
+    "assign_area_to_session",
     "archive_run",
     "capture_source_snapshot",
+    "clear_active_area",
     "config_exists",
     "config_summary",
+    "create_area",
     "default_provider_prices_path",
     "default_source_path",
     "default_toktrail_config_dir",
@@ -177,11 +198,13 @@ __all__ = [
     "default_toktrail_db_path",
     "diff_source_snapshots",
     "finalize_manual_run",
+    "get_active_area",
     "get_active_run",
     "get_harness_definition",
     "get_run",
     "import_configured_usage",
     "import_usage",
+    "list_areas",
     "list_machines",
     "init_config",
     "init_state",
@@ -214,11 +237,14 @@ __all__ = [
     "start_run",
     "stop_run",
     "set_machine_name",
+    "set_active_area",
     "unarchive_run",
     "clear_machine_name",
     "supported_harnesses",
     "usage_report",
     "usage_series_report",
+    "usage_areas_report",
     "usage_sessions_report",
     "usage_runs_report",
+    "unassign_area_from_session",
 ]

@@ -33,6 +33,8 @@ Report commands refresh configured sources first by default:
 
    toktrail usage today
    toktrail usage runs --archived
+   toktrail usage areas --today
+   toktrail usage today --area work
    toktrail run status
    toktrail subscriptions status
    toktrail prices list --used-only
@@ -58,6 +60,8 @@ Use ``--refresh-details`` to show a compact refresh summary before the report.
 
 ``toktrail sync import`` validates archive paths, manifest checksums, schema
 version, and usage-event fingerprints before merging.
+Area hierarchy rows, source-session assignments, machine-scoped active areas,
+and usage-event ``area_id`` values round-trip through sync archives.
 
 Git sync
 --------
@@ -180,9 +184,35 @@ Session usage by period
    toktrail usage sessions --this-month
    toktrail usage sessions --last-month
    toktrail usage sessions --today --table
+   toktrail usage areas --today
+   toktrail usage summary --area work
+   toktrail usage summary --area work --area-exact
+   toktrail usage summary --unassigned-area
 
 The default sessions output is line-based. Use ``--table`` for the wide tabular
-view.
+view. In table mode, ``usage sessions`` includes an ``area`` column.
+
+Area workflow
+-------------
+
+Areas provide a persistent hierarchy for usage classification.
+
+.. code-block:: bash
+
+   toktrail area create work/odoo
+   toktrail area use work/odoo
+   toktrail area status
+   toktrail area assign work/odoo --harness opencode --source-session-id ses-1
+   toktrail area unassign --harness opencode --source-session-id ses-1
+
+Key behavior:
+
+- ``toktrail area use`` is machine-scoped. It affects new source sessions
+  imported on that machine.
+- Existing imported sessions stay unchanged until explicitly assigned.
+- ``--area <path>`` includes descendants by default.
+- ``--area-exact`` matches only the exact area path.
+- ``--unassigned-area`` filters events with no area assignment.
 
 
 Provider subscription status

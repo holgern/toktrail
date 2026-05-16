@@ -9,12 +9,14 @@ from toktrail.api._conversions import (
     _to_public_report,
     _to_public_series_report,
     _to_public_subscription_report,
+    _to_public_usage_areas_report,
     _to_public_usage_sessions_report,
 )
 from toktrail.api.models import (
     RunReport,
     StatsReport,
     SubscriptionUsageReport,
+    UsageAreasReport,
     UsageSeriesReport,
     UsageSessionsReport,
 )
@@ -96,6 +98,9 @@ def usage_report(
     model_id: str | None = None,
     thinking_level: str | None = None,
     agent: str | None = None,
+    area: str | None = None,
+    area_exact: bool = False,
+    unassigned_area: bool = False,
     since_ms: int | None = None,
     until_ms: int | None = None,
     split_thinking: bool = False,
@@ -129,6 +134,9 @@ def usage_report(
                 model_id=model_id,
                 thinking_level=thinking_level,
                 agent=agent,
+                area=area,
+                area_exact=area_exact,
+                unassigned_area=unassigned_area,
                 since_ms=effective_since_ms,
                 until_ms=effective_until_ms,
                 split_thinking=split_thinking,
@@ -234,7 +242,9 @@ def usage_series_report(
     model_id: str | None = None,
     thinking_level: str | None = None,
     agent: str | None = None,
-    project: str | None = None,
+    area: str | None = None,
+    area_exact: bool = False,
+    unassigned_area: bool = False,
     instances: bool = False,
     breakdown: bool = False,
     split_thinking: bool = False,
@@ -268,7 +278,9 @@ def usage_series_report(
                 since_ms=since_ms,
                 until_ms=until_ms,
                 split_thinking=split_thinking,
-                project=project,
+                area=area,
+                area_exact=area_exact,
+                unassigned_area=unassigned_area,
                 instances=instances,
                 breakdown=breakdown,
                 start_of_week=start_of_week,
@@ -323,6 +335,9 @@ def usage_sessions_report(
     model_id: str | None = None,
     thinking_level: str | None = None,
     agent: str | None = None,
+    area: str | None = None,
+    area_exact: bool = False,
+    unassigned_area: bool = False,
     limit: int | None = 10,
     order: str = "desc",
     breakdown: bool = False,
@@ -372,6 +387,9 @@ def usage_sessions_report(
                 model_id=model_id,
                 thinking_level=thinking_level,
                 agent=agent,
+                area=area,
+                area_exact=area_exact,
+                unassigned_area=unassigned_area,
                 since_ms=effective_since_ms,
                 until_ms=effective_until_ms,
                 split_thinking=split_thinking,
@@ -415,6 +433,9 @@ def usage_runs_report(
     model_id: str | None = None,
     thinking_level: str | None = None,
     agent: str | None = None,
+    area: str | None = None,
+    area_exact: bool = False,
+    unassigned_area: bool = False,
     limit: int | None = 10,
     order: str = "desc",
     split_thinking: bool = False,
@@ -444,6 +465,9 @@ def usage_runs_report(
                 model_id=model_id,
                 thinking_level=thinking_level,
                 agent=agent,
+                area=area,
+                area_exact=area_exact,
+                unassigned_area=unassigned_area,
                 since_ms=since_ms,
                 until_ms=until_ms,
                 split_thinking=split_thinking,
@@ -460,6 +484,97 @@ def usage_runs_report(
     return report
 
 
+def usage_areas_report(
+    db_path: Path | None = None,
+    *,
+    session_id: int | None = None,
+    period: str | None = None,
+    timezone: str | None = None,
+    utc: bool = False,
+    since_ms: int | None = None,
+    until_ms: int | None = None,
+    machine_id: str | None = None,
+    harness: str | None = None,
+    source_session_id: str | None = None,
+    provider_id: str | None = None,
+    model_id: str | None = None,
+    thinking_level: str | None = None,
+    agent: str | None = None,
+    area: str | None = None,
+    area_exact: bool = False,
+    unassigned_area: bool = False,
+    split_thinking: bool = False,
+    config_path: Path | None = None,
+) -> UsageAreasReport:
+    from toktrail.db import migrate, summarize_usage_areas
+
+    if period is not None and (since_ms is not None or until_ms is not None):
+        msg = (
+            "usage_areas_report() accepts either period or since/until filters, "
+            "not both."
+        )
+        raise InvalidAPIUsageError(msg)
+
+    try:
+        resolved_range = resolve_time_range(
+            period=period,
+            timezone_name=timezone,
+            utc=utc,
+        )
+    except ValueError as exc:
+        raise InvalidAPIUsageError(str(exc)) from exc
+    effective_since_ms = resolved_range.since_ms if period is not None else since_ms
+    effective_until_ms = resolved_range.until_ms if period is not None else until_ms
+
+    conn, _ = _open_state_db(db_path)
+    try:
+        migrate(conn)
+        report = summarize_usage_areas(
+            conn,
+            UsageReportFilter(
+                tracking_session_id=session_id,
+                machine_id=machine_id,
+                harness=harness,
+                source_session_id=source_session_id,
+                provider_id=provider_id,
+                model_id=model_id,
+                thinking_level=thinking_level,
+                agent=agent,
+                area=area,
+                area_exact=area_exact,
+                unassigned_area=unassigned_area,
+                since_ms=effective_since_ms,
+                until_ms=effective_until_ms,
+                split_thinking=split_thinking,
+            ),
+            costing_config=_load_costing_config(config_path),
+        )
+    except ValueError as exc:
+        raise StateDatabaseError(str(exc)) from exc
+    finally:
+        conn.close()
+
+    public_report = _to_public_usage_areas_report(report)
+    filters = dict(public_report.filters)
+    if effective_since_ms is not None:
+        existing_since = filters.get("since_ms")
+        if isinstance(existing_since, int):
+            filters["since_ms"] = max(existing_since, effective_since_ms)
+        else:
+            filters["since_ms"] = effective_since_ms
+    if effective_until_ms is not None:
+        existing_until = filters.get("until_ms")
+        if isinstance(existing_until, int):
+            filters["until_ms"] = min(existing_until, effective_until_ms)
+        else:
+            filters["until_ms"] = effective_until_ms
+    if period is not None:
+        filters["period"] = resolved_range.period
+    if period is not None or timezone is not None or utc:
+        filters["timezone"] = resolved_range.timezone
+    return replace(public_report, filters=filters)
+
+
 __all__ = [
     "session_report",
     "usage_report",
@@ -468,4 +583,5 @@ __all__ = [
     "usage_sessions_report",
     "subscription_usage_report",
     "usage_runs_report",
+    "usage_areas_report",
 ]

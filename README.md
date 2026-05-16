@@ -211,6 +211,14 @@ toktrail usage sessions --last
 toktrail usage sessions --order asc --limit 10 --table
 toktrail usage runs --last --limit 5
 toktrail usage runs --archived
+toktrail area create work/odoo
+toktrail area use work/odoo
+toktrail area status
+toktrail area assign work/odoo --harness opencode --source-session-id ses-1
+toktrail usage today --area work
+toktrail usage today --area work --area-exact
+toktrail usage today --unassigned-area
+toktrail usage areas --today
 toktrail subscriptions status
 toktrail subscriptions status --timezone Europe/Berlin
 toktrail subscriptions status --utc
@@ -325,8 +333,21 @@ Session terminology:
 - Use `toktrail usage sessions --table` for the legacy wide table.
 - `toktrail usage runs` summarizes usage grouped by tracking **run**.
 
+Area classification:
+
+- `toktrail area use <path>` sets the active area for new source sessions on the
+  current machine only.
+- `toktrail area assign <path> --harness <h> --source-session-id <id>` assigns an
+  area to an existing source session and backfills imported events.
+- `toktrail usage ... --area <path>` includes descendants by default.
+- Add `--area-exact` to match only the exact area path.
+- Use `--unassigned-area` to report events without any area.
+- `toktrail usage areas` shows roll-up totals by area hierarchy.
+
 `toktrail sync import` validates archive paths, manifest checksums, schema
 version, and usage-event fingerprints before merging.
+Sync archives preserve area hierarchy rows, source-session area assignments,
+machine-scoped active areas, and event-level `area_id` values.
 
 ## Git sync
 
@@ -655,8 +676,9 @@ Amp, or Copilot JSON in CLI output.
 - collapsed thinking-level metadata by default, with `--split-thinking` to
   expand model rows when needed
 - optional filtered views by harness, source session, provider, model, agent,
-  created-at time range, price state, minimum message/token thresholds, sort,
-  and grouped-row limits
+  area path (`--area`, `--area-exact`, `--unassigned-area`), created-at time
+  range, price state, minimum message/token thresholds, sort, and grouped-row
+  limits
 
 `toktrail usage` applies the same token and cost reporting to the canonical
 ledger without requiring a tracking session. Named periods use half-open

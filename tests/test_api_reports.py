@@ -20,6 +20,7 @@ from toktrail.api.imports import import_usage
 from toktrail.api.reports import (
     session_report,
     subscription_usage_report,
+    usage_areas_report,
     usage_report,
     usage_runs_report,
     usage_series_report,
@@ -27,9 +28,12 @@ from toktrail.api.reports import (
 )
 from toktrail.api.sessions import init_state, start_run
 from toktrail.db import (
+    assign_area_to_source_session,
     connect,
     create_tracking_session,
     end_tracking_session,
+    ensure_area,
+    get_local_machine_id,
     insert_usage_events,
     migrate,
 )
@@ -49,10 +53,11 @@ def make_api_usage_event(
     *,
     created_ms: int,
     tokens: TokenBreakdown,
+    source_session_id: str = "ses-1",
 ) -> UsageEvent:
     return UsageEvent(
         harness="opencode",
-        source_session_id="ses-1",
+        source_session_id=source_session_id,
         source_row_id=f"row-{dedup_suffix}",
         source_message_id=f"msg-{dedup_suffix}",
         source_dedup_key=f"dedup-{dedup_suffix}",
@@ -327,6 +332,37 @@ def test_usage_report_exposes_machine_summary(tmp_path: Path) -> None:
     assert report.by_machine[0].message_count == 1
 
 
+def test_usage_report_accepts_area_filter(tmp_path: Path) -> None:
+    state_db = tmp_path / "toktrail.db"
+    conn = connect(state_db)
+    try:
+        migrate(conn)
+        area = ensure_area(conn, "privat/toktrail")
+        local_machine_id = get_local_machine_id(conn)
+        event = make_api_usage_event(
+            "area-filter",
+            created_ms=1_000,
+            tokens=TokenBreakdown(input=10, output=4),
+            source_session_id="area-session",
+        )
+        insert_usage_events(conn, None, [event])
+        assign_area_to_source_session(
+            conn,
+            area_id=area.id,
+            origin_machine_id=local_machine_id,
+            harness="opencode",
+            source_session_id="area-session",
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    report = usage_report(state_db, area="privat")
+
+    assert report.totals.tokens.total == event.tokens.total
+    assert report.filters["area"] == "privat"
+
+
 def test_subscription_usage_report_returns_public_dataclasses(tmp_path: Path) -> None:
     state_db = tmp_path / "toktrail.db"
     source_db = tmp_path / "opencode.db"
@@ -490,6 +526,37 @@ def test_usage_series_report_session_id_bounds_to_run_lifetime(tmp_path: Path) -
     assert report.filters["until_ms"] == 1_500
 
 
+def test_usage_series_report_accepts_area_filter(tmp_path: Path) -> None:
+    state_db = tmp_path / "toktrail.db"
+    conn = connect(state_db)
+    try:
+        migrate(conn)
+        area = ensure_area(conn, "privat/toktrail")
+        local_machine_id = get_local_machine_id(conn)
+        event = make_api_usage_event(
+            "series-area",
+            created_ms=1_000,
+            tokens=TokenBreakdown(input=12, output=3),
+            source_session_id="series-session",
+        )
+        insert_usage_events(conn, None, [event])
+        assign_area_to_source_session(
+            conn,
+            area_id=area.id,
+            origin_machine_id=local_machine_id,
+            harness="opencode",
+            source_session_id="series-session",
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    report = usage_series_report(state_db, granularity="daily", area="privat")
+
+    assert report.totals.tokens.total == event.tokens.total
+    assert report.filters["area"] == "privat"
+
+
 def test_usage_sessions_report_json_shape(tmp_path: Path) -> None:
     state_db = tmp_path / "toktrail.db"
     source_db = tmp_path / "opencode.db"
@@ -519,6 +586,9 @@ def test_usage_sessions_report_json_shape(tmp_path: Path) -> None:
     assert "machine_label" in session
     assert "harness" in session
     assert "source_session_id" in session
+    assert "area_id" in session
+    assert "area_path" in session
+    assert "area_name" in session
     assert "tokens" in session
     assert "costs" in session
     # costs serialized as strings
@@ -623,6 +693,38 @@ def test_usage_sessions_report_supports_period(
     assert report.filters["until_ms"] is not None
 
 
+def test_usage_sessions_report_accepts_area_filter(tmp_path: Path) -> None:
+    state_db = tmp_path / "toktrail.db"
+    conn = connect(state_db)
+    try:
+        migrate(conn)
+        area = ensure_area(conn, "privat/toktrail")
+        local_machine_id = get_local_machine_id(conn)
+        event = make_api_usage_event(
+            "sessions-area",
+            created_ms=1_000,
+            tokens=TokenBreakdown(input=8, output=2),
+            source_session_id="sessions-area",
+        )
+        insert_usage_events(conn, None, [event])
+        assign_area_to_source_session(
+            conn,
+            area_id=area.id,
+            origin_machine_id=local_machine_id,
+            harness="opencode",
+            source_session_id="sessions-area",
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    report = usage_sessions_report(state_db, area="privat", limit=None)
+
+    assert len(report.sessions) == 1
+    assert report.sessions[0].area_path == "privat/toktrail"
+    assert report.filters["area"] == "privat"
+
+
 def test_usage_sessions_report_rejects_period_with_since_until(tmp_path: Path) -> None:
     state_db = tmp_path / "toktrail.db"
     init_state(state_db)
@@ -685,3 +787,42 @@ def test_usage_runs_report_filters_machine_id(tmp_path: Path) -> None:
     assert len(report.runs) == 1
     assert report.runs[0].name == "run-a"
     assert report.runs[0].origin_machine_id == machine_a
+
+
+def test_usage_areas_report_json_shape(tmp_path: Path) -> None:
+    state_db = tmp_path / "toktrail.db"
+    conn = connect(state_db)
+    try:
+        migrate(conn)
+        area = ensure_area(conn, "privat/toktrail")
+        local_machine_id = get_local_machine_id(conn)
+        insert_usage_events(
+            conn,
+            None,
+            [
+                make_api_usage_event(
+                    "usage-areas",
+                    created_ms=1_000,
+                    tokens=TokenBreakdown(input=14, output=5),
+                    source_session_id="usage-areas",
+                )
+            ],
+        )
+        assign_area_to_source_session(
+            conn,
+            area_id=area.id,
+            origin_machine_id=local_machine_id,
+            harness="opencode",
+            source_session_id="usage-areas",
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    report = usage_areas_report(state_db)
+    payload = report.as_dict()
+
+    assert payload["type"] == "usage_areas"
+    areas = cast(list[dict[str, object]], payload["areas"])
+    assert any(area_row["path"] == "privat" for area_row in areas)
+    assert any(area_row["path"] == "privat/toktrail" for area_row in areas)

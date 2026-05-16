@@ -159,6 +159,32 @@ Each example prints:
 - agent breakdown where available;
 - unconfigured pricing rows.
 
+## Area classification via stable API
+
+```python
+from pathlib import Path
+
+from toktrail.api import (
+    assign_area_to_session,
+    set_active_area,
+    usage_areas_report,
+    usage_report,
+)
+
+db_path = Path(".toktrail/toktrail.db")
+
+set_active_area("work/odoo", db_path=db_path)
+assign_area_to_session(
+    "work/odoo",
+    harness="opencode",
+    source_session_id="ses-1",
+    db_path=db_path,
+)
+
+rollup = usage_report(db_path, period="today", area="work")
+areas = usage_areas_report(db_path, period="today")
+```
+
 For subscription reporting, rows are keyed by subscription `id` and expose
 `usage_provider_ids` plus `quota_cost_basis`/`billing_basis` fields when
 `subscription_usage_report()` is used.

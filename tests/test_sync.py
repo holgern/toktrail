@@ -11,12 +11,18 @@ import pytest
 
 from toktrail.db import (
     archive_tracking_session,
+    assign_area_to_source_session,
     connect,
     create_tracking_session,
     end_tracking_session,
+    ensure_area,
+    get_active_area,
+    get_local_machine_id,
     get_tracking_session,
     insert_usage_events,
+    list_areas,
     migrate,
+    set_active_area,
     summarize_tracking_session,
     summarize_usage,
 )
@@ -414,6 +420,237 @@ def test_sync_import_rejects_unsafe_archive_paths(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="Unsafe archive member path"):
         import_state_archive(db_path, archive_path)
+
+
+def test_sync_preserves_area_tree_and_session_assignments(tmp_path: Path) -> None:
+    db_a = tmp_path / "state-a.db"
+    db_b = tmp_path / "state-b.db"
+    archive = tmp_path / "a.tar.gz"
+
+    conn_a = connect(db_a)
+    try:
+        migrate(conn_a)
+        insert_usage_events(
+            conn_a,
+            None,
+            [
+                make_usage_event(
+                    dedup_suffix="area-roundtrip",
+                    source_session_id="ses-area-roundtrip",
+                )
+            ],
+        )
+        area = ensure_area(conn_a, "work/odoo")
+        machine_id = get_local_machine_id(conn_a)
+        assign_area_to_source_session(
+            conn_a,
+            area_id=area.id,
+            origin_machine_id=machine_id,
+            harness="opencode",
+            source_session_id="ses-area-roundtrip",
+        )
+        set_active_area(conn_a, area.id, machine_id=machine_id)
+        conn_a.commit()
+    finally:
+        conn_a.close()
+
+    export_state_archive(db_a, archive)
+    import_state_archive(db_b, archive)
+
+    conn_b = connect(db_b)
+    try:
+        migrate(conn_b)
+        paths = {area.path for area in list_areas(conn_b)}
+        assert "work" in paths
+        assert "work/odoo" in paths
+        assignment_row = conn_b.execute(
+            """
+            SELECT a.path
+            FROM area_session_assignments asa
+            JOIN areas a ON a.id = asa.area_id
+            WHERE asa.harness = ?
+              AND asa.source_session_id = ?
+            """,
+            ("opencode", "ses-area-roundtrip"),
+        ).fetchone()
+        usage_row = conn_b.execute(
+            """
+            SELECT a.path
+            FROM usage_events ue
+            JOIN areas a ON a.id = ue.area_id
+            WHERE ue.global_dedup_key = ?
+            """,
+            ("opencode:msg-area-roundtrip",),
+        ).fetchone()
+        imported_machine = conn_b.execute(
+            """
+            SELECT machine_id
+            FROM machines
+            WHERE is_local = 0
+            ORDER BY machine_id
+            LIMIT 1
+            """
+        ).fetchone()
+        assert imported_machine is not None
+        active = get_active_area(conn_b, machine_id=str(imported_machine["machine_id"]))
+    finally:
+        conn_b.close()
+
+    assert assignment_row is not None
+    assert assignment_row["path"] == "work/odoo"
+    assert usage_row is not None
+    assert usage_row["path"] == "work/odoo"
+    assert active is not None
+    assert active.path == "work/odoo"
+
+
+def test_sync_usage_events_keep_area_after_import(tmp_path: Path) -> None:
+    db_a = tmp_path / "state-a.db"
+    db_b = tmp_path / "state-b.db"
+    archive = tmp_path / "a.tar.gz"
+
+    conn_a = connect(db_a)
+    try:
+        migrate(conn_a)
+        insert_usage_events(
+            conn_a,
+            None,
+            [
+                make_usage_event(
+                    dedup_suffix="area-map",
+                    source_session_id="ses-area-map",
+                )
+            ],
+        )
+        area_a = ensure_area(conn_a, "work/odoo")
+        assign_area_to_source_session(
+            conn_a,
+            area_id=area_a.id,
+            origin_machine_id=get_local_machine_id(conn_a),
+            harness="opencode",
+            source_session_id="ses-area-map",
+        )
+        conn_a.commit()
+    finally:
+        conn_a.close()
+
+    conn_b = connect(db_b)
+    try:
+        migrate(conn_b)
+        local_area = ensure_area(conn_b, "work/odoo")
+        local_area_id = local_area.id
+        conn_b.commit()
+    finally:
+        conn_b.close()
+
+    export_state_archive(db_a, archive)
+    import_state_archive(db_b, archive)
+
+    conn_b = connect(db_b)
+    try:
+        migrate(conn_b)
+        row = conn_b.execute(
+            """
+            SELECT area_id
+            FROM usage_events
+            WHERE global_dedup_key = ?
+            """,
+            ("opencode:msg-area-map",),
+        ).fetchone()
+    finally:
+        conn_b.close()
+
+    assert row is not None
+    assert row["area_id"] == local_area_id
+
+
+def test_sync_area_assignment_conflict_uses_updated_at(tmp_path: Path) -> None:
+    db_a = tmp_path / "state-a.db"
+    db_b = tmp_path / "state-b.db"
+    archive = tmp_path / "a.tar.gz"
+    shared_machine_id = "shared-machine-1234"
+
+    conn_a = connect(db_a)
+    try:
+        migrate(conn_a)
+        insert_usage_events(
+            conn_a,
+            None,
+            [make_usage_event(dedup_suffix="assign-a", source_session_id="ses-shared")],
+            origin_machine_id=shared_machine_id,
+        )
+        area_a = ensure_area(conn_a, "work/odoo")
+        assign_a = assign_area_to_source_session(
+            conn_a,
+            area_id=area_a.id,
+            origin_machine_id=shared_machine_id,
+            harness="opencode",
+            source_session_id="ses-shared",
+        )
+        conn_a.execute(
+            "UPDATE area_session_assignments SET updated_at_ms = ? WHERE id = ?",
+            (1_000, assign_a.id),
+        )
+        conn_a.commit()
+    finally:
+        conn_a.close()
+
+    conn_b = connect(db_b)
+    try:
+        migrate(conn_b)
+        insert_usage_events(
+            conn_b,
+            None,
+            [make_usage_event(dedup_suffix="assign-b", source_session_id="ses-shared")],
+            origin_machine_id=shared_machine_id,
+        )
+        area_b = ensure_area(conn_b, "privat/toktrail")
+        assign_b = assign_area_to_source_session(
+            conn_b,
+            area_id=area_b.id,
+            origin_machine_id=shared_machine_id,
+            harness="opencode",
+            source_session_id="ses-shared",
+        )
+        conn_b.execute(
+            "UPDATE area_session_assignments SET updated_at_ms = ? WHERE id = ?",
+            (2_000, assign_b.id),
+        )
+        conn_b.commit()
+    finally:
+        conn_b.close()
+
+    export_state_archive(db_a, archive)
+    import_state_archive(db_b, archive)
+
+    conn_b = connect(db_b)
+    try:
+        migrate(conn_b)
+        assignment = conn_b.execute(
+            """
+            SELECT a.path
+            FROM area_session_assignments asa
+            JOIN areas a ON a.id = asa.area_id
+            WHERE asa.harness = ?
+              AND asa.source_session_id = ?
+            """,
+            ("opencode", "ses-shared"),
+        ).fetchone()
+        event_paths = conn_b.execute(
+            """
+            SELECT DISTINCT a.path
+            FROM usage_events ue
+            LEFT JOIN areas a ON a.id = ue.area_id
+            WHERE ue.source_session_id = ?
+            """,
+            ("ses-shared",),
+        ).fetchall()
+    finally:
+        conn_b.close()
+
+    assert assignment is not None
+    assert assignment["path"] == "privat/toktrail"
+    assert {row["path"] for row in event_paths} == {"privat/toktrail"}
 
 
 def _sha256_bytes(value: bytes) -> str:

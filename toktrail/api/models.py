@@ -551,6 +551,60 @@ class Machine:
 
 
 @dataclass(frozen=True)
+class Area:
+    id: int
+    sync_id: str
+    parent_id: int | None
+    slug: str
+    name: str
+    path: str
+    archived_at_ms: int | None
+    created_at_ms: int
+    updated_at_ms: int
+    imported_at_ms: int | None = None
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "id": self.id,
+            "sync_id": self.sync_id,
+            "parent_id": self.parent_id,
+            "slug": self.slug,
+            "name": self.name,
+            "path": self.path,
+            "archived_at_ms": self.archived_at_ms,
+            "created_at_ms": self.created_at_ms,
+            "updated_at_ms": self.updated_at_ms,
+            "imported_at_ms": self.imported_at_ms,
+        }
+
+
+@dataclass(frozen=True)
+class AreaSessionAssignment:
+    id: int
+    sync_id: str
+    area_id: int
+    origin_machine_id: str
+    harness: str
+    source_session_id: str
+    assigned_at_ms: int
+    updated_at_ms: int
+    imported_at_ms: int | None = None
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "id": self.id,
+            "sync_id": self.sync_id,
+            "area_id": self.area_id,
+            "origin_machine_id": self.origin_machine_id,
+            "harness": self.harness,
+            "source_session_id": self.source_session_id,
+            "assigned_at_ms": self.assigned_at_ms,
+            "updated_at_ms": self.updated_at_ms,
+            "imported_at_ms": self.imported_at_ms,
+        }
+
+
+@dataclass(frozen=True)
 class MachineSummaryRow:
     machine_id: str | None
     machine_name: str | None
@@ -1309,6 +1363,9 @@ class UsageSessionRow:
     machine_label: str
     harness: str
     source_session_id: str
+    area_id: int | None
+    area_path: str | None
+    area_name: str | None
     first_ms: int
     last_ms: int
     message_count: int
@@ -1326,6 +1383,9 @@ class UsageSessionRow:
             "machine_label": self.machine_label,
             "harness": self.harness,
             "source_session_id": self.source_session_id,
+            "area_id": self.area_id,
+            "area_path": self.area_path,
+            "area_name": self.area_name,
             "first_ms": self.first_ms,
             "last_ms": self.last_ms,
             "message_count": self.message_count,
@@ -1381,7 +1441,52 @@ class UsageRunsReport:
         }
 
 
+@dataclass(frozen=True)
+class AreaSummaryRow:
+    area_id: int | None
+    path: str | None
+    name: str | None
+    depth: int
+    message_count: int
+    tokens: TokenBreakdown
+    costs: CostTotals
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "area_id": self.area_id,
+            "path": self.path,
+            "name": self.name,
+            "depth": self.depth,
+            "message_count": self.message_count,
+            "tokens": self.tokens.as_dict(),
+            "costs": self.costs.as_dict(),
+        }
+
+
+@dataclass(frozen=True)
+class UsageAreasReport:
+    filters: dict[str, object]
+    areas: tuple[AreaSummaryRow, ...]
+    totals: SessionTotals = field(
+        default_factory=lambda: SessionTotals(
+            tokens=TokenBreakdown(),
+            costs=CostTotals(),
+        )
+    )
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "type": "usage_areas",
+            "filters": dict(self.filters),
+            "areas": [row.as_dict() for row in self.areas],
+            "totals": self.totals.as_dict(),
+        }
+
+
 __all__ = [
+    "Area",
+    "AreaSessionAssignment",
+    "AreaSummaryRow",
     "ActivitySummaryRow",
     "CacheCallRow",
     "CacheClusterRow",
@@ -1423,6 +1528,7 @@ __all__ = [
     "UsageSeriesBucket",
     "UsageSeriesInstance",
     "UsageSeriesReport",
+    "UsageAreasReport",
     "UsageSessionRow",
     "UsageSessionsReport",
     "UsageRunsReport",

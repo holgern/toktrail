@@ -63,23 +63,31 @@ from toktrail.db import (
     InsertUsageResult,
     apply_local_machine_config,
     archive_tracking_session,
+    assign_area_to_source_session,
     clear_skipped_sources,
     connect,
     create_tracking_session,
     end_tracking_session,
+    ensure_area,
+    get_active_area,
     get_active_tracking_session,
+    get_area_by_path,
     get_local_machine_id,
     get_machine,
     get_tracking_session,
     insert_usage_events,
+    list_areas,
     list_machines,
     list_skipped_sources,
     migrate,
     resolve_machine_selector,
+    set_active_area,
     set_local_machine_name,
     summarize_subscription_usage,
     summarize_usage,
+    summarize_usage_areas,
     unarchive_tracking_session,
+    unassign_area_from_source_session,
 )
 from toktrail.errors import InvalidAPIUsageError, ToktrailError
 from toktrail.formatting import format_epoch_ms_compact
@@ -142,6 +150,7 @@ subscriptions_app = typer.Typer(help="Inspect provider subscription limits.")
 analyze_app = typer.Typer(help="Analyze per-call cache and cost behavior.")
 stats_app = typer.Typer(help="Report aggregate usage and session statistics.")
 machine_app = typer.Typer(help="Inspect and configure local machine identity.")
+area_app = typer.Typer(help="Create and manage hierarchical usage areas.")
 
 app.add_typer(run_app, name="run")
 app.add_typer(sources_app, name="sources")
@@ -154,6 +163,7 @@ app.add_typer(subscriptions_app, name="subscriptions")
 app.add_typer(analyze_app, name="analyze")
 app.add_typer(stats_app, name="stats")
 app.add_typer(machine_app, name="machine")
+app.add_typer(area_app, name="area")
 app.add_typer(sync_app, name="sync")
 statusline_app.add_typer(statusline_config_app, name="config")
 
@@ -270,6 +280,9 @@ ProviderOption = Annotated[str | None, typer.Option("--provider")]
 ModelOption = Annotated[str | None, typer.Option("--model")]
 ThinkingOption = Annotated[str | None, typer.Option("--thinking")]
 AgentOption = Annotated[str | None, typer.Option("--agent")]
+AreaOption = Annotated[str | None, typer.Option("--area")]
+AreaExactOption = Annotated[bool, typer.Option("--area-exact")]
+UnassignedAreaOption = Annotated[bool, typer.Option("--unassigned-area")]
 SinceMsOption = Annotated[int | None, typer.Option("--since-ms")]
 UntilMsOption = Annotated[int | None, typer.Option("--until-ms")]
 SourceSessionArgument = Annotated[str | None, typer.Argument()]
@@ -619,6 +632,272 @@ def machine_clear_name(ctx: typer.Context) -> None:
     finally:
         conn.close()
     typer.echo("Cleared machine name.")
+
+
+@area_app.command("create")
+def area_create(
+    ctx: typer.Context,
+    path: Annotated[str, typer.Argument(help="Area path.")],
+    name: NameOption = None,
+    json_output: JsonOption = False,
+) -> None:
+    conn = _open_toktrail_connection(ctx)
+    try:
+        area = ensure_area(conn, path, name=name)
+        conn.commit()
+    except ValueError as exc:
+        _exit_with_error(str(exc))
+    finally:
+        conn.close()
+    if json_output:
+        typer.echo(
+            json.dumps(
+                {
+                    "area_id": area.id,
+                    "sync_id": area.sync_id,
+                    "path": area.path,
+                    "name": area.name,
+                    "parent_id": area.parent_id,
+                    "archived_at_ms": area.archived_at_ms,
+                },
+                indent=2,
+            )
+        )
+        return
+    typer.echo(f"Created area: {area.path}")
+
+
+@area_app.command("list")
+def area_list(
+    ctx: typer.Context,
+    json_output: JsonOption = False,
+    rich_output: RichOption = False,
+) -> None:
+    conn = _open_toktrail_connection(ctx)
+    try:
+        areas = list_areas(conn)
+    finally:
+        conn.close()
+    if json_output:
+        typer.echo(
+            json.dumps(
+                [
+                    {
+                        "area_id": area.id,
+                        "sync_id": area.sync_id,
+                        "path": area.path,
+                        "name": area.name,
+                        "parent_id": area.parent_id,
+                        "archived_at_ms": area.archived_at_ms,
+                    }
+                    for area in areas
+                ],
+                indent=2,
+            )
+        )
+        return
+    if not areas:
+        typer.echo("No areas defined.")
+        return
+    _print_table(
+        [
+            {
+                "path": area.path,
+                "name": area.name,
+                "id": _format_int(area.id),
+            }
+            for area in areas
+        ],
+        ["path", "name", "id"],
+        {"path": "path", "name": "name", "id": "id"},
+        rich_output=rich_output,
+        numeric_columns={"id"},
+    )
+
+
+@area_app.command("use")
+def area_use(
+    ctx: typer.Context,
+    path: Annotated[str, typer.Argument(help="Area path.")],
+    create: Annotated[bool, typer.Option("--create/--no-create")] = True,
+    json_output: JsonOption = False,
+) -> None:
+    conn = _open_toktrail_connection(ctx)
+    try:
+        area = get_area_by_path(conn, path)
+        if area is None:
+            if not create:
+                _exit_with_error(f"Area not found: {path}")
+            area = ensure_area(conn, path)
+        set_active_area(conn, area.id)
+        conn.commit()
+    except ValueError as exc:
+        _exit_with_error(str(exc))
+    finally:
+        conn.close()
+    if json_output:
+        typer.echo(
+            json.dumps(
+                {
+                    "active_area": {
+                        "area_id": area.id,
+                        "sync_id": area.sync_id,
+                        "path": area.path,
+                        "name": area.name,
+                    }
+                },
+                indent=2,
+            )
+        )
+        return
+    typer.echo(f"Active area: {area.path}")
+
+
+@area_app.command("clear")
+def area_clear(ctx: typer.Context) -> None:
+    conn = _open_toktrail_connection(ctx)
+    try:
+        set_active_area(conn, None)
+        conn.commit()
+    finally:
+        conn.close()
+    typer.echo("Cleared active area.")
+
+
+@area_app.command("status")
+def area_status(ctx: typer.Context, json_output: JsonOption = False) -> None:
+    conn = _open_toktrail_connection(ctx)
+    try:
+        machine_id = get_local_machine_id(conn)
+        machine = get_machine(conn, machine_id)
+        active = get_active_area(conn, machine_id=machine_id)
+    finally:
+        conn.close()
+    machine_label = machine.label if machine is not None else machine_id[:8]
+    if json_output:
+        payload: dict[str, object] = {
+            "machine_id": machine_id,
+            "machine_label": machine_label,
+            "active_area": None,
+        }
+        if active is not None:
+            payload["active_area"] = {
+                "area_id": active.id,
+                "sync_id": active.sync_id,
+                "path": active.path,
+                "name": active.name,
+            }
+        typer.echo(json.dumps(payload, indent=2))
+        return
+    if active is None:
+        typer.echo(f"Active area ({machine_label}): none")
+        return
+    typer.echo(f"Active area ({machine_label}): {active.path}")
+
+
+@area_app.command("assign")
+def area_assign(
+    ctx: typer.Context,
+    path: Annotated[str, typer.Argument(help="Area path.")],
+    harness: HarnessOption = None,
+    source_session_id: Annotated[
+        str | None,
+        typer.Option("--source-session-id", "--source-session"),
+    ] = None,
+    machine: MachineOption = None,
+    last: LastOption = False,
+) -> None:
+    conn = _open_toktrail_connection(ctx)
+    try:
+        area = ensure_area(conn, path)
+        if last:
+            if source_session_id is not None:
+                _exit_with_error("Use either --last or --source-session-id, not both.")
+            from toktrail.db import summarize_usage_sessions
+            from toktrail.reporting import UsageSessionsFilter
+
+            costing_config = _load_costing_config_or_exit(ctx)
+            latest = summarize_usage_sessions(
+                conn,
+                UsageSessionsFilter(
+                    machine_id=_resolve_machine_id_or_exit(conn, machine),
+                    harness=harness,
+                    limit=1,
+                    order="desc",
+                ),
+                costing_config=costing_config,
+            ).sessions
+            if not latest:
+                _exit_with_error("No source session matched --last.")
+            target = latest[0]
+            selected_machine_id = target.origin_machine_id
+            selected_harness = target.harness
+            selected_source_session = target.source_session_id
+        else:
+            if harness is None or source_session_id is None:
+                _exit_with_error(
+                    "Provide --harness and --source-session-id, or use --last."
+                )
+            selected_machine_id = _resolve_assignment_machine_id_or_exit(
+                conn,
+                harness=harness,
+                source_session_id=source_session_id,
+                machine=machine,
+            )
+            selected_harness = harness
+            selected_source_session = source_session_id
+        if selected_machine_id is None:
+            _exit_with_error("Source session has no origin machine id.")
+        assign_area_to_source_session(
+            conn,
+            area_id=area.id,
+            origin_machine_id=selected_machine_id,
+            harness=selected_harness,
+            source_session_id=selected_source_session,
+        )
+        conn.commit()
+    except ValueError as exc:
+        _exit_with_error(str(exc))
+    finally:
+        conn.close()
+    typer.echo(
+        f"Assigned {area.path} to "
+        f"{selected_harness}/{selected_source_session} ({selected_machine_id[:8]})."
+    )
+
+
+@area_app.command("unassign")
+def area_unassign(
+    ctx: typer.Context,
+    harness: Annotated[str, typer.Option("--harness")],
+    source_session_id: Annotated[
+        str,
+        typer.Option("--source-session-id", "--source-session"),
+    ],
+    machine: MachineOption = None,
+) -> None:
+    conn = _open_toktrail_connection(ctx)
+    try:
+        machine_id = _resolve_assignment_machine_id_or_exit(
+            conn,
+            harness=harness,
+            source_session_id=source_session_id,
+            machine=machine,
+        )
+        unassign_area_from_source_session(
+            conn,
+            origin_machine_id=machine_id,
+            harness=harness,
+            source_session_id=source_session_id,
+        )
+        conn.commit()
+    except ValueError as exc:
+        _exit_with_error(str(exc))
+    finally:
+        conn.close()
+    typer.echo(
+        f"Unassigned area from {harness}/{source_session_id} ({machine_id[:8]})."
+    )
 
 
 @run_app.command()
@@ -1429,6 +1708,7 @@ def stats(
 @usage_app.command("sessions")
 @usage_app.command("runs")
 @usage_app.command("machines")
+@usage_app.command("areas")
 def usage(  # noqa: C901
     ctx: typer.Context,
     json_output: JsonOption = False,
@@ -1439,6 +1719,9 @@ def usage(  # noqa: C901
     model_id: ModelOption = None,
     thinking_level: ThinkingOption = None,
     agent: AgentOption = None,
+    area: AreaOption = None,
+    area_exact: AreaExactOption = False,
+    unassigned_area: UnassignedAreaOption = False,
     since: TimeBoundaryOption = None,
     until: UntilBoundaryOption = None,
     session_period: UsagePeriodOption = None,
@@ -1475,6 +1758,8 @@ def usage(  # noqa: C901
 ) -> None:
     if timezone_name is not None and utc:
         _exit_with_error("Use either --timezone or --utc, not both.")
+    if area is not None and unassigned_area:
+        _exit_with_error("Use either --area or --unassigned-area, not both.")
     info_name = ctx.info_name
     if info_name is None:
         _exit_with_error("Missing usage subcommand.")
@@ -1510,6 +1795,9 @@ def usage(  # noqa: C901
             model_id=model_id,
             thinking_level=thinking_level,
             agent=agent,
+            area=area,
+            area_exact=area_exact,
+            unassigned_area=unassigned_area,
             since=since,
             until=until,
             timezone_name=timezone_name,
@@ -1518,7 +1806,6 @@ def usage(  # noqa: C901
             breakdown=breakdown,
             compact=compact,
             instances=instances,
-            project=None,
             order=order,
             locale=locale,
             start_of_week=start_of_week,
@@ -1557,6 +1844,9 @@ def usage(  # noqa: C901
             model_id=model_id,
             thinking_level=thinking_level,
             agent=agent,
+            area=area,
+            area_exact=area_exact,
+            unassigned_area=unassigned_area,
             since=since,
             until=until,
             timezone_name=timezone_name,
@@ -1606,6 +1896,9 @@ def usage(  # noqa: C901
             model_id=model_id,
             thinking_level=thinking_level,
             agent=agent,
+            area=area,
+            area_exact=area_exact,
+            unassigned_area=unassigned_area,
             since=since,
             until=until,
             timezone_name=timezone_name,
@@ -1616,6 +1909,55 @@ def usage(  # noqa: C901
         if json_output:
             if payload is None:
                 msg = "Usage machines payload unexpectedly missing."
+                raise TypeError(msg)
+            typer.echo(
+                json.dumps(
+                    _wrap_refresh_json_payload(
+                        payload,
+                        refresh_results=refresh_results,
+                        include_refresh=refresh_details,
+                    ),
+                    indent=2,
+                )
+            )
+        return
+
+    if normalized_view in {"areas", "area"}:
+        if instances:
+            _exit_with_error("--instances is not supported for areas view.")
+        area_period = _resolve_usage_session_period_or_exit(
+            period=session_period,
+            today=session_today,
+            yesterday=session_yesterday,
+            this_week=session_this_week,
+            last_week=session_last_week,
+            this_month=session_this_month,
+            last_month=session_last_month,
+        )
+        payload = _usage_areas(
+            ctx=ctx,
+            json_output=json_output,
+            period=area_period,
+            harness=harness,
+            source_session_id=source_session_id,
+            machine=machine,
+            provider_id=provider_id,
+            model_id=model_id,
+            thinking_level=thinking_level,
+            agent=agent,
+            area=area,
+            area_exact=area_exact,
+            unassigned_area=unassigned_area,
+            since=since,
+            until=until,
+            timezone_name=timezone_name,
+            utc=utc,
+            split_thinking=split_thinking,
+            rich_output=rich_output,
+        )
+        if json_output:
+            if payload is None:
+                msg = "Usage areas payload unexpectedly missing."
                 raise TypeError(msg)
             typer.echo(
                 json.dumps(
@@ -1651,6 +1993,9 @@ def usage(  # noqa: C901
             model_id=model_id,
             thinking_level=thinking_level,
             agent=agent,
+            area=area,
+            area_exact=area_exact,
+            unassigned_area=unassigned_area,
             since=since,
             until=until,
             period=session_period_value,
@@ -1694,6 +2039,9 @@ def usage(  # noqa: C901
             model_id=model_id,
             thinking_level=thinking_level,
             agent=agent,
+            area=area,
+            area_exact=area_exact,
+            unassigned_area=unassigned_area,
             since=since,
             until=until,
             timezone_name=timezone_name,
@@ -1723,7 +2071,8 @@ def usage(  # noqa: C901
         return
 
     _exit_with_error(
-        "Unsupported usage view. Use daily, weekly, monthly, sessions, runs, machines, "
+        "Unsupported usage view. Use daily, weekly, monthly, sessions, runs, "
+        "machines, areas, "
         "summary, today, yesterday, this-week, last-week, this-month, or "
         "last-month."
     )
@@ -1792,6 +2141,9 @@ def _usage_series(
     model_id: str | None,
     thinking_level: str | None,
     agent: str | None,
+    area: str | None,
+    area_exact: bool,
+    unassigned_area: bool,
     since: str | None,
     until: str | None,
     timezone_name: str | None,
@@ -1800,7 +2152,6 @@ def _usage_series(
     breakdown: bool,
     compact: bool,
     instances: bool,
-    project: str | None,
     order: str,
     locale: str | None,
     start_of_week: str,
@@ -1835,10 +2186,12 @@ def _usage_series(
                 model_id=model_id,
                 thinking_level=thinking_level,
                 agent=agent,
+                area=area,
+                area_exact=area_exact,
+                unassigned_area=unassigned_area,
                 since_ms=since_ms,
                 until_ms=until_ms,
                 split_thinking=split_thinking,
-                project=project,
                 instances=instances,
                 breakdown=breakdown,
                 start_of_week=start_of_week,
@@ -2119,6 +2472,9 @@ def _usage_machines(
     model_id: str | None,
     thinking_level: str | None,
     agent: str | None,
+    area: str | None,
+    area_exact: bool,
+    unassigned_area: bool,
     since: str | None,
     until: str | None,
     timezone_name: str | None,
@@ -2152,6 +2508,9 @@ def _usage_machines(
                 model_id=model_id,
                 thinking_level=thinking_level,
                 agent=agent,
+                area=area,
+                area_exact=area_exact,
+                unassigned_area=unassigned_area,
                 since_ms=resolved_range.since_ms,
                 until_ms=resolved_range.until_ms,
                 split_thinking=split_thinking,
@@ -2267,6 +2626,9 @@ def _usage_sessions(
     model_id: str | None,
     thinking_level: str | None,
     agent: str | None,
+    area: str | None,
+    area_exact: bool,
+    unassigned_area: bool,
     since: str | None,
     until: str | None,
     period: str | None,
@@ -2322,6 +2684,9 @@ def _usage_sessions(
                 model_id=model_id,
                 thinking_level=thinking_level,
                 agent=agent,
+                area=area,
+                area_exact=area_exact,
+                unassigned_area=unassigned_area,
                 since_ms=resolved_range.since_ms,
                 until_ms=resolved_range.until_ms,
                 split_thinking=split_thinking,
@@ -2429,6 +2794,7 @@ def _print_usage_sessions(
             {
                 "machine": session.machine_label,
                 "session": session.key,
+                "area": session.area_path or "unassigned",
                 "last": format_epoch_ms_compact(session.last_ms, utc=utc),
                 "msgs": _format_int(session.message_count),
                 "total": _format_int(session.tokens.total),
@@ -2444,6 +2810,7 @@ def _print_usage_sessions(
             [
                 "machine",
                 "session",
+                "area",
                 "last",
                 "msgs",
                 "total",
@@ -2455,6 +2822,7 @@ def _print_usage_sessions(
             {
                 "machine": "machine",
                 "session": "session",
+                "area": "area",
                 "last": "last",
                 "msgs": "msgs",
                 "total": "total",
@@ -2465,14 +2833,15 @@ def _print_usage_sessions(
             },
             rich_output=rich_output,
             numeric_columns={"msgs", "total", "actual", "virtual", "savings"},
-            wrap_columns={"models"},
-            max_widths={"models": 48, "session": 48},
+            wrap_columns={"area", "models"},
+            max_widths={"area": 36, "models": 48, "session": 48},
         )
     else:
         rows = [
             {
                 "machine": session.machine_label,
                 "session": session.key,
+                "area": session.area_path or "unassigned",
                 "last": format_epoch_ms_compact(session.last_ms, utc=utc),
                 "msgs": _format_int(session.message_count),
                 "models": _format_model_list(session.models, rich_output=rich_output),
@@ -2496,6 +2865,7 @@ def _print_usage_sessions(
             [
                 "machine",
                 "session",
+                "area",
                 "last",
                 "msgs",
                 "models",
@@ -2515,6 +2885,7 @@ def _print_usage_sessions(
             {
                 "machine": "machine",
                 "session": "session",
+                "area": "area",
                 "last": "last",
                 "msgs": "msgs",
                 "models": "models",
@@ -2547,8 +2918,8 @@ def _print_usage_sessions(
                 "savings",
                 "unpriced",
             },
-            wrap_columns={"session", "models"},
-            max_widths={"session": 48, "models": 48},
+            wrap_columns={"session", "area", "models"},
+            max_widths={"session": 48, "area": 36, "models": 48},
         )
 
     if breakdown:
@@ -2628,6 +2999,9 @@ def _usage_runs(
     model_id: str | None,
     thinking_level: str | None,
     agent: str | None,
+    area: str | None,
+    area_exact: bool,
+    unassigned_area: bool,
     since: str | None,
     until: str | None,
     timezone_name: str | None,
@@ -2660,6 +3034,9 @@ def _usage_runs(
                 model_id=model_id,
                 thinking_level=thinking_level,
                 agent=agent,
+                area=area,
+                area_exact=area_exact,
+                unassigned_area=unassigned_area,
                 since_ms=since_ms,
                 until_ms=until_ms,
                 split_thinking=split_thinking,
@@ -2792,6 +3169,185 @@ def _print_usage_runs(
     )
 
 
+def _usage_areas(
+    *,
+    ctx: typer.Context,
+    json_output: bool,
+    period: str | None,
+    harness: str | None,
+    source_session_id: str | None,
+    machine: str | None,
+    provider_id: str | None,
+    model_id: str | None,
+    thinking_level: str | None,
+    agent: str | None,
+    area: str | None,
+    area_exact: bool,
+    unassigned_area: bool,
+    since: str | None,
+    until: str | None,
+    timezone_name: str | None,
+    utc: bool,
+    split_thinking: bool,
+    rich_output: bool,
+) -> dict[str, object] | None:
+    try:
+        resolved_range = resolve_time_range(
+            period=period,
+            timezone_name=timezone_name,
+            utc=utc,
+            since_text=since,
+            until_text=until,
+        )
+    except ValueError as exc:
+        _exit_with_error(str(exc))
+
+    costing_config = _load_costing_config_or_exit(ctx)
+    conn = _open_toktrail_connection(ctx)
+    try:
+        machine_id = _resolve_machine_id_or_exit(conn, machine)
+        report = summarize_usage_areas(
+            conn,
+            UsageReportFilter(
+                tracking_session_id=None,
+                machine_id=machine_id,
+                harness=harness,
+                source_session_id=source_session_id,
+                provider_id=provider_id,
+                model_id=model_id,
+                thinking_level=thinking_level,
+                agent=agent,
+                area=area,
+                area_exact=area_exact,
+                unassigned_area=unassigned_area,
+                since_ms=resolved_range.since_ms,
+                until_ms=resolved_range.until_ms,
+                split_thinking=split_thinking,
+            ),
+            costing_config=costing_config,
+        )
+    finally:
+        conn.close()
+
+    if json_output:
+        payload = report.as_dict()
+        filters = payload.get("filters")
+        if isinstance(filters, dict):
+            if resolved_range.period is not None:
+                filters["period"] = resolved_range.period
+            if (
+                resolved_range.period is not None
+                or timezone_name is not None
+                or utc
+                or since is not None
+                or until is not None
+            ):
+                filters["timezone"] = resolved_range.timezone
+        return payload
+
+    _print_usage_areas(
+        report,
+        period=resolved_range.period,
+        rich_output=rich_output,
+    )
+    return None
+
+
+def _print_usage_areas(
+    report: object,
+    *,
+    period: str | None,
+    rich_output: bool,
+) -> None:
+    from toktrail.reporting import UsageAreasReport
+
+    if not isinstance(report, UsageAreasReport):
+        msg = "Expected UsageAreasReport."
+        raise TypeError(msg)
+
+    title = "toktrail usage areas"
+    if period is not None:
+        title += f" ({period})"
+    typer.echo(title)
+
+    if not report.areas:
+        typer.echo("No usage data.")
+        return
+
+    rows = [
+        {
+            "area": (
+                "  " * area_row.depth + area_row.path
+                if area_row.path is not None
+                else "unassigned"
+            ),
+            "msgs": _format_int(area_row.message_count),
+            "input": _format_int(area_row.tokens.input),
+            "output": _format_int(area_row.tokens.output),
+            "reasoning": _format_int(area_row.tokens.reasoning),
+            "cache_r": _format_int(area_row.tokens.cache_read),
+            "cache_w": _format_int(area_row.tokens.cache_write),
+            "cache_o": _format_int(area_row.tokens.cache_output),
+            "total": _format_int(area_row.tokens.total),
+            "actual": _format_cost(area_row.costs.actual_cost_usd),
+            "virtual": _format_cost(area_row.costs.virtual_cost_usd),
+            "savings": _format_cost(area_row.costs.savings_usd),
+            "unpriced": _format_int(area_row.costs.unpriced_count),
+        }
+        for area_row in report.areas
+    ]
+    _print_table(
+        rows,
+        [
+            "area",
+            "msgs",
+            "input",
+            "output",
+            "reasoning",
+            "cache_r",
+            "cache_w",
+            "cache_o",
+            "total",
+            "actual",
+            "virtual",
+            "savings",
+            "unpriced",
+        ],
+        {
+            "area": "area",
+            "msgs": "msgs",
+            "input": "input",
+            "output": "output",
+            "reasoning": "reasoning",
+            "cache_r": "cache_r",
+            "cache_w": "cache_w",
+            "cache_o": "cache_o",
+            "total": "total",
+            "actual": "actual",
+            "virtual": "virtual",
+            "savings": "savings",
+            "unpriced": "unpriced",
+        },
+        rich_output=rich_output,
+        numeric_columns={
+            "msgs",
+            "input",
+            "output",
+            "reasoning",
+            "cache_r",
+            "cache_w",
+            "cache_o",
+            "total",
+            "actual",
+            "virtual",
+            "savings",
+            "unpriced",
+        },
+        wrap_columns={"area"},
+        max_widths={"area": 48},
+    )
+
+
 def _usage_aggregate(
     *,
     ctx: typer.Context,
@@ -2804,6 +3360,9 @@ def _usage_aggregate(
     model_id: str | None,
     thinking_level: str | None,
     agent: str | None,
+    area: str | None,
+    area_exact: bool,
+    unassigned_area: bool,
     since: str | None,
     until: str | None,
     timezone_name: str | None,
@@ -2849,6 +3408,9 @@ def _usage_aggregate(
                 model_id=model_id,
                 thinking_level=thinking_level,
                 agent=agent,
+                area=area,
+                area_exact=area_exact,
+                unassigned_area=unassigned_area,
                 since_ms=resolved_range.since_ms,
                 until_ms=resolved_range.until_ms,
                 split_thinking=split_thinking,
@@ -7042,6 +7604,45 @@ def _resolve_machine_id_or_exit(
         return resolve_machine_selector(conn, machine).machine_id
     except ValueError as exc:
         _exit_with_error(str(exc))
+
+
+def _resolve_assignment_machine_id_or_exit(
+    conn: sqlite3.Connection,
+    *,
+    harness: str,
+    source_session_id: str,
+    machine: str | None,
+) -> str:
+    if machine is not None:
+        resolved = _resolve_machine_id_or_exit(conn, machine)
+        if resolved is None:
+            msg = "Machine selector did not resolve to a machine id."
+            raise TypeError(msg)
+        return resolved
+    rows = conn.execute(
+        """
+        SELECT DISTINCT origin_machine_id
+        FROM usage_events
+        WHERE harness = ?
+          AND source_session_id = ?
+          AND origin_machine_id IS NOT NULL
+        ORDER BY origin_machine_id
+        """,
+        (harness, source_session_id),
+    ).fetchall()
+    if not rows:
+        _exit_with_error(
+            f"No imported source session matched {harness}/{source_session_id}."
+        )
+    if len(rows) > 1:
+        _exit_with_error(
+            "Source session matched multiple machines. Specify --machine."
+        )
+    value = rows[0]["origin_machine_id"]
+    if not isinstance(value, str):
+        msg = "Expected origin_machine_id to be a string."
+        raise TypeError(msg)
+    return value
 
 
 def _load_machine_config_or_exit(ctx: typer.Context) -> LoadedMachineConfig:

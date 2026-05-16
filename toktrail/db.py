@@ -39,6 +39,7 @@ from toktrail.models import (
 )
 from toktrail.reporting import (
     ActivitySummaryRow,
+    AreaSummaryRow,
     CostTotals,
     HarnessSummaryRow,
     MachineSummaryRow,
@@ -52,6 +53,7 @@ from toktrail.reporting import (
     SubscriptionUsageReport,
     SubscriptionUsageRow,
     UnconfiguredModelRow,
+    UsageAreasReport,
     UsageReportFilter,
     UsageRunRow,
     UsageRunsFilter,
@@ -65,7 +67,7 @@ from toktrail.reporting import (
     UsageSessionsReport,
 )
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 _PERIOD_SORT: dict[str, int] = {
     "5h": 0,
     "daily": 1,
@@ -103,6 +105,33 @@ class Machine:
 
 
 @dataclass(frozen=True)
+class Area:
+    id: int
+    sync_id: str
+    parent_id: int | None
+    slug: str
+    name: str
+    path: str
+    archived_at_ms: int | None
+    created_at_ms: int
+    updated_at_ms: int
+    imported_at_ms: int | None = None
+
+
+@dataclass(frozen=True)
+class AreaSessionAssignment:
+    id: int
+    sync_id: str
+    area_id: int
+    origin_machine_id: str
+    harness: str
+    source_session_id: str
+    assigned_at_ms: int
+    updated_at_ms: int
+    imported_at_ms: int | None = None
+
+
+@dataclass(frozen=True)
 class _UsageWhere:
     source_clause: str
     where_clause: str
@@ -112,6 +141,7 @@ class _UsageWhere:
 @dataclass(frozen=True)
 class _AggregateRow:
     group: tuple[object, ...]
+    area_id: int | None
     origin_machine_id: str | None
     harness: str
     source_session_id: str
@@ -251,6 +281,9 @@ def migrate(conn: sqlite3.Connection) -> None:
     if current_version == 9:
         _migrate_v9_to_v10(conn)
         current_version = 10
+    if current_version == 10:
+        _migrate_v10_to_v11(conn)
+        current_version = 11
 
     _ensure_machine_id(conn)
     conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
@@ -471,6 +504,51 @@ def _create_schema(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_machines_last_seen
         ON machines(last_seen_ms);
 
+        CREATE TABLE IF NOT EXISTS areas (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sync_id TEXT NOT NULL UNIQUE,
+            parent_id INTEGER REFERENCES areas(id) ON DELETE RESTRICT,
+            slug TEXT NOT NULL,
+            name TEXT NOT NULL,
+            path TEXT NOT NULL UNIQUE,
+            archived_at_ms INTEGER,
+            created_at_ms INTEGER NOT NULL,
+            updated_at_ms INTEGER NOT NULL,
+            imported_at_ms INTEGER
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_areas_parent_slug
+        ON areas(parent_id, slug);
+
+        CREATE INDEX IF NOT EXISTS idx_areas_path
+        ON areas(path);
+
+        CREATE TABLE IF NOT EXISTS area_session_assignments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sync_id TEXT NOT NULL UNIQUE,
+            area_id INTEGER NOT NULL REFERENCES areas(id) ON DELETE RESTRICT,
+            origin_machine_id TEXT NOT NULL,
+            harness TEXT NOT NULL,
+            source_session_id TEXT NOT NULL,
+            assigned_at_ms INTEGER NOT NULL,
+            updated_at_ms INTEGER NOT NULL,
+            imported_at_ms INTEGER,
+            UNIQUE(origin_machine_id, harness, source_session_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_area_session_lookup
+        ON area_session_assignments(origin_machine_id, harness, source_session_id);
+
+        CREATE INDEX IF NOT EXISTS idx_area_session_area
+        ON area_session_assignments(area_id);
+
+        CREATE TABLE IF NOT EXISTS machine_active_areas (
+            machine_id TEXT PRIMARY KEY REFERENCES machines(machine_id) ON DELETE CASCADE,
+            area_id INTEGER REFERENCES areas(id) ON DELETE SET NULL,
+            updated_at_ms INTEGER NOT NULL,
+            imported_at_ms INTEGER
+        );
+
         CREATE TABLE IF NOT EXISTS source_sessions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             sync_id TEXT NOT NULL UNIQUE,
@@ -505,6 +583,7 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             global_dedup_key TEXT,
             fingerprint_hash TEXT NOT NULL,
             origin_machine_id TEXT,
+            area_id INTEGER REFERENCES areas(id) ON DELETE SET NULL,
             role TEXT NOT NULL DEFAULT 'assistant',
             provider_id TEXT NOT NULL DEFAULT 'unknown',
             provider_key TEXT NOT NULL DEFAULT 'unknown',
@@ -535,6 +614,9 @@ def _create_schema(conn: sqlite3.Connection) -> None:
 
         CREATE INDEX IF NOT EXISTS idx_usage_events_origin_machine_created
         ON usage_events(origin_machine_id, created_ms);
+
+        CREATE INDEX IF NOT EXISTS idx_usage_events_area_created
+        ON usage_events(area_id, created_ms);
 
         CREATE INDEX IF NOT EXISTS idx_usage_events_fingerprint
         ON usage_events(harness, fingerprint_hash);
@@ -859,6 +941,19 @@ def _migrate_v9_to_v10(conn: sqlite3.Connection) -> None:
     _backfill_usage_event_origin_machine_ids(conn, local_machine_id=local_machine_id)
 
 
+def _migrate_v10_to_v11(conn: sqlite3.Connection) -> None:
+    _create_areas_table(conn)
+    _create_area_session_assignments_table(conn)
+    _create_machine_active_areas_table(conn)
+    _add_column_if_missing(conn, "usage_events", "area_id", "INTEGER")
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_usage_events_area_created
+        ON usage_events(area_id, created_ms)
+        """
+    )
+
+
 def _migrate_v6_to_v7(conn: sqlite3.Connection) -> None:
     _add_column_if_missing(
         conn,
@@ -961,6 +1056,81 @@ def _create_machines_table(conn: sqlite3.Connection) -> None:
         """
         CREATE INDEX IF NOT EXISTS idx_machines_last_seen
         ON machines(last_seen_ms)
+        """
+    )
+
+
+def _create_areas_table(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS areas (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sync_id TEXT NOT NULL UNIQUE,
+            parent_id INTEGER REFERENCES areas(id) ON DELETE RESTRICT,
+            slug TEXT NOT NULL,
+            name TEXT NOT NULL,
+            path TEXT NOT NULL UNIQUE,
+            archived_at_ms INTEGER,
+            created_at_ms INTEGER NOT NULL,
+            updated_at_ms INTEGER NOT NULL,
+            imported_at_ms INTEGER
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_areas_parent_slug
+        ON areas(parent_id, slug)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_areas_path
+        ON areas(path)
+        """
+    )
+
+
+def _create_area_session_assignments_table(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS area_session_assignments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sync_id TEXT NOT NULL UNIQUE,
+            area_id INTEGER NOT NULL REFERENCES areas(id) ON DELETE RESTRICT,
+            origin_machine_id TEXT NOT NULL,
+            harness TEXT NOT NULL,
+            source_session_id TEXT NOT NULL,
+            assigned_at_ms INTEGER NOT NULL,
+            updated_at_ms INTEGER NOT NULL,
+            imported_at_ms INTEGER,
+            UNIQUE(origin_machine_id, harness, source_session_id)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_area_session_lookup
+        ON area_session_assignments(origin_machine_id, harness, source_session_id)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_area_session_area
+        ON area_session_assignments(area_id)
+        """
+    )
+
+
+def _create_machine_active_areas_table(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS machine_active_areas (
+            machine_id TEXT PRIMARY KEY REFERENCES machines(machine_id) ON DELETE CASCADE,
+            area_id INTEGER REFERENCES areas(id) ON DELETE SET NULL,
+            updated_at_ms INTEGER NOT NULL,
+            imported_at_ms INTEGER
+        )
         """
     )
 
@@ -1296,6 +1466,35 @@ def _machine_from_row(row: sqlite3.Row) -> Machine:
     )
 
 
+def _area_from_row(row: sqlite3.Row) -> Area:
+    return Area(
+        id=_required_int(row["id"]),
+        sync_id=str(row["sync_id"]),
+        parent_id=_optional_int(row["parent_id"]),
+        slug=str(row["slug"]),
+        name=str(row["name"]),
+        path=str(row["path"]),
+        archived_at_ms=_optional_int(row["archived_at_ms"]),
+        created_at_ms=_required_int(row["created_at_ms"]),
+        updated_at_ms=_required_int(row["updated_at_ms"]),
+        imported_at_ms=_optional_int(row["imported_at_ms"]),
+    )
+
+
+def _area_session_assignment_from_row(row: sqlite3.Row) -> AreaSessionAssignment:
+    return AreaSessionAssignment(
+        id=_required_int(row["id"]),
+        sync_id=str(row["sync_id"]),
+        area_id=_required_int(row["area_id"]),
+        origin_machine_id=str(row["origin_machine_id"]),
+        harness=str(row["harness"]),
+        source_session_id=str(row["source_session_id"]),
+        assigned_at_ms=_required_int(row["assigned_at_ms"]),
+        updated_at_ms=_required_int(row["updated_at_ms"]),
+        imported_at_ms=_optional_int(row["imported_at_ms"]),
+    )
+
+
 def get_local_machine_id(conn: sqlite3.Connection) -> str:
     return _ensure_machine_id(conn)
 
@@ -1596,6 +1795,500 @@ def resolve_machine_selector(conn: sqlite3.Connection, selector: str) -> Machine
     return next(iter(matches.values()))
 
 
+def normalize_area_path(path: str) -> tuple[str, tuple[str, ...]]:
+    raw = path.strip()
+    if not raw:
+        msg = "Area path must not be empty."
+        raise ValueError(msg)
+    if any(ord(ch) < 32 or ord(ch) == 127 for ch in raw):
+        msg = "Area path cannot contain control characters."
+        raise ValueError(msg)
+    names: list[str] = []
+    slugs: list[str] = []
+    for segment in raw.split("/"):
+        name = segment.strip()
+        if not name:
+            msg = f"Area path {path!r} contains an empty segment."
+            raise ValueError(msg)
+        if name in {".", ".."}:
+            msg = f"Area path {path!r} contains an invalid segment {name!r}."
+            raise ValueError(msg)
+        if any(ord(ch) < 32 or ord(ch) == 127 for ch in name):
+            msg = "Area path cannot contain control characters."
+            raise ValueError(msg)
+        names.append(name)
+        slugs.append(normalize_identity(name))
+    return "/".join(slugs), tuple(names)
+
+
+def get_area(conn: sqlite3.Connection, area_id: int) -> Area | None:
+    row = conn.execute(
+        """
+        SELECT
+            id,
+            sync_id,
+            parent_id,
+            slug,
+            name,
+            path,
+            archived_at_ms,
+            created_at_ms,
+            updated_at_ms,
+            imported_at_ms
+        FROM areas
+        WHERE id = ?
+        """,
+        (area_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    return _area_from_row(row)
+
+
+def get_area_by_path(conn: sqlite3.Connection, path: str) -> Area | None:
+    normalized_path, _ = normalize_area_path(path)
+    row = conn.execute(
+        """
+        SELECT
+            id,
+            sync_id,
+            parent_id,
+            slug,
+            name,
+            path,
+            archived_at_ms,
+            created_at_ms,
+            updated_at_ms,
+            imported_at_ms
+        FROM areas
+        WHERE path = ?
+        """,
+        (normalized_path,),
+    ).fetchone()
+    if row is None:
+        return None
+    return _area_from_row(row)
+
+
+def list_areas(
+    conn: sqlite3.Connection,
+    *,
+    include_archived: bool = False,
+) -> tuple[Area, ...]:
+    _create_areas_table(conn)
+    where_clause = "" if include_archived else "WHERE archived_at_ms IS NULL"
+    rows = conn.execute(
+        f"""
+        SELECT
+            id,
+            sync_id,
+            parent_id,
+            slug,
+            name,
+            path,
+            archived_at_ms,
+            created_at_ms,
+            updated_at_ms,
+            imported_at_ms
+        FROM areas
+        {where_clause}
+        ORDER BY path ASC
+        """
+    ).fetchall()
+    return tuple(_area_from_row(row) for row in rows)
+
+
+def ensure_area(
+    conn: sqlite3.Connection,
+    path: str,
+    *,
+    name: str | None = None,
+    imported_at_ms: int | None = None,
+) -> Area:
+    _create_areas_table(conn)
+    normalized_path, names = normalize_area_path(path)
+    slugs = normalized_path.split("/")
+    now_ms = _now_ms()
+    parent_id: int | None = None
+    area: Area | None = None
+    current_parts: list[str] = []
+    for index, (slug, default_name) in enumerate(zip(slugs, names, strict=True)):
+        current_parts.append(slug)
+        current_path = "/".join(current_parts)
+        display_name = (
+            name.strip()
+            if index == len(slugs) - 1 and name is not None and name.strip()
+            else default_name
+        )
+        existing = get_area_by_path(conn, current_path)
+        if existing is None:
+            cursor = conn.execute(
+                """
+                INSERT INTO areas (
+                    sync_id,
+                    parent_id,
+                    slug,
+                    name,
+                    path,
+                    archived_at_ms,
+                    created_at_ms,
+                    updated_at_ms,
+                    imported_at_ms
+                )
+                VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?)
+                """,
+                (
+                    uuid.uuid4().hex,
+                    parent_id,
+                    slug,
+                    display_name,
+                    current_path,
+                    now_ms,
+                    now_ms,
+                    imported_at_ms,
+                ),
+            )
+            area_id = _required_lastrowid(cursor.lastrowid)
+            area = get_area(conn, area_id)
+            if area is None:
+                msg = f"Area not found after insert: {current_path}"
+                raise ValueError(msg)
+        else:
+            area = existing
+            if area.parent_id != parent_id:
+                msg = f"Area tree mismatch for path {current_path!r}."
+                raise ValueError(msg)
+            if area.name != display_name and index == len(slugs) - 1 and name is not None:
+                conn.execute(
+                    """
+                    UPDATE areas
+                    SET name = ?, updated_at_ms = ?, imported_at_ms = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        display_name,
+                        now_ms,
+                        _max_optional_int(area.imported_at_ms, imported_at_ms),
+                        area.id,
+                    ),
+                )
+                refreshed = get_area(conn, area.id)
+                if refreshed is None:
+                    msg = f"Area not found after update: {current_path}"
+                    raise ValueError(msg)
+                area = refreshed
+        parent_id = area.id
+    if area is None:
+        msg = f"Failed to create or load area for path {path!r}."
+        raise ValueError(msg)
+    return area
+
+
+def resolve_area_ids(
+    conn: sqlite3.Connection,
+    path: str,
+    *,
+    include_descendants: bool = True,
+) -> tuple[int, ...]:
+    normalized_path, _ = normalize_area_path(path)
+    area = get_area_by_path(conn, normalized_path)
+    if area is None:
+        msg = f"Area not found: {normalized_path}"
+        raise ValueError(msg)
+    if not include_descendants:
+        return (area.id,)
+    rows = conn.execute(
+        """
+        WITH RECURSIVE descendants(id) AS (
+            SELECT id
+            FROM areas
+            WHERE path = ?
+            UNION ALL
+            SELECT child.id
+            FROM areas AS child
+            JOIN descendants AS parent_desc ON child.parent_id = parent_desc.id
+            WHERE child.archived_at_ms IS NULL
+        )
+        SELECT id
+        FROM descendants
+        ORDER BY id
+        """,
+        (normalized_path,),
+    ).fetchall()
+    return tuple(_required_int(row["id"]) for row in rows)
+
+
+def get_active_area(
+    conn: sqlite3.Connection,
+    *,
+    machine_id: str | None = None,
+) -> Area | None:
+    _create_machine_active_areas_table(conn)
+    effective_machine_id = machine_id or get_local_machine_id(conn)
+    row = conn.execute(
+        """
+        SELECT area_id
+        FROM machine_active_areas
+        WHERE machine_id = ?
+        """,
+        (effective_machine_id,),
+    ).fetchone()
+    if row is None or row["area_id"] is None:
+        return None
+    return get_area(conn, _required_int(row["area_id"]))
+
+
+def set_active_area(
+    conn: sqlite3.Connection,
+    area_id: int | None,
+    *,
+    machine_id: str | None = None,
+    imported_at_ms: int | None = None,
+) -> None:
+    _create_machine_active_areas_table(conn)
+    effective_machine_id = machine_id or get_local_machine_id(conn)
+    local_machine_id = get_local_machine_id(conn)
+    upsert_machine(
+        conn,
+        machine_id=effective_machine_id,
+        name=None,
+        seen_ms=_now_ms(),
+        is_local=(effective_machine_id == local_machine_id),
+        imported_at_ms=imported_at_ms,
+    )
+    if area_id is not None and get_area(conn, area_id) is None:
+        msg = f"Area not found: {area_id}"
+        raise ValueError(msg)
+    now_ms = _now_ms()
+    conn.execute(
+        """
+        INSERT INTO machine_active_areas (
+            machine_id,
+            area_id,
+            updated_at_ms,
+            imported_at_ms
+        )
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(machine_id) DO UPDATE SET
+            area_id = excluded.area_id,
+            updated_at_ms = excluded.updated_at_ms,
+            imported_at_ms = CASE
+                WHEN machine_active_areas.imported_at_ms IS NULL THEN excluded.imported_at_ms
+                WHEN excluded.imported_at_ms IS NULL THEN machine_active_areas.imported_at_ms
+                ELSE MAX(machine_active_areas.imported_at_ms, excluded.imported_at_ms)
+            END
+        """,
+        (effective_machine_id, area_id, now_ms, imported_at_ms),
+    )
+
+
+def get_area_session_assignment(
+    conn: sqlite3.Connection,
+    *,
+    origin_machine_id: str,
+    harness: str,
+    source_session_id: str,
+) -> AreaSessionAssignment | None:
+    _create_area_session_assignments_table(conn)
+    row = conn.execute(
+        """
+        SELECT
+            id,
+            sync_id,
+            area_id,
+            origin_machine_id,
+            harness,
+            source_session_id,
+            assigned_at_ms,
+            updated_at_ms,
+            imported_at_ms
+        FROM area_session_assignments
+        WHERE origin_machine_id = ?
+          AND harness = ?
+          AND source_session_id = ?
+        """,
+        (origin_machine_id, harness, source_session_id),
+    ).fetchone()
+    if row is None:
+        return None
+    return _area_session_assignment_from_row(row)
+
+
+def find_session_assignment_area_id(
+    conn: sqlite3.Connection,
+    origin_machine_id: str,
+    harness: str,
+    source_session_id: str,
+) -> int | None:
+    assignment = get_area_session_assignment(
+        conn,
+        origin_machine_id=origin_machine_id,
+        harness=harness,
+        source_session_id=source_session_id,
+    )
+    if assignment is None:
+        return None
+    return assignment.area_id
+
+
+def assign_area_to_source_session(
+    conn: sqlite3.Connection,
+    *,
+    area_id: int,
+    origin_machine_id: str,
+    harness: str,
+    source_session_id: str,
+    create_only: bool = False,
+    imported_at_ms: int | None = None,
+) -> AreaSessionAssignment:
+    _create_area_session_assignments_table(conn)
+    if get_area(conn, area_id) is None:
+        msg = f"Area not found: {area_id}"
+        raise ValueError(msg)
+    existing = get_area_session_assignment(
+        conn,
+        origin_machine_id=origin_machine_id,
+        harness=harness,
+        source_session_id=source_session_id,
+    )
+    now_ms = _now_ms()
+    if existing is None:
+        cursor = conn.execute(
+            """
+            INSERT INTO area_session_assignments (
+                sync_id,
+                area_id,
+                origin_machine_id,
+                harness,
+                source_session_id,
+                assigned_at_ms,
+                updated_at_ms,
+                imported_at_ms
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                uuid.uuid4().hex,
+                area_id,
+                origin_machine_id,
+                harness,
+                source_session_id,
+                now_ms,
+                now_ms,
+                imported_at_ms,
+            ),
+        )
+        assignment_id = _required_lastrowid(cursor.lastrowid)
+    else:
+        assignment_id = existing.id
+        if not create_only and (
+            existing.area_id != area_id or imported_at_ms is not None
+        ):
+            conn.execute(
+                """
+                UPDATE area_session_assignments
+                SET area_id = ?,
+                    updated_at_ms = ?,
+                    imported_at_ms = ?
+                WHERE id = ?
+                """,
+                (
+                    area_id,
+                    now_ms,
+                    _max_optional_int(existing.imported_at_ms, imported_at_ms),
+                    existing.id,
+                ),
+            )
+    conn.execute(
+        """
+        UPDATE usage_events
+        SET area_id = ?
+        WHERE origin_machine_id = ?
+          AND harness = ?
+          AND source_session_id = ?
+        """,
+        (area_id, origin_machine_id, harness, source_session_id),
+    )
+    row = conn.execute(
+        """
+        SELECT
+            id,
+            sync_id,
+            area_id,
+            origin_machine_id,
+            harness,
+            source_session_id,
+            assigned_at_ms,
+            updated_at_ms,
+            imported_at_ms
+        FROM area_session_assignments
+        WHERE id = ?
+        """,
+        (assignment_id,),
+    ).fetchone()
+    if row is None:
+        msg = (
+            "Area session assignment not found after upsert: "
+            f"{origin_machine_id}/{harness}/{source_session_id}"
+        )
+        raise ValueError(msg)
+    return _area_session_assignment_from_row(row)
+
+
+def unassign_area_from_source_session(
+    conn: sqlite3.Connection,
+    *,
+    origin_machine_id: str,
+    harness: str,
+    source_session_id: str,
+) -> None:
+    _create_area_session_assignments_table(conn)
+    conn.execute(
+        """
+        DELETE FROM area_session_assignments
+        WHERE origin_machine_id = ?
+          AND harness = ?
+          AND source_session_id = ?
+        """,
+        (origin_machine_id, harness, source_session_id),
+    )
+    conn.execute(
+        """
+        UPDATE usage_events
+        SET area_id = NULL
+        WHERE origin_machine_id = ?
+          AND harness = ?
+          AND source_session_id = ?
+        """,
+        (origin_machine_id, harness, source_session_id),
+    )
+
+
+def _source_session_has_usage_events(
+    conn: sqlite3.Connection,
+    *,
+    origin_machine_id: str,
+    harness: str,
+    source_session_id: str,
+) -> bool:
+    row = conn.execute(
+        """
+        SELECT 1
+        FROM usage_events
+        WHERE origin_machine_id = ?
+          AND harness = ?
+          AND source_session_id = ?
+        LIMIT 1
+        """,
+        (origin_machine_id, harness, source_session_id),
+    ).fetchone()
+    return row is not None
+
+
+def _areas_by_id(conn: sqlite3.Connection) -> dict[int, Area]:
+    return {area.id: area for area in list_areas(conn, include_archived=True)}
+
+
 def get_machine_id(conn: sqlite3.Connection) -> str:
     return get_local_machine_id(conn)
 
@@ -1876,6 +2569,9 @@ def insert_usage_events(
     imported_at_ms = _now_ms()
     local_machine_id = get_local_machine_id(conn)
     event_origin_machine_id = origin_machine_id or local_machine_id
+    active_area = get_active_area(conn, machine_id=event_origin_machine_id)
+    active_area_id = active_area.id if active_area is not None else None
+    session_area_cache: dict[tuple[str, str, str], int | None] = {}
     rows_inserted = 0
     rows_linked = 0
     rows_scope_excluded = max(len(filtered_events) - len(link_events), 0)
@@ -1921,6 +2617,7 @@ def insert_usage_events(
                 global_dedup_key TEXT NOT NULL,
                 fingerprint_hash TEXT NOT NULL,
                 origin_machine_id TEXT NOT NULL,
+                area_id INTEGER,
                 provider_id TEXT NOT NULL,
                 provider_key TEXT NOT NULL,
                 model_id TEXT NOT NULL,
@@ -1954,10 +2651,39 @@ def insert_usage_events(
             if should_link:
                 harness_session_id = harness_session_ids.get(
                     (event.harness, event.source_session_id)
-                )
+            )
             provider_key = normalize_identity(event.provider_id)
             model_key = normalize_identity(event.model_id)
             agent_key = normalize_identity(event.agent) if event.agent else None
+            session_key = (
+                event_origin_machine_id,
+                event.harness,
+                event.source_session_id,
+            )
+            if session_key not in session_area_cache:
+                row_area_id = find_session_assignment_area_id(
+                    conn,
+                    event_origin_machine_id,
+                    event.harness,
+                    event.source_session_id,
+                )
+                if row_area_id is None and not _source_session_has_usage_events(
+                    conn,
+                    origin_machine_id=event_origin_machine_id,
+                    harness=event.harness,
+                    source_session_id=event.source_session_id,
+                ):
+                    if active_area_id is not None:
+                        row_area_id = assign_area_to_source_session(
+                            conn,
+                            area_id=active_area_id,
+                            origin_machine_id=event_origin_machine_id,
+                            harness=event.harness,
+                            source_session_id=event.source_session_id,
+                            create_only=True,
+                        ).area_id
+                session_area_cache[session_key] = row_area_id
+            row_area_id = session_area_cache[session_key]
             temp_rows.append(
                 (
                     tracking_session_id if should_link else None,
@@ -1970,6 +2696,7 @@ def insert_usage_events(
                     event.global_dedup_key,
                     event.fingerprint_hash,
                     event_origin_machine_id,
+                    row_area_id,
                     event.provider_id,
                     provider_key,
                     event.model_id,
@@ -1991,7 +2718,7 @@ def insert_usage_events(
                 )
             )
         if temp_rows:
-            temp_placeholders = ", ".join("?" for _ in range(28))
+            temp_placeholders = ", ".join("?" for _ in range(29))
             conn.executemany(
                 """
                 INSERT INTO tmp_usage_import (
@@ -2005,6 +2732,7 @@ def insert_usage_events(
                     global_dedup_key,
                     fingerprint_hash,
                     origin_machine_id,
+                    area_id,
                     provider_id,
                     provider_key,
                     model_id,
@@ -2046,6 +2774,7 @@ def insert_usage_events(
                 global_dedup_key,
                 fingerprint_hash,
                 origin_machine_id,
+                area_id,
                 role,
                 provider_id,
                 provider_key,
@@ -2077,6 +2806,7 @@ def insert_usage_events(
                 global_dedup_key,
                 fingerprint_hash,
                 origin_machine_id,
+                area_id,
                 'assistant',
                 provider_id,
                 provider_key,
@@ -2177,6 +2907,7 @@ def list_usage_events(
     order: str = "created",
 ) -> list[UsageEvent]:
     filters, _ = _apply_tracking_session_time_window(conn, filters)
+    filters = _resolve_usage_area_filter(conn, filters)
     source_clause, where_clause, params = _usage_report_query_parts(filters)
     if order == "created":
         order_clause = " ORDER BY ue.created_ms ASC, ue.id ASC"
@@ -2227,6 +2958,7 @@ def summarize_usage(
     simulation_targets: tuple[SimulationTarget, ...] = (),
 ) -> RunReport:
     filters, session = _apply_tracking_session_time_window(conn, filters)
+    filters = _resolve_usage_area_filter(conn, filters)
     rows = _aggregate_usage_rows(
         conn,
         filters,
@@ -2953,6 +3685,7 @@ def summarize_usage_series(
         conn,
         filters.to_usage_report_filter(),
     )
+    usage_filters = _resolve_usage_area_filter(conn, usage_filters)
     where = _usage_where_parts(usage_filters)
     bounds = conn.execute(
         f"""
@@ -2983,7 +3716,9 @@ def summarize_usage_series(
                 "model_id": filters.model_id,
                 "thinking_level": filters.thinking_level,
                 "agent": filters.agent,
-                "project": filters.project,
+                "area": usage_filters.area,
+                "area_exact": usage_filters.area_exact,
+                "unassigned_area": usage_filters.unassigned_area,
                 "instances": filters.instances,
                 "breakdown": filters.breakdown,
                 "split_thinking": filters.split_thinking,
@@ -3019,7 +3754,9 @@ def summarize_usage_series(
                 "model_id": filters.model_id,
                 "thinking_level": filters.thinking_level,
                 "agent": filters.agent,
-                "project": filters.project,
+                "area": usage_filters.area,
+                "area_exact": usage_filters.area_exact,
+                "unassigned_area": usage_filters.unassigned_area,
                 "instances": filters.instances,
                 "breakdown": filters.breakdown,
                 "split_thinking": filters.split_thinking,
@@ -3053,7 +3790,9 @@ def summarize_usage_series(
                 "model_id": filters.model_id,
                 "thinking_level": filters.thinking_level,
                 "agent": filters.agent,
-                "project": filters.project,
+                "area": usage_filters.area,
+                "area_exact": usage_filters.area_exact,
+                "unassigned_area": usage_filters.unassigned_area,
                 "instances": filters.instances,
                 "breakdown": filters.breakdown,
                 "split_thinking": filters.split_thinking,
@@ -3272,7 +4011,9 @@ def summarize_usage_series(
         "model_id": filters.model_id,
         "thinking_level": filters.thinking_level,
         "agent": filters.agent,
-        "project": filters.project,
+        "area": usage_filters.area,
+        "area_exact": usage_filters.area_exact,
+        "unassigned_area": usage_filters.unassigned_area,
         "instances": filters.instances,
         "breakdown": filters.breakdown,
         "split_thinking": filters.split_thinking,
@@ -3308,6 +4049,7 @@ def summarize_usage_sessions(
         conn,
         filters.to_usage_report_filter(),
     )
+    usage_filters = _resolve_usage_area_filter(conn, usage_filters)
     aggregate_rows = _aggregate_usage_rows(
         conn,
         usage_filters,
@@ -3327,6 +4069,31 @@ def summarize_usage_sessions(
 
     config = costing_config or default_costing_config()
     runtime = compile_costing_config(config)
+    session_area_rows = conn.execute(
+        """
+        SELECT
+            asa.origin_machine_id,
+            asa.harness,
+            asa.source_session_id,
+            a.id AS area_id,
+            a.path AS area_path,
+            a.name AS area_name
+        FROM area_session_assignments AS asa
+        JOIN areas AS a ON a.id = asa.area_id
+        """
+    ).fetchall()
+    session_area_lookup = {
+        (
+            str(row["origin_machine_id"]),
+            str(row["harness"]),
+            str(row["source_session_id"]),
+        ): (
+            _required_int(row["area_id"]),
+            str(row["area_path"]),
+            str(row["area_name"]),
+        )
+        for row in session_area_rows
+    }
 
     # Per-session aggregation keyed by (origin_machine_id, harness, source_session_id).
     session_atoms: dict[tuple[str, str, str], list[_SessionAtom]] = {}
@@ -3396,6 +4163,15 @@ def summarize_usage_sessions(
         providers: set[str] = set()
         by_model_list: list[ModelSummaryRow] = []
         by_model_accum: dict[tuple[str, str | None], _SessionModelAccum] = {}
+        area_id: int | None = None
+        area_path: str | None = None
+        area_name: str | None = None
+        if origin_machine_id is not None:
+            area_entry = session_area_lookup.get(
+                (origin_machine_id, harness, source_session_id)
+            )
+            if area_entry is not None:
+                area_id, area_path, area_name = area_entry
 
         for sa in atoms:
             tokens = _add_tokens(tokens, sa.atom.tokens)
@@ -3434,6 +4210,9 @@ def summarize_usage_sessions(
                 machine_label=machine_label,
                 harness=harness,
                 source_session_id=source_session_id,
+                area_id=area_id,
+                area_path=area_path,
+                area_name=area_name,
                 first_ms=first_ms,
                 last_ms=last_ms,
                 message_count=message_count,
@@ -3478,6 +4257,9 @@ def summarize_usage_sessions(
         "thinking_level": filters.thinking_level,
         "agent": filters.agent,
         "split_thinking": filters.split_thinking,
+        "area": usage_filters.area,
+        "area_exact": usage_filters.area_exact,
+        "unassigned_area": usage_filters.unassigned_area,
         "limit": filters.limit,
         "order": filters.order,
         "breakdown": filters.breakdown,
@@ -3486,6 +4268,127 @@ def summarize_usage_sessions(
     return UsageSessionsReport(
         filters=report_filters,
         sessions=tuple(session_rows),
+        totals=SessionTotals(tokens=totals_tokens, costs=totals_costs),
+    )
+
+
+def summarize_usage_areas(
+    conn: sqlite3.Connection,
+    filters: UsageReportFilter,
+    *,
+    costing_config: CostingConfig | None = None,
+) -> UsageAreasReport:
+    usage_filters, _ = _apply_tracking_session_time_window(conn, filters)
+    usage_filters = _resolve_usage_area_filter(conn, usage_filters)
+    aggregate_rows = _aggregate_usage_rows(
+        conn,
+        usage_filters,
+        group_by=(
+            "area_id",
+            "harness",
+            "provider_id",
+            "model_id",
+            "thinking_level",
+            "agent",
+            "context_tokens",
+        ),
+        split_thinking=usage_filters.split_thinking,
+    )
+    config = costing_config or default_costing_config()
+    runtime = compile_costing_config(config)
+    areas_by_id = _areas_by_id(conn)
+    allowed_area_ids = set(usage_filters.area_ids)
+    root_depth = usage_filters.area.count("/") if usage_filters.area is not None else 0
+    buckets: dict[int | None, _ReportBucket] = {}
+    totals_tokens = TokenBreakdown()
+    totals_costs = CostTotals()
+
+    for row in aggregate_rows:
+        atom = UsageCostAtom(
+            harness=row.harness,
+            provider_id=row.provider_id,
+            model_id=row.model_id,
+            thinking_level=row.thinking_level if usage_filters.split_thinking else None,
+            agent=row.agent,
+            message_count=row.message_count,
+            tokens=row.tokens,
+            source_cost_usd=row.source_cost_usd,
+        )
+        breakdown = runtime.compute_costs(
+            harness=atom.harness,
+            provider_id=atom.provider_id,
+            model_id=atom.model_id,
+            tokens=atom.tokens,
+            source_cost_usd=atom.source_cost_usd,
+            message_count=atom.message_count,
+        )
+        totals_tokens = _add_tokens(totals_tokens, atom.tokens)
+        totals_costs = _add_cost_breakdown(totals_costs, breakdown)
+        if row.area_id is None:
+            buckets.setdefault(None, _ReportBucket()).add(atom, breakdown)
+            continue
+        current_area_id = row.area_id
+        while current_area_id is not None:
+            if allowed_area_ids and current_area_id not in allowed_area_ids:
+                break
+            buckets.setdefault(current_area_id, _ReportBucket()).add(atom, breakdown)
+            area = areas_by_id.get(current_area_id)
+            if area is None:
+                break
+            current_area_id = area.parent_id
+
+    area_rows: list[AreaSummaryRow] = []
+    for area_id, bucket in buckets.items():
+        if area_id is None:
+            area_rows.append(
+                AreaSummaryRow(
+                    area_id=None,
+                    path=None,
+                    name="unassigned",
+                    depth=0,
+                    message_count=bucket.message_count,
+                    tokens=bucket.tokens,
+                    costs=bucket.costs,
+                )
+            )
+            continue
+        area = areas_by_id.get(area_id)
+        if area is None:
+            continue
+        area_rows.append(
+            AreaSummaryRow(
+                area_id=area.id,
+                path=area.path,
+                name=area.name,
+                depth=max(area.path.count("/") - root_depth, 0),
+                message_count=bucket.message_count,
+                tokens=bucket.tokens,
+                costs=bucket.costs,
+            )
+        )
+
+    area_rows = sorted(
+        area_rows,
+        key=lambda row: (row.path is None, row.path or "unassigned"),
+    )
+    report_filters: dict[str, object] = {
+        "since_ms": usage_filters.since_ms,
+        "until_ms": usage_filters.until_ms,
+        "machine_id": usage_filters.machine_id,
+        "harness": usage_filters.harness,
+        "source_session_id": usage_filters.source_session_id,
+        "provider_id": usage_filters.provider_id,
+        "model_id": usage_filters.model_id,
+        "thinking_level": usage_filters.thinking_level,
+        "agent": usage_filters.agent,
+        "area": usage_filters.area,
+        "area_exact": usage_filters.area_exact,
+        "unassigned_area": usage_filters.unassigned_area,
+        "split_thinking": usage_filters.split_thinking,
+    }
+    return UsageAreasReport(
+        filters=report_filters,
+        areas=tuple(area_rows),
         totals=SessionTotals(tokens=totals_tokens, costs=totals_costs),
     )
 
@@ -3517,6 +4420,24 @@ def _apply_tracking_session_time_window(
         )
 
     return replace(filters, since_ms=since_ms, until_ms=until_ms), session
+
+
+def _resolve_usage_area_filter(
+    conn: sqlite3.Connection,
+    filters: UsageReportFilter,
+) -> UsageReportFilter:
+    if filters.area is not None and filters.unassigned_area:
+        msg = "area and unassigned_area cannot both be set."
+        raise ValueError(msg)
+    if filters.area is None:
+        return filters
+    normalized_area, _ = normalize_area_path(filters.area)
+    area_ids = resolve_area_ids(
+        conn,
+        normalized_area,
+        include_descendants=not filters.area_exact,
+    )
+    return replace(filters, area=normalized_area, area_ids=area_ids)
 
 
 def _usage_where_parts(
@@ -3569,6 +4490,18 @@ def _usage_where_parts(
     if filters.until_ms is not None:
         clauses.append(f"{alias}.created_ms < ?")
         params.append(filters.until_ms)
+    if filters.unassigned_area:
+        clauses.append(f"{alias}.area_id IS NULL")
+    elif filters.area is not None:
+        if not filters.area_ids:
+            clauses.append("1 = 0")
+        elif len(filters.area_ids) == 1:
+            clauses.append(f"{alias}.area_id = ?")
+            params.append(filters.area_ids[0])
+        else:
+            placeholders = ", ".join("?" for _ in filters.area_ids)
+            clauses.append(f"{alias}.area_id IN ({placeholders})")
+            params.extend(filters.area_ids)
 
     where_clause = f" WHERE {' AND '.join(clauses)}" if clauses else ""
     return _UsageWhere(
@@ -3595,6 +4528,7 @@ def _aggregate_usage_rows(
 ) -> list[_AggregateRow]:
     where = _usage_where_parts(filters)
     column_map = {
+        "area_id": "ue.area_id",
         "origin_machine_id": "ue.origin_machine_id",
         "harness": "ue.harness",
         "source_session_id": "ue.source_session_id",
@@ -3655,28 +4589,49 @@ def _aggregate_usage_rows(
         result.append(
             _AggregateRow(
                 group=group_values,
+                area_id=(
+                    _required_int(row["area_id"])
+                    if "area_id" in row.keys() and row["area_id"] is not None
+                    else None
+                ),
                 origin_machine_id=origin_machine_id,
-                harness=str(row["harness"])
-                if row["harness"] is not None
-                else "unknown",
+                harness=(
+                    str(row["harness"])
+                    if "harness" in row.keys() and row["harness"] is not None
+                    else "unknown"
+                ),
                 source_session_id=(
                     str(row["source_session_id"])
-                    if row["source_session_id"] is not None
+                    if "source_session_id" in row.keys()
+                    and row["source_session_id"] is not None
                     else "unknown"
                 ),
                 provider_id=(
                     str(row["provider_id"])
-                    if row["provider_id"] is not None
+                    if "provider_id" in row.keys() and row["provider_id"] is not None
                     else "unknown"
                 ),
-                model_id=str(row["model_id"]) if row["model_id"] is not None else "",
+                model_id=(
+                    str(row["model_id"])
+                    if "model_id" in row.keys() and row["model_id"] is not None
+                    else ""
+                ),
                 thinking_level=(
                     str(row["thinking_level"])
-                    if row["thinking_level"] is not None
+                    if "thinking_level" in row.keys()
+                    and row["thinking_level"] is not None
                     else None
                 ),
-                agent=str(row["agent"]) if row["agent"] is not None else None,
-                context_tokens=_required_int(row["context_tokens"]),
+                agent=(
+                    str(row["agent"])
+                    if "agent" in row.keys() and row["agent"] is not None
+                    else None
+                ),
+                context_tokens=(
+                    _required_int(row["context_tokens"])
+                    if "context_tokens" in row.keys()
+                    else 0
+                ),
                 message_count=_required_int(row["message_count"]),
                 input_tokens=_required_int(row["input_tokens"]),
                 output_tokens=_required_int(row["output_tokens"]),
@@ -4145,6 +5100,7 @@ def summarize_usage_runs(
         conn,
         filters.to_usage_report_filter(),
     )
+    usage_filters = _resolve_usage_area_filter(conn, usage_filters)
     base_where_clauses: list[str] = []
     base_params: list[object] = []
     if usage_filters.harness is not None:
@@ -4178,6 +5134,16 @@ def summarize_usage_runs(
     if usage_filters.until_ms is not None:
         base_where_clauses.append("ue.created_ms < ?")
         base_params.append(usage_filters.until_ms)
+    if usage_filters.unassigned_area:
+        base_where_clauses.append("ue.area_id IS NULL")
+    elif usage_filters.area is not None:
+        if len(usage_filters.area_ids) == 1:
+            base_where_clauses.append("ue.area_id = ?")
+            base_params.append(usage_filters.area_ids[0])
+        elif usage_filters.area_ids:
+            ph = ", ".join("?" for _ in usage_filters.area_ids)
+            base_where_clauses.append(f"ue.area_id IN ({ph})")
+            base_params.extend(usage_filters.area_ids)
     where_clause = (
         f" WHERE {' AND '.join(base_where_clauses)}" if base_where_clauses else ""
     )
@@ -4352,6 +5318,9 @@ def summarize_usage_runs(
         "model_id": filters.model_id,
         "thinking_level": filters.thinking_level,
         "agent": filters.agent,
+        "area": usage_filters.area,
+        "area_exact": usage_filters.area_exact,
+        "unassigned_area": usage_filters.unassigned_area,
         "split_thinking": filters.split_thinking,
         "limit": filters.limit,
         "order": filters.order,

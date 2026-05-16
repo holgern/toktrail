@@ -140,11 +140,14 @@ def export_state_archive(
             "counts": {
                 "runs": counts["runs"],
                 "source_sessions": counts["source_sessions"],
-                "usage_events": counts["usage_events"],
-                "run_events": counts["run_events"],
-                "raw_json_rows": counts["raw_json_rows"],
-            },
-            "sha256": checksum_map,
+            "usage_events": counts["usage_events"],
+            "run_events": counts["run_events"],
+            "areas": counts["areas"],
+            "area_session_assignments": counts["area_session_assignments"],
+            "machine_active_areas": counts["machine_active_areas"],
+            "raw_json_rows": counts["raw_json_rows"],
+        },
+        "sha256": checksum_map,
         }
         manifest_path = temp_dir / MANIFEST_NAME
         manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
@@ -239,6 +242,11 @@ def import_state_archive(
                     imported_machine_name=imported_machine_name,
                     imported_at_ms=imported_at_ms,
                 )
+                area_id_map, _areas_inserted, _areas_updated = _merge_areas(
+                    target,
+                    imported,
+                    imported_at_ms=imported_at_ms,
+                )
                 run_id_map, runs_inserted, runs_updated = _merge_runs(
                     target,
                     imported,
@@ -261,8 +269,23 @@ def import_state_archive(
                     imported,
                     run_id_map=run_id_map,
                     source_session_id_map=source_id_map,
+                    area_id_map=area_id_map,
                     imported_machine_id=imported_machine_id,
                     on_conflict=on_conflict,
+                )
+                _assignment_inserted, _assignment_updated = (
+                    _merge_area_session_assignments(
+                        target,
+                        imported,
+                        area_id_map=area_id_map,
+                        imported_at_ms=imported_at_ms,
+                    )
+                )
+                _active_inserted, _active_updated = _merge_machine_active_areas(
+                    target,
+                    imported,
+                    area_id_map=area_id_map,
+                    imported_at_ms=imported_at_ms,
                 )
                 run_events_inserted = _merge_run_events(
                     target,
@@ -331,6 +354,12 @@ def _read_counts(snapshot_path: Path) -> dict[str, int]:
             "source_sessions": _query_count(conn, "source_sessions"),
             "usage_events": _query_count(conn, "usage_events"),
             "run_events": _query_count(conn, "run_events"),
+            "areas": _query_count(conn, "areas"),
+            "area_session_assignments": _query_count(
+                conn,
+                "area_session_assignments",
+            ),
+            "machine_active_areas": _query_count(conn, "machine_active_areas"),
             "raw_json_rows": _query_count(
                 conn,
                 "usage_events",
@@ -807,12 +836,162 @@ def _merge_source_sessions(
     return source_id_map, inserted, updated
 
 
+def _merge_areas(
+    target: sqlite3.Connection,
+    imported: sqlite3.Connection,
+    *,
+    imported_at_ms: int,
+) -> tuple[dict[int, int], int, int]:
+    rows = imported.execute(
+        """
+        SELECT
+            id,
+            sync_id,
+            parent_id,
+            slug,
+            name,
+            path,
+            archived_at_ms,
+            created_at_ms,
+            updated_at_ms,
+            imported_at_ms
+        FROM areas
+        ORDER BY LENGTH(path), path
+        """
+    ).fetchall()
+    area_id_map: dict[int, int] = {}
+    inserted = 0
+    updated = 0
+    for row in rows:
+        imported_area_id = int(row["id"])
+        imported_sync_id = str(row["sync_id"])
+        imported_path = str(row["path"])
+        imported_parent_id = _map_nullable_id(area_id_map, row["parent_id"])
+        local_by_path = target.execute(
+            """
+            SELECT
+                id,
+                sync_id,
+                parent_id,
+                slug,
+                name,
+                archived_at_ms,
+                updated_at_ms,
+                imported_at_ms
+            FROM areas
+            WHERE path = ?
+            """,
+            (imported_path,),
+        ).fetchone()
+        local_by_sync = target.execute(
+            """
+            SELECT
+                id,
+                sync_id,
+                parent_id,
+                slug,
+                name,
+                archived_at_ms,
+                updated_at_ms,
+                imported_at_ms
+            FROM areas
+            WHERE sync_id = ?
+            """,
+            (imported_sync_id,),
+        ).fetchone()
+
+        local = local_by_path if local_by_path is not None else local_by_sync
+        if local is None:
+            cursor = target.execute(
+                """
+                INSERT INTO areas (
+                    sync_id,
+                    parent_id,
+                    slug,
+                    name,
+                    path,
+                    archived_at_ms,
+                    created_at_ms,
+                    updated_at_ms,
+                    imported_at_ms
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    imported_sync_id,
+                    imported_parent_id,
+                    str(row["slug"]),
+                    str(row["name"]),
+                    imported_path,
+                    _optional_int_value(row["archived_at_ms"]),
+                    int(row["created_at_ms"]),
+                    int(row["updated_at_ms"]),
+                    _max_optional_int_value(
+                        _optional_int_value(row["imported_at_ms"]),
+                        imported_at_ms,
+                    ),
+                ),
+            )
+            local_id = _required_lastrowid(cursor)
+            area_id_map[imported_area_id] = local_id
+            inserted += 1
+            continue
+
+        local_id = int(local["id"])
+        area_id_map[imported_area_id] = local_id
+        local_updated = int(local["updated_at_ms"])
+        imported_updated = int(row["updated_at_ms"])
+        prefer_imported = imported_updated >= local_updated
+        merged_parent_id = (
+            imported_parent_id
+            if prefer_imported
+            else _optional_int_value(local["parent_id"])
+        )
+        if merged_parent_id == local_id:
+            merged_parent_id = None
+        merged_slug = str(row["slug"]) if prefer_imported else str(local["slug"])
+        merged_name = str(row["name"]) if prefer_imported else str(local["name"])
+        merged_archived_at = _max_optional_int_value(
+            _optional_int_value(local["archived_at_ms"]),
+            _optional_int_value(row["archived_at_ms"]),
+        )
+        merged_updated = max(local_updated, imported_updated)
+        merged_imported_at = _max_optional_int_value(
+            _optional_int_value(local["imported_at_ms"]),
+            imported_at_ms,
+        )
+        target.execute(
+            """
+            UPDATE areas
+            SET parent_id = ?,
+                slug = ?,
+                name = ?,
+                archived_at_ms = ?,
+                updated_at_ms = ?,
+                imported_at_ms = ?
+            WHERE id = ?
+            """,
+            (
+                merged_parent_id,
+                merged_slug,
+                merged_name,
+                merged_archived_at,
+                merged_updated,
+                merged_imported_at,
+                local_id,
+            ),
+        )
+        updated += 1
+    return area_id_map, inserted, updated
+
+
 def _merge_usage_events(
     target: sqlite3.Connection,
     imported: sqlite3.Connection,
     *,
     run_id_map: dict[int, int],
     source_session_id_map: dict[int, int],
+    area_id_map: dict[int, int],
     imported_machine_id: str,
     on_conflict: ConflictMode,
 ) -> tuple[dict[int, int], int, int, tuple[StateImportConflict, ...]]:
@@ -828,7 +1007,7 @@ def _merge_usage_events(
                role, provider_id, model_id, thinking_level, agent,
                created_ms, completed_ms, input_tokens, output_tokens, reasoning_tokens,
                cache_read_tokens, cache_write_tokens, cache_output_tokens,
-               source_cost_usd, raw_json, imported_at_ms
+               source_cost_usd, raw_json, imported_at_ms, area_id
         FROM usage_events
         ORDER BY id
         """
@@ -882,6 +1061,7 @@ def _merge_usage_events(
             source_session_id_map,
             row["harness_session_id"],
         )
+        mapped_area_id = _map_nullable_id(area_id_map, row["area_id"])
         event_origin_machine_id = _coalesce_text(
             row["origin_machine_id"],
             imported_machine_id,
@@ -924,12 +1104,13 @@ def _merge_usage_events(
                 cache_output_tokens,
                 source_cost_usd,
                 raw_json,
-                imported_at_ms
+                imported_at_ms,
+                area_id
             )
             VALUES (
                 ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                 ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                ?, ?, ?, ?, ?, ?
+                ?, ?, ?, ?, ?, ?, ?
             )
             """,
             (
@@ -959,12 +1140,248 @@ def _merge_usage_events(
                 row["source_cost_usd"],
                 row["raw_json"],
                 int(row["imported_at_ms"]),
+                mapped_area_id,
             ),
         )
         usage_id_map[int(row["id"])] = _required_lastrowid(cursor)
         inserted += 1
 
     return usage_id_map, inserted, skipped, tuple(conflicts)
+
+
+def _merge_area_session_assignments(
+    target: sqlite3.Connection,
+    imported: sqlite3.Connection,
+    *,
+    area_id_map: dict[int, int],
+    imported_at_ms: int,
+) -> tuple[int, int]:
+    inserted = 0
+    updated = 0
+    rows = imported.execute(
+        """
+        SELECT
+            sync_id,
+            area_id,
+            origin_machine_id,
+            harness,
+            source_session_id,
+            assigned_at_ms,
+            updated_at_ms,
+            imported_at_ms
+        FROM area_session_assignments
+        ORDER BY id
+        """
+    ).fetchall()
+    for row in rows:
+        mapped_area_id = _map_nullable_id(area_id_map, row["area_id"])
+        if mapped_area_id is None:
+            msg = "Imported area assignment references missing area mapping."
+            raise ValueError(msg)
+        origin_machine_id = str(row["origin_machine_id"])
+        harness = str(row["harness"])
+        source_session_id = str(row["source_session_id"])
+        db_module.upsert_machine(
+            target,
+            machine_id=origin_machine_id,
+            name=None,
+            seen_ms=int(row["updated_at_ms"]),
+            is_local=False,
+            imported_at_ms=imported_at_ms,
+        )
+        local = target.execute(
+            """
+            SELECT id, area_id, assigned_at_ms, updated_at_ms, imported_at_ms
+            FROM area_session_assignments
+            WHERE origin_machine_id = ?
+              AND harness = ?
+              AND source_session_id = ?
+            """,
+            (origin_machine_id, harness, source_session_id),
+        ).fetchone()
+        if local is None:
+            target.execute(
+                """
+                INSERT INTO area_session_assignments (
+                    sync_id,
+                    area_id,
+                    origin_machine_id,
+                    harness,
+                    source_session_id,
+                    assigned_at_ms,
+                    updated_at_ms,
+                    imported_at_ms
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(row["sync_id"]),
+                    mapped_area_id,
+                    origin_machine_id,
+                    harness,
+                    source_session_id,
+                    int(row["assigned_at_ms"]),
+                    int(row["updated_at_ms"]),
+                    _max_optional_int_value(
+                        _optional_int_value(row["imported_at_ms"]),
+                        imported_at_ms,
+                    ),
+                ),
+            )
+            inserted += 1
+            target.execute(
+                """
+                UPDATE usage_events
+                SET area_id = ?
+                WHERE origin_machine_id = ?
+                  AND harness = ?
+                  AND source_session_id = ?
+                """,
+                (mapped_area_id, origin_machine_id, harness, source_session_id),
+            )
+            continue
+
+        local_updated_at = int(local["updated_at_ms"])
+        imported_updated_at = int(row["updated_at_ms"])
+        merged_imported_at = _max_optional_int_value(
+            _optional_int_value(local["imported_at_ms"]),
+            imported_at_ms,
+        )
+        if imported_updated_at > local_updated_at:
+            target.execute(
+                """
+                UPDATE area_session_assignments
+                SET area_id = ?,
+                    assigned_at_ms = ?,
+                    updated_at_ms = ?,
+                    imported_at_ms = ?
+                WHERE id = ?
+                """,
+                (
+                    mapped_area_id,
+                    int(row["assigned_at_ms"]),
+                    imported_updated_at,
+                    merged_imported_at,
+                    int(local["id"]),
+                ),
+            )
+            updated += 1
+            target.execute(
+                """
+                UPDATE usage_events
+                SET area_id = ?
+                WHERE origin_machine_id = ?
+                  AND harness = ?
+                  AND source_session_id = ?
+                """,
+                (mapped_area_id, origin_machine_id, harness, source_session_id),
+            )
+        else:
+            target.execute(
+                """
+                UPDATE area_session_assignments
+                SET imported_at_ms = ?
+                WHERE id = ?
+                """,
+                (merged_imported_at, int(local["id"])),
+            )
+            target.execute(
+                """
+                UPDATE usage_events
+                SET area_id = ?
+                WHERE origin_machine_id = ?
+                  AND harness = ?
+                  AND source_session_id = ?
+                """,
+                (int(local["area_id"]), origin_machine_id, harness, source_session_id),
+            )
+    return inserted, updated
+
+
+def _merge_machine_active_areas(
+    target: sqlite3.Connection,
+    imported: sqlite3.Connection,
+    *,
+    area_id_map: dict[int, int],
+    imported_at_ms: int,
+) -> tuple[int, int]:
+    inserted = 0
+    updated = 0
+    rows = imported.execute(
+        """
+        SELECT machine_id, area_id, updated_at_ms, imported_at_ms
+        FROM machine_active_areas
+        ORDER BY machine_id
+        """
+    ).fetchall()
+    for row in rows:
+        machine_id = str(row["machine_id"])
+        mapped_area_id = _map_nullable_id(area_id_map, row["area_id"])
+        updated_at_ms = int(row["updated_at_ms"])
+        db_module.upsert_machine(
+            target,
+            machine_id=machine_id,
+            name=None,
+            seen_ms=updated_at_ms,
+            is_local=False,
+            imported_at_ms=imported_at_ms,
+        )
+        local = target.execute(
+            """
+            SELECT area_id, updated_at_ms, imported_at_ms
+            FROM machine_active_areas
+            WHERE machine_id = ?
+            """,
+            (machine_id,),
+        ).fetchone()
+        merged_imported_at = _max_optional_int_value(
+            _optional_int_value(row["imported_at_ms"]),
+            imported_at_ms,
+        )
+        if local is None:
+            target.execute(
+                """
+                INSERT INTO machine_active_areas (
+                    machine_id,
+                    area_id,
+                    updated_at_ms,
+                    imported_at_ms
+                )
+                VALUES (?, ?, ?, ?)
+                """,
+                (machine_id, mapped_area_id, updated_at_ms, merged_imported_at),
+            )
+            inserted += 1
+            continue
+        local_updated_at = int(local["updated_at_ms"])
+        if updated_at_ms >= local_updated_at:
+            target.execute(
+                """
+                UPDATE machine_active_areas
+                SET area_id = ?,
+                    updated_at_ms = ?,
+                    imported_at_ms = ?
+                WHERE machine_id = ?
+                """,
+                (mapped_area_id, updated_at_ms, merged_imported_at, machine_id),
+            )
+            updated += 1
+        else:
+            target.execute(
+                """
+                UPDATE machine_active_areas
+                SET imported_at_ms = ?
+                WHERE machine_id = ?
+                """,
+                (
+                    _max_optional_int_value(
+                        _optional_int_value(local["imported_at_ms"]),
+                        merged_imported_at,
+                    ),
+                    machine_id,
+                ),
+            )
+    return inserted, updated
 
 
 def _merge_run_events(

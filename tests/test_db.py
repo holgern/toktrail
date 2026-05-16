@@ -17,24 +17,33 @@ from toktrail.config import (
 )
 from toktrail.db import (
     archive_tracking_session,
+    assign_area_to_source_session,
     connect,
     create_tracking_session,
     end_tracking_session,
+    ensure_area,
+    find_session_assignment_area_id,
+    get_active_area,
     get_active_tracking_session,
+    get_area_by_path,
     get_local_machine_id,
     get_tracking_session,
     has_imported_sync_archive,
     insert_usage_events,
     list_tracking_sessions,
     migrate,
+    normalize_area_path,
     record_imported_sync_archive,
+    set_active_area,
     summarize_subscription_usage,
     summarize_tracking_session,
     summarize_usage,
+    summarize_usage_areas,
     summarize_usage_runs,
     summarize_usage_series,
     summarize_usage_sessions,
     unarchive_tracking_session,
+    unassign_area_from_source_session,
 )
 from toktrail.models import RunScope, TokenBreakdown, UsageEvent
 from toktrail.periods import resolve_fixed_subscription_window
@@ -145,6 +154,9 @@ def test_migrate_creates_tables_and_is_idempotent(tmp_path: Path) -> None:
     assert {
         "runs",
         "machines",
+        "areas",
+        "area_session_assignments",
+        "machine_active_areas",
         "source_sessions",
         "usage_events",
         "run_events",
@@ -152,7 +164,7 @@ def test_migrate_creates_tables_and_is_idempotent(tmp_path: Path) -> None:
         "import_sources",
         "sync_imports",
     } <= table_names
-    assert user_version == 10
+    assert user_version == 11
 
 
 def test_migrate_v3_to_v4_idempotent_with_existing_column(tmp_path: Path) -> None:
@@ -168,7 +180,7 @@ def test_migrate_v3_to_v4_idempotent_with_existing_column(tmp_path: Path) -> Non
     # Re-running migrate must not crash on duplicate column.
     migrate(conn)
 
-    assert int(conn.execute("PRAGMA user_version").fetchone()[0]) == 10
+    assert int(conn.execute("PRAGMA user_version").fetchone()[0]) == 11
 
 
 def test_insert_usage_events_sets_origin_machine_id(tmp_path: Path) -> None:
@@ -254,6 +266,353 @@ def test_usage_sessions_groups_same_source_session_by_machine(tmp_path: Path) ->
         conn.close()
 
     assert len(report.sessions) == 2
+
+
+def test_create_area_creates_parent_tree(tmp_path: Path) -> None:
+    conn = connect(tmp_path / "toktrail.db")
+    try:
+        migrate(conn)
+        area = ensure_area(conn, "Work / Odoo")
+        parent = get_area_by_path(conn, "work")
+        child = get_area_by_path(conn, "work/odoo")
+    finally:
+        conn.close()
+
+    assert parent is not None
+    assert child is not None
+    assert area.path == "work/odoo"
+    assert area.id == child.id
+    assert parent.parent_id is None
+    assert parent.name == "Work"
+    assert child.parent_id == parent.id
+    assert child.name == "Odoo"
+
+
+def test_area_path_normalization_rejects_empty_segments() -> None:
+    with pytest.raises(ValueError, match="empty segment"):
+        normalize_area_path("work//odoo")
+
+    with pytest.raises(ValueError, match="invalid segment"):
+        normalize_area_path("../x")
+
+
+def test_set_active_area_is_machine_scoped(tmp_path: Path) -> None:
+    conn = connect(tmp_path / "toktrail.db")
+    try:
+        migrate(conn)
+        local = ensure_area(conn, "work/odoo")
+        remote = ensure_area(conn, "privat/toktrail")
+        remote_machine_id = "remote-machine-1234"
+
+        set_active_area(conn, local.id)
+        set_active_area(conn, remote.id, machine_id=remote_machine_id)
+    finally:
+        local_active = get_active_area(conn)
+        remote_active = get_active_area(conn, machine_id=remote_machine_id)
+        conn.close()
+
+    assert local_active is not None
+    assert local_active.path == "work/odoo"
+    assert remote_active is not None
+    assert remote_active.path == "privat/toktrail"
+
+
+def test_insert_usage_events_assigns_active_area_to_new_source_session(
+    tmp_path: Path,
+) -> None:
+    conn = connect(tmp_path / "toktrail.db")
+    try:
+        migrate(conn)
+        area = ensure_area(conn, "privat/toktrail")
+        set_active_area(conn, area.id)
+        insert_usage_events(
+            conn,
+            None,
+            [make_usage_event(dedup_suffix="area-1", source_session_id="area-ses")],
+        )
+        row = conn.execute(
+            "SELECT area_id FROM usage_events WHERE source_session_id = ?",
+            ("area-ses",),
+        ).fetchone()
+        local_machine_id = get_local_machine_id(conn)
+    finally:
+        assignment_area_id = find_session_assignment_area_id(
+            conn,
+            local_machine_id,
+            "opencode",
+            "area-ses",
+        )
+        conn.close()
+
+    assert row is not None
+    assert row["area_id"] == area.id
+    assert assignment_area_id == area.id
+
+
+def test_insert_usage_events_keeps_existing_session_area_after_active_area_changes(
+    tmp_path: Path,
+) -> None:
+    conn = connect(tmp_path / "toktrail.db")
+    try:
+        migrate(conn)
+        first_area = ensure_area(conn, "work/odoo")
+        second_area = ensure_area(conn, "privat/toktrail")
+        set_active_area(conn, first_area.id)
+        insert_usage_events(
+            conn,
+            None,
+            [make_usage_event(dedup_suffix="keep-1", source_session_id="same-session")],
+        )
+        set_active_area(conn, second_area.id)
+        insert_usage_events(
+            conn,
+            None,
+            [make_usage_event(dedup_suffix="keep-2", source_session_id="same-session")],
+        )
+        rows = conn.execute(
+            """
+            SELECT area_id
+            FROM usage_events
+            WHERE source_session_id = ?
+            ORDER BY id
+            """,
+            ("same-session",),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    assert [_row["area_id"] for _row in rows] == [first_area.id, first_area.id]
+
+
+def test_assign_area_to_existing_session_backfills_usage_events(tmp_path: Path) -> None:
+    conn = connect(tmp_path / "toktrail.db")
+    try:
+        migrate(conn)
+        area = ensure_area(conn, "privat/toktrail")
+        insert_usage_events(
+            conn,
+            None,
+            [make_usage_event(dedup_suffix="assign-1", source_session_id="old-session")],
+        )
+        local_machine_id = get_local_machine_id(conn)
+        before_row = conn.execute(
+            "SELECT area_id FROM usage_events WHERE source_session_id = ?",
+            ("old-session",),
+        ).fetchone()
+        assign_area_to_source_session(
+            conn,
+            area_id=area.id,
+            origin_machine_id=local_machine_id,
+            harness="opencode",
+            source_session_id="old-session",
+        )
+        after_row = conn.execute(
+            "SELECT area_id FROM usage_events WHERE source_session_id = ?",
+            ("old-session",),
+        ).fetchone()
+        unassign_area_from_source_session(
+            conn,
+            origin_machine_id=local_machine_id,
+            harness="opencode",
+            source_session_id="old-session",
+        )
+        cleared_row = conn.execute(
+            "SELECT area_id FROM usage_events WHERE source_session_id = ?",
+            ("old-session",),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    assert before_row is not None
+    assert before_row["area_id"] is None
+    assert after_row is not None
+    assert after_row["area_id"] == area.id
+    assert cleared_row is not None
+    assert cleared_row["area_id"] is None
+
+
+def test_usage_report_area_filter_includes_descendants(tmp_path: Path) -> None:
+    conn = connect(tmp_path / "toktrail.db")
+    try:
+        migrate(conn)
+        work_area = ensure_area(conn, "work/odoo")
+        private_area = ensure_area(conn, "privat/toktrail")
+        local_machine_id = get_local_machine_id(conn)
+        session_a = make_usage_event(
+            dedup_suffix="f-1",
+            source_session_id="session-a",
+            tokens=TokenBreakdown(input=10, output=5),
+        )
+        session_b = make_usage_event(
+            dedup_suffix="f-2",
+            source_session_id="session-b",
+            tokens=TokenBreakdown(input=20, output=7),
+        )
+        insert_usage_events(conn, None, [session_a, session_b])
+        assign_area_to_source_session(
+            conn,
+            area_id=work_area.id,
+            origin_machine_id=local_machine_id,
+            harness="opencode",
+            source_session_id="session-a",
+        )
+        assign_area_to_source_session(
+            conn,
+            area_id=private_area.id,
+            origin_machine_id=local_machine_id,
+            harness="opencode",
+            source_session_id="session-b",
+        )
+        report = summarize_usage(conn, UsageReportFilter(area="work"))
+    finally:
+        conn.close()
+
+    assert report.totals.tokens.total == session_a.tokens.total
+
+
+def test_usage_report_area_exact_excludes_descendants(tmp_path: Path) -> None:
+    conn = connect(tmp_path / "toktrail.db")
+    try:
+        migrate(conn)
+        parent_area = ensure_area(conn, "work")
+        child_area = ensure_area(conn, "work/odoo")
+        local_machine_id = get_local_machine_id(conn)
+        parent_event = make_usage_event(
+            dedup_suffix="exact-1",
+            source_session_id="session-parent",
+            tokens=TokenBreakdown(input=7, output=2),
+        )
+        child_event = make_usage_event(
+            dedup_suffix="exact-2",
+            source_session_id="session-child",
+            tokens=TokenBreakdown(input=11, output=3),
+        )
+        insert_usage_events(conn, None, [parent_event, child_event])
+        assign_area_to_source_session(
+            conn,
+            area_id=parent_area.id,
+            origin_machine_id=local_machine_id,
+            harness="opencode",
+            source_session_id="session-parent",
+        )
+        assign_area_to_source_session(
+            conn,
+            area_id=child_area.id,
+            origin_machine_id=local_machine_id,
+            harness="opencode",
+            source_session_id="session-child",
+        )
+        report = summarize_usage(
+            conn,
+            UsageReportFilter(area="work", area_exact=True),
+        )
+    finally:
+        conn.close()
+
+    assert report.totals.tokens.total == parent_event.tokens.total
+
+
+def test_usage_report_unassigned_area_filter(tmp_path: Path) -> None:
+    conn = connect(tmp_path / "toktrail.db")
+    try:
+        migrate(conn)
+        area = ensure_area(conn, "work/odoo")
+        local_machine_id = get_local_machine_id(conn)
+        assigned_event = make_usage_event(
+            dedup_suffix="ua-1",
+            source_session_id="assigned-session",
+            tokens=TokenBreakdown(input=9, output=2),
+        )
+        unassigned_event = make_usage_event(
+            dedup_suffix="ua-2",
+            source_session_id="unassigned-session",
+            tokens=TokenBreakdown(input=13, output=4),
+        )
+        insert_usage_events(conn, None, [assigned_event, unassigned_event])
+        assign_area_to_source_session(
+            conn,
+            area_id=area.id,
+            origin_machine_id=local_machine_id,
+            harness="opencode",
+            source_session_id="assigned-session",
+        )
+        report = summarize_usage(conn, UsageReportFilter(unassigned_area=True))
+    finally:
+        conn.close()
+
+    assert report.totals.tokens.total == unassigned_event.tokens.total
+
+
+def test_usage_sessions_include_area_fields(tmp_path: Path) -> None:
+    conn = connect(tmp_path / "toktrail.db")
+    try:
+        migrate(conn)
+        area = ensure_area(conn, "privat/toktrail")
+        local_machine_id = get_local_machine_id(conn)
+        insert_usage_events(
+            conn,
+            None,
+            [make_usage_event(dedup_suffix="session-area-1", source_session_id="ses-a")],
+        )
+        assign_area_to_source_session(
+            conn,
+            area_id=area.id,
+            origin_machine_id=local_machine_id,
+            harness="opencode",
+            source_session_id="ses-a",
+        )
+        report = summarize_usage_sessions(conn, UsageSessionsFilter(limit=None))
+    finally:
+        conn.close()
+
+    assert len(report.sessions) == 1
+    assert report.sessions[0].area_id == area.id
+    assert report.sessions[0].area_path == "privat/toktrail"
+    assert report.sessions[0].area_name == "toktrail"
+
+
+def test_usage_areas_rolls_up_parent_and_leaf(tmp_path: Path) -> None:
+    conn = connect(tmp_path / "toktrail.db")
+    try:
+        migrate(conn)
+        work_area = ensure_area(conn, "work/odoo")
+        private_area = ensure_area(conn, "privat/toktrail")
+        local_machine_id = get_local_machine_id(conn)
+        work_event = make_usage_event(
+            dedup_suffix="areas-1",
+            source_session_id="work-session",
+            tokens=TokenBreakdown(input=15, output=4),
+        )
+        private_event = make_usage_event(
+            dedup_suffix="areas-2",
+            source_session_id="private-session",
+            tokens=TokenBreakdown(input=21, output=6),
+        )
+        insert_usage_events(conn, None, [work_event, private_event])
+        assign_area_to_source_session(
+            conn,
+            area_id=work_area.id,
+            origin_machine_id=local_machine_id,
+            harness="opencode",
+            source_session_id="work-session",
+        )
+        assign_area_to_source_session(
+            conn,
+            area_id=private_area.id,
+            origin_machine_id=local_machine_id,
+            harness="opencode",
+            source_session_id="private-session",
+        )
+        report = summarize_usage_areas(conn, UsageReportFilter())
+    finally:
+        conn.close()
+
+    rows_by_path = {row.path: row for row in report.areas if row.path is not None}
+    assert rows_by_path["work"].tokens.total == rows_by_path["work/odoo"].tokens.total
+    assert (
+        rows_by_path["privat"].tokens.total
+        == rows_by_path["privat/toktrail"].tokens.total
+    )
 
 
 def test_sync_import_registry_records_archive_hashes(tmp_path: Path) -> None:
