@@ -523,6 +523,7 @@ def test_sync_usage_events_keep_area_after_import(tmp_path: Path) -> None:
             ],
         )
         area_a = ensure_area(conn_a, "work/odoo")
+        area_a_sync_id = area_a.sync_id
         assign_area_to_source_session(
             conn_a,
             area_id=area_a.id,
@@ -539,6 +540,7 @@ def test_sync_usage_events_keep_area_after_import(tmp_path: Path) -> None:
         migrate(conn_b)
         local_area = ensure_area(conn_b, "work/odoo")
         local_area_id = local_area.id
+        local_area_sync_id = local_area.sync_id
         conn_b.commit()
     finally:
         conn_b.close()
@@ -551,8 +553,9 @@ def test_sync_usage_events_keep_area_after_import(tmp_path: Path) -> None:
         migrate(conn_b)
         row = conn_b.execute(
             """
-            SELECT area_id
-            FROM usage_events
+            SELECT ue.area_id, a.sync_id AS area_sync_id
+            FROM usage_events AS ue
+            LEFT JOIN areas AS a ON a.id = ue.area_id
             WHERE global_dedup_key = ?
             """,
             ("opencode:msg-area-map",),
@@ -562,6 +565,8 @@ def test_sync_usage_events_keep_area_after_import(tmp_path: Path) -> None:
 
     assert row is not None
     assert row["area_id"] == local_area_id
+    assert row["area_sync_id"] == area_a_sync_id
+    assert local_area_sync_id == area_a_sync_id
 
 
 def test_sync_area_assignment_conflict_uses_updated_at(tmp_path: Path) -> None:
@@ -651,6 +656,46 @@ def test_sync_area_assignment_conflict_uses_updated_at(tmp_path: Path) -> None:
     assert assignment is not None
     assert assignment["path"] == "privat/toktrail"
     assert {row["path"] for row in event_paths} == {"privat/toktrail"}
+
+
+def test_sync_import_detects_area_path_sync_id_conflict(tmp_path: Path) -> None:
+    db_a = tmp_path / "state-a.db"
+    db_b = tmp_path / "state-b.db"
+    archive = tmp_path / "a.tar.gz"
+
+    conn_a = connect(db_a)
+    try:
+        migrate(conn_a)
+        area = ensure_area(conn_a, "work/odoo")
+        conn_a.execute(
+            "UPDATE areas SET sync_id = ? WHERE id = ?",
+            ("imported-sync-conflict", area.id),
+        )
+        conn_a.commit()
+    finally:
+        conn_a.close()
+
+    conn_b = connect(db_b)
+    try:
+        migrate(conn_b)
+        by_path = ensure_area(conn_b, "work/odoo")
+        by_sync = ensure_area(conn_b, "privat/toktrail")
+        conn_b.execute(
+            "UPDATE areas SET sync_id = ? WHERE id = ?",
+            ("local-path-sync", by_path.id),
+        )
+        conn_b.execute(
+            "UPDATE areas SET sync_id = ? WHERE id = ?",
+            ("imported-sync-conflict", by_sync.id),
+        )
+        conn_b.commit()
+    finally:
+        conn_b.close()
+
+    export_state_archive(db_a, archive)
+
+    with pytest.raises(ValueError, match="Area sync conflict"):
+        import_state_archive(db_b, archive)
 
 
 def _sha256_bytes(value: bytes) -> str:

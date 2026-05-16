@@ -330,6 +330,7 @@ def test_git_sync_round_trip_preserves_areas(tmp_path: Path) -> None:
     try:
         migrate(conn)
         area = ensure_area(conn, "work/odoo")
+        expected_sync_id = area.sync_id
         assign_area_to_source_session(
             conn,
             area_id=area.id,
@@ -361,7 +362,7 @@ def test_git_sync_round_trip_preserves_areas(tmp_path: Path) -> None:
         migrate(conn)
         assignment = conn.execute(
             """
-            SELECT a.path
+            SELECT a.path, a.sync_id
             FROM area_session_assignments asa
             JOIN areas a ON a.id = asa.area_id
             WHERE asa.harness = ?
@@ -383,8 +384,69 @@ def test_git_sync_round_trip_preserves_areas(tmp_path: Path) -> None:
 
     assert assignment is not None
     assert assignment["path"] == "work/odoo"
+    assert assignment["sync_id"] == expected_sync_id
     assert usage is not None
     assert usage["path"] == "work/odoo"
+
+
+def test_git_sync_area_numeric_id_is_local_when_pc2_has_existing_areas(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    db_a = tmp_path / "a.db"
+    db_b = tmp_path / "b.db"
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("config_version = 1\n", encoding="utf-8")
+
+    ensure_git_repo(repo, remote_url=None, branch="main")
+    _configure_git_identity(repo)
+
+    conn = connect(db_a)
+    try:
+        migrate(conn)
+        area_a = ensure_area(conn, "work/odoo")
+        pc1_local_id = area_a.id
+        pc1_sync_id = area_a.sync_id
+        conn.commit()
+    finally:
+        conn.close()
+
+    conn = connect(db_b)
+    try:
+        migrate(conn)
+        ensure_area(conn, "privat/toktrail")
+        conn.commit()
+    finally:
+        conn.close()
+
+    export_repo_archive(
+        db_a,
+        repo,
+        archive_dir="archives",
+        config_path=config_path,
+        include_config=False,
+        redact_raw_json=True,
+        commit_message="sync",
+        remote="origin",
+        branch="main",
+        push=False,
+        allow_dirty=False,
+    )
+    import_repo_archives(db_b, repo, dry_run=False)
+
+    conn = connect(db_b)
+    try:
+        migrate(conn)
+        area_b = conn.execute(
+            "SELECT id, sync_id FROM areas WHERE path = ?",
+            ("work/odoo",),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    assert area_b is not None
+    assert area_b["sync_id"] == pc1_sync_id
+    assert area_b["id"] != pc1_local_id
 
 
 def test_git_sync_redacts_raw_json_by_default(tmp_path: Path) -> None:

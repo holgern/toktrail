@@ -17,6 +17,7 @@ from toktrail.config import (
 )
 from toktrail.db import (
     archive_tracking_session,
+    area_stable_sync_id,
     assign_area_to_source_session,
     connect,
     create_tracking_session,
@@ -164,7 +165,7 @@ def test_migrate_creates_tables_and_is_idempotent(tmp_path: Path) -> None:
         "import_sources",
         "sync_imports",
     } <= table_names
-    assert user_version == 11
+    assert user_version == 12
 
 
 def test_migrate_v3_to_v4_idempotent_with_existing_column(tmp_path: Path) -> None:
@@ -180,7 +181,7 @@ def test_migrate_v3_to_v4_idempotent_with_existing_column(tmp_path: Path) -> Non
     # Re-running migrate must not crash on duplicate column.
     migrate(conn)
 
-    assert int(conn.execute("PRAGMA user_version").fetchone()[0]) == 11
+    assert int(conn.execute("PRAGMA user_version").fetchone()[0]) == 12
 
 
 def test_insert_usage_events_sets_origin_machine_id(tmp_path: Path) -> None:
@@ -282,10 +283,32 @@ def test_create_area_creates_parent_tree(tmp_path: Path) -> None:
     assert child is not None
     assert area.path == "work/odoo"
     assert area.id == child.id
+    assert parent.sync_id == area_stable_sync_id("work")
+    assert child.sync_id == area_stable_sync_id("work/odoo")
     assert parent.parent_id is None
     assert parent.name == "Work"
     assert child.parent_id == parent.id
     assert child.name == "Odoo"
+
+
+def test_migrate_v11_to_v12_rewrites_area_sync_ids_from_path(tmp_path: Path) -> None:
+    conn = connect(tmp_path / "toktrail.db")
+    try:
+        migrate(conn)
+        area = ensure_area(conn, "work/odoo")
+        conn.execute("UPDATE areas SET sync_id = ? WHERE id = ?", ("legacy", area.id))
+        conn.execute("PRAGMA user_version = 11")
+        conn.commit()
+        migrate(conn)
+        row = conn.execute(
+            "SELECT sync_id FROM areas WHERE id = ?",
+            (area.id,),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    assert row is not None
+    assert row["sync_id"] == area_stable_sync_id("work/odoo")
 
 
 def test_area_path_normalization_rejects_empty_segments() -> None:

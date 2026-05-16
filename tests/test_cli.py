@@ -7099,9 +7099,26 @@ def test_cli_area_create_list_use_status(tmp_path) -> None:
     )
     assert create_result.exit_code == 0, create_result.output
 
+    create_json = runner.invoke(
+        app,
+        ["--db", str(state_db), "area", "create", "work/odoo", "--json"],
+    )
+    assert create_json.exit_code == 0, create_json.output
+    create_payload = json.loads(create_json.output)
+    assert create_payload["area_id"] == create_payload["local_id"]
+    assert create_payload["sync_id"] == create_payload["stable_id"]
+
     list_result = runner.invoke(app, ["--db", str(state_db), "area", "list"])
     assert list_result.exit_code == 0, list_result.output
     assert "privat/toktrail" in list_result.output
+    assert "local id" in list_result.output
+    assert "sync id" in list_result.output
+
+    list_json = runner.invoke(app, ["--db", str(state_db), "area", "list", "--json"])
+    assert list_json.exit_code == 0, list_json.output
+    list_payload = json.loads(list_json.output)
+    assert list_payload[0]["area_id"] == list_payload[0]["local_id"]
+    assert list_payload[0]["sync_id"] == list_payload[0]["stable_id"]
 
     use_result = runner.invoke(
         app,
@@ -7110,9 +7127,29 @@ def test_cli_area_create_list_use_status(tmp_path) -> None:
     assert use_result.exit_code == 0, use_result.output
     assert "Active area: privat/toktrail" in use_result.output
 
+    use_json = runner.invoke(
+        app,
+        ["--db", str(state_db), "area", "use", "privat/toktrail", "--json"],
+    )
+    assert use_json.exit_code == 0, use_json.output
+    use_payload = json.loads(use_json.output)
+    active_payload = use_payload["active_area"]
+    assert active_payload["area_id"] == active_payload["local_id"]
+    assert active_payload["sync_id"] == active_payload["stable_id"]
+
     status_result = runner.invoke(app, ["--db", str(state_db), "area", "status"])
     assert status_result.exit_code == 0, status_result.output
     assert "privat/toktrail" in status_result.output
+
+    status_json = runner.invoke(
+        app,
+        ["--db", str(state_db), "area", "status", "--json"],
+    )
+    assert status_json.exit_code == 0, status_json.output
+    status_payload = json.loads(status_json.output)
+    status_active = status_payload["active_area"]
+    assert status_active["area_id"] == status_active["local_id"]
+    assert status_active["sync_id"] == status_active["stable_id"]
 
 
 def test_cli_area_assign_and_unassign_old_session(tmp_path) -> None:
@@ -7160,6 +7197,7 @@ def test_cli_area_assign_and_unassign_old_session(tmp_path) -> None:
     assert sessions_assigned.exit_code == 0, sessions_assigned.output
     assigned_payload = json.loads(sessions_assigned.output)
     assert assigned_payload["sessions"][0]["area_path"] == "privat/toktrail"
+    assert "area_sync_id" in assigned_payload["sessions"][0]
 
     unassign_result = runner.invoke(
         app,
@@ -7376,5 +7414,6 @@ def test_cli_usage_areas_json_shape(tmp_path) -> None:
     assert payload["type"] == "usage_areas"
     assert "areas" in payload
     assert "totals" in payload
+    assert all("area_sync_id" in row for row in payload["areas"])
     assert any(row["path"] == "work" for row in payload["areas"])
     assert any(row["path"] == "work/odoo" for row in payload["areas"])

@@ -713,6 +713,7 @@ class UsageSessionRow:
     harness: str
     source_session_id: str
     area_id: int | None
+    area_sync_id: str | None
     area_path: str | None
     area_name: str | None
     first_ms: int
@@ -733,6 +734,7 @@ class UsageSessionRow:
             "harness": self.harness,
             "source_session_id": self.source_session_id,
             "area_id": self.area_id,
+            "area_sync_id": self.area_sync_id,
             "area_path": self.area_path,
             "area_name": self.area_name,
             "first_ms": self.first_ms,
@@ -852,6 +854,7 @@ class UsageRunsReport:
 @dataclass(frozen=True)
 class AreaSummaryRow:
     area_id: int | None
+    area_sync_id: str | None
     path: str | None
     name: str | None
     depth: int
@@ -862,6 +865,7 @@ class AreaSummaryRow:
     def as_dict(self) -> dict[str, object]:
         return {
             "area_id": self.area_id,
+            "area_sync_id": self.area_sync_id,
             "path": self.path,
             "name": self.name,
             "depth": self.depth,

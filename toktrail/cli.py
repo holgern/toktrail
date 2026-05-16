@@ -654,7 +654,9 @@ def area_create(
             json.dumps(
                 {
                     "area_id": area.id,
+                    "local_id": area.id,
                     "sync_id": area.sync_id,
+                    "stable_id": area.sync_id,
                     "path": area.path,
                     "name": area.name,
                     "parent_id": area.parent_id,
@@ -684,7 +686,9 @@ def area_list(
                 [
                     {
                         "area_id": area.id,
+                        "local_id": area.id,
                         "sync_id": area.sync_id,
+                        "stable_id": area.sync_id,
                         "path": area.path,
                         "name": area.name,
                         "parent_id": area.parent_id,
@@ -704,14 +708,20 @@ def area_list(
             {
                 "path": area.path,
                 "name": area.name,
-                "id": _format_int(area.id),
+                "local_id": _format_int(area.id),
+                "sync_id": area.sync_id[:8],
             }
             for area in areas
         ],
-        ["path", "name", "id"],
-        {"path": "path", "name": "name", "id": "id"},
+        ["path", "name", "local_id", "sync_id"],
+        {
+            "path": "path",
+            "name": "name",
+            "local_id": "local id",
+            "sync_id": "sync id",
+        },
         rich_output=rich_output,
-        numeric_columns={"id"},
+        numeric_columns={"local_id"},
     )
 
 
@@ -741,7 +751,9 @@ def area_use(
                 {
                     "active_area": {
                         "area_id": area.id,
+                        "local_id": area.id,
                         "sync_id": area.sync_id,
+                        "stable_id": area.sync_id,
                         "path": area.path,
                         "name": area.name,
                     }
@@ -783,7 +795,9 @@ def area_status(ctx: typer.Context, json_output: JsonOption = False) -> None:
         if active is not None:
             payload["active_area"] = {
                 "area_id": active.id,
+                "local_id": active.id,
                 "sync_id": active.sync_id,
+                "stable_id": active.sync_id,
                 "path": active.path,
                 "name": active.name,
             }

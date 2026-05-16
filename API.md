@@ -142,6 +142,8 @@ Key public models:
   `savings_usd`, `unpriced_count`
 - `Run`: includes local integer `id`, durable cross-machine `sync_id`,
   `started_at_ms` / `ended_at_ms`, persisted `scope`, and `archived_at_ms`
+- `Area`: includes local integer `id` plus aliases `area_id` and `local_id`,
+  and durable cross-machine `sync_id` plus alias `stable_id`
 - `RunScope`: persisted run membership filters (`harnesses`, `provider_ids`,
   `model_ids`, `source_session_ids`, `thinking_levels`, `agents`)
 - `SourceSessionSummary`, `SourceSessionSnapshot`, `SourceSessionDiff`
@@ -158,6 +160,9 @@ provider and model identity.
 `RunReport` now includes `by_provider` and `unconfigured_models` so callers can audit provider-level usage and missing pricing rows.
 
 All public dataclasses are frozen.
+
+Usage session/area report rows include both local and stable area metadata:
+`area_id` (local), `area_sync_id` (stable), and `area_path`.
 
 ## Errors
 

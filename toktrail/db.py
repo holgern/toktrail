@@ -67,7 +67,7 @@ from toktrail.reporting import (
     UsageSessionsReport,
 )
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 _PERIOD_SORT: dict[str, int] = {
     "5h": 0,
     "daily": 1,
@@ -284,6 +284,9 @@ def migrate(conn: sqlite3.Connection) -> None:
     if current_version == 10:
         _migrate_v10_to_v11(conn)
         current_version = 11
+    if current_version == 11:
+        _migrate_v11_to_v12(conn)
+        current_version = 12
 
     _ensure_machine_id(conn)
     conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
@@ -953,6 +956,23 @@ def _migrate_v10_to_v11(conn: sqlite3.Connection) -> None:
         ON usage_events(area_id, created_ms)
         """
     )
+
+
+def _migrate_v11_to_v12(conn: sqlite3.Connection) -> None:
+    _create_areas_table(conn)
+    rows = conn.execute("SELECT id, path FROM areas ORDER BY id").fetchall()
+    for row in rows:
+        conn.execute(
+            """
+            UPDATE areas
+            SET sync_id = ?
+            WHERE id = ?
+            """,
+            (
+                area_stable_sync_id(str(row["path"])),
+                _required_int(row["id"]),
+            ),
+        )
 
 
 def _migrate_v6_to_v7(conn: sqlite3.Connection) -> None:
@@ -1823,6 +1843,12 @@ def normalize_area_path(path: str) -> tuple[str, tuple[str, ...]]:
     return "/".join(slugs), tuple(names)
 
 
+def area_stable_sync_id(path: str) -> str:
+    normalized_path, _ = normalize_area_path(path)
+    digest = sha256(f"toktrail.area.v1:{normalized_path}".encode()).hexdigest()
+    return f"area_{digest[:32]}"
+
+
 def get_area(conn: sqlite3.Connection, area_id: int) -> Area | None:
     row = conn.execute(
         """
@@ -1940,7 +1966,7 @@ def ensure_area(
                 VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?)
                 """,
                 (
-                    uuid.uuid4().hex,
+                    area_stable_sync_id(current_path),
                     parent_id,
                     slug,
                     display_name,
@@ -4084,6 +4110,7 @@ def summarize_usage_sessions(
             asa.harness,
             asa.source_session_id,
             a.id AS area_id,
+            a.sync_id AS area_sync_id,
             a.path AS area_path,
             a.name AS area_name
         FROM area_session_assignments AS asa
@@ -4097,6 +4124,7 @@ def summarize_usage_sessions(
             str(row["source_session_id"]),
         ): (
             _required_int(row["area_id"]),
+            str(row["area_sync_id"]),
             str(row["area_path"]),
             str(row["area_name"]),
         )
@@ -4172,6 +4200,7 @@ def summarize_usage_sessions(
         by_model_list: list[ModelSummaryRow] = []
         by_model_accum: dict[tuple[str, str | None], _SessionModelAccum] = {}
         area_id: int | None = None
+        area_sync_id: str | None = None
         area_path: str | None = None
         area_name: str | None = None
         if origin_machine_id is not None:
@@ -4179,7 +4208,7 @@ def summarize_usage_sessions(
                 (origin_machine_id, harness, source_session_id)
             )
             if area_entry is not None:
-                area_id, area_path, area_name = area_entry
+                area_id, area_sync_id, area_path, area_name = area_entry
 
         for sa in atoms:
             tokens = _add_tokens(tokens, sa.atom.tokens)
@@ -4219,6 +4248,7 @@ def summarize_usage_sessions(
                 harness=harness,
                 source_session_id=source_session_id,
                 area_id=area_id,
+                area_sync_id=area_sync_id,
                 area_path=area_path,
                 area_name=area_name,
                 first_ms=first_ms,
@@ -4351,6 +4381,7 @@ def summarize_usage_areas(
             area_rows.append(
                 AreaSummaryRow(
                     area_id=None,
+                    area_sync_id=None,
                     path=None,
                     name="unassigned",
                     depth=0,
@@ -4366,6 +4397,7 @@ def summarize_usage_areas(
         area_rows.append(
             AreaSummaryRow(
                 area_id=area.id,
+                area_sync_id=area.sync_id,
                 path=area.path,
                 name=area.name,
                 depth=max(area.path.count("/") - root_depth, 0),

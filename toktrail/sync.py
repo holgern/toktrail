@@ -866,6 +866,7 @@ def _merge_areas(
         imported_area_id = int(row["id"])
         imported_sync_id = str(row["sync_id"])
         imported_path = str(row["path"])
+        canonical_sync_id = db_module.area_stable_sync_id(imported_path)
         imported_parent_id = _map_nullable_id(area_id_map, row["parent_id"])
         local_by_path = target.execute(
             """
@@ -900,6 +901,17 @@ def _merge_areas(
             (imported_sync_id,),
         ).fetchone()
 
+        if (
+            local_by_path is not None
+            and local_by_sync is not None
+            and int(local_by_path["id"]) != int(local_by_sync["id"])
+        ):
+            msg = (
+                "Area sync conflict: imported area matches one local row by path "
+                "and another by sync_id."
+            )
+            raise ValueError(msg)
+
         local = local_by_path if local_by_path is not None else local_by_sync
         if local is None:
             cursor = target.execute(
@@ -918,7 +930,7 @@ def _merge_areas(
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    imported_sync_id,
+                    canonical_sync_id,
                     imported_parent_id,
                     str(row["slug"]),
                     str(row["name"]),
@@ -963,7 +975,8 @@ def _merge_areas(
         target.execute(
             """
             UPDATE areas
-            SET parent_id = ?,
+            SET sync_id = ?,
+                parent_id = ?,
                 slug = ?,
                 name = ?,
                 archived_at_ms = ?,
@@ -972,6 +985,7 @@ def _merge_areas(
             WHERE id = ?
             """,
             (
+                canonical_sync_id,
                 merged_parent_id,
                 merged_slug,
                 merged_name,

@@ -63,6 +63,13 @@ version, and usage-event fingerprints before merging.
 Area hierarchy rows, source-session assignments, machine-scoped active areas,
 and usage-event ``area_id`` values round-trip through sync archives.
 
+Area identity uses two forms:
+
+- ``area_id`` / ``local_id`` is machine-local sqlite row identity.
+- ``sync_id`` / ``stable_id`` is durable cross-machine area identity.
+
+Use area paths (for example ``work/odoo``) as the human selector.
+
 Git sync
 --------
 

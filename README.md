@@ -337,12 +337,16 @@ Area classification:
 
 - `toktrail area use <path>` sets the active area for new source sessions on the
   current machine only.
+- `toktrail area list` shows both local numeric IDs (`local id`) and stable IDs
+  (`sync id`).
 - `toktrail area assign <path> --harness <h> --source-session-id <id>` assigns an
   area to an existing source session and backfills imported events.
 - `toktrail usage ... --area <path>` includes descendants by default.
 - Add `--area-exact` to match only the exact area path.
 - Use `--unassigned-area` to report events without any area.
 - `toktrail usage areas` shows roll-up totals by area hierarchy.
+- Area identity contract: `area_id`/`local_id` is machine-local SQLite identity,
+  while `sync_id`/`stable_id` is durable cross-machine identity.
 
 `toktrail sync import` validates archive paths, manifest checksums, schema
 version, and usage-event fingerprints before merging.

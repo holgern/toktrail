@@ -587,6 +587,7 @@ def test_usage_sessions_report_json_shape(tmp_path: Path) -> None:
     assert "harness" in session
     assert "source_session_id" in session
     assert "area_id" in session
+    assert "area_sync_id" in session
     assert "area_path" in session
     assert "area_name" in session
     assert "tokens" in session
@@ -824,5 +825,6 @@ def test_usage_areas_report_json_shape(tmp_path: Path) -> None:
 
     assert payload["type"] == "usage_areas"
     areas = cast(list[dict[str, object]], payload["areas"])
+    assert all("area_sync_id" in area_row for area_row in areas)
     assert any(area_row["path"] == "privat" for area_row in areas)
     assert any(area_row["path"] == "privat/toktrail" for area_row in areas)

@@ -502,6 +502,7 @@ def _to_public_usage_session_row(
         harness=value.harness,
         source_session_id=value.source_session_id,
         area_id=value.area_id,
+        area_sync_id=value.area_sync_id,
         area_path=value.area_path,
         area_name=value.area_name,
         first_ms=value.first_ms,
@@ -549,6 +550,7 @@ def _to_public_area_session_assignment(value: object) -> AreaSessionAssignment:
 def _to_public_area_summary_row(value: InternalAreaSummaryRow) -> AreaSummaryRow:
     return AreaSummaryRow(
         area_id=value.area_id,
+        area_sync_id=value.area_sync_id,
         path=value.path,
         name=value.name,
         depth=value.depth,
