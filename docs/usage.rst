@@ -192,6 +192,8 @@ Session usage by period
    toktrail usage sessions --last-month
    toktrail usage sessions --today --table
    toktrail usage areas --today
+   toktrail usage areas --today --direct
+   toktrail usage areas --today --leaves --percent --share-by tokens
    toktrail usage summary --area work
    toktrail usage summary --area work --area-exact
    toktrail usage summary --unassigned-area
@@ -208,18 +210,31 @@ Areas provide a persistent hierarchy for usage classification.
 
    toktrail area create work/odoo
    toktrail area use work/odoo
+   toktrail area use work/odoo --ttl 4h
    toktrail area status
    toktrail area assign work/odoo --harness opencode --source-session-id ses-1
+   toktrail area assign work/odoo --session "pc1/opencode/ses-1"
    toktrail area unassign --harness opencode --source-session-id ses-1
+   toktrail area sessions --unassigned --today
+   toktrail area bulk-assign work/odoo --unassigned --today --dry-run
+   toktrail area bulk-assign work/odoo --unassigned --today --apply
+   toktrail area detect
 
 Key behavior:
 
 - ``toktrail area use`` is machine-scoped. It affects new source sessions
   imported on that machine.
+- ``toktrail area use --ttl`` and ``--until`` set expiring active areas.
 - Existing imported sessions stay unchanged until explicitly assigned.
+- ``toktrail area assign --session`` accepts keys printed by ``usage sessions``
+  and ``area sessions``.
+- ``toktrail area assign --last`` defaults to the local machine; use
+  ``--all-machines`` to restore global latest-session behavior.
 - ``--area <path>`` includes descendants by default.
 - ``--area-exact`` matches only the exact area path.
 - ``--unassigned-area`` filters events with no area assignment.
+- ``toktrail usage areas`` exposes direct-vs-subtree totals in both JSON and
+  human output.
 
 
 Provider subscription status

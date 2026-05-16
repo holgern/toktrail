@@ -861,9 +861,15 @@ class AreaSummaryRow:
     message_count: int
     tokens: TokenBreakdown
     costs: CostTotals
+    direct_message_count: int | None = None
+    direct_tokens: TokenBreakdown | None = None
+    direct_costs: CostTotals | None = None
+    subtree_message_count: int | None = None
+    subtree_tokens: TokenBreakdown | None = None
+    subtree_costs: CostTotals | None = None
 
     def as_dict(self) -> dict[str, object]:
-        return {
+        payload: dict[str, object] = {
             "area_id": self.area_id,
             "area_sync_id": self.area_sync_id,
             "path": self.path,
@@ -873,6 +879,27 @@ class AreaSummaryRow:
             "tokens": self.tokens.as_dict(),
             "costs": self.costs.as_dict(),
         }
+        if (
+            self.direct_message_count is not None
+            and self.direct_tokens is not None
+            and self.direct_costs is not None
+        ):
+            payload["direct"] = {
+                "message_count": self.direct_message_count,
+                "tokens": self.direct_tokens.as_dict(),
+                "costs": self.direct_costs.as_dict(),
+            }
+        if (
+            self.subtree_message_count is not None
+            and self.subtree_tokens is not None
+            and self.subtree_costs is not None
+        ):
+            payload["subtree"] = {
+                "message_count": self.subtree_message_count,
+                "tokens": self.subtree_tokens.as_dict(),
+                "costs": self.subtree_costs.as_dict(),
+            }
+        return payload
 
 
 @dataclass(frozen=True)

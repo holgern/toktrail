@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from toktrail.adapters.base import SourceSessionSummary as InternalSourceSessionSummary
 from toktrail.api.models import (
+    ActiveArea,
     ActivitySummaryRow,
     Area,
     AreaSessionAssignment,
@@ -33,6 +34,9 @@ from toktrail.api.models import (
     UsageSeriesReport,
     UsageSessionRow,
     UsageSessionsReport,
+)
+from toktrail.db import (
+    ActiveAreaStatus as InternalActiveAreaStatus,
 )
 from toktrail.db import (
     Area as InternalArea,
@@ -532,6 +536,17 @@ def _to_public_area(value: object) -> Area:
     )
 
 
+def _to_public_active_area_status(value: object) -> ActiveArea:
+    assert isinstance(value, InternalActiveAreaStatus)
+    return ActiveArea(
+        machine_id=value.machine_id,
+        machine_label=value.machine_label,
+        area=None if value.area is None else _to_public_area(value.area),
+        updated_at_ms=value.updated_at_ms,
+        expires_at_ms=value.expires_at_ms,
+    )
+
+
 def _to_public_area_session_assignment(value: object) -> AreaSessionAssignment:
     assert isinstance(value, InternalAreaSessionAssignment)
     return AreaSessionAssignment(
@@ -557,6 +572,28 @@ def _to_public_area_summary_row(value: InternalAreaSummaryRow) -> AreaSummaryRow
         message_count=value.message_count,
         tokens=_to_public_token_breakdown(value.tokens),
         costs=_to_public_cost_totals(value.costs),
+        direct_message_count=value.direct_message_count,
+        direct_tokens=(
+            _to_public_token_breakdown(value.direct_tokens)
+            if value.direct_tokens is not None
+            else None
+        ),
+        direct_costs=(
+            _to_public_cost_totals(value.direct_costs)
+            if value.direct_costs is not None
+            else None
+        ),
+        subtree_message_count=value.subtree_message_count,
+        subtree_tokens=(
+            _to_public_token_breakdown(value.subtree_tokens)
+            if value.subtree_tokens is not None
+            else None
+        ),
+        subtree_costs=(
+            _to_public_cost_totals(value.subtree_costs)
+            if value.subtree_costs is not None
+            else None
+        ),
     )
 
 

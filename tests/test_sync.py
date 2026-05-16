@@ -17,6 +17,7 @@ from toktrail.db import (
     end_tracking_session,
     ensure_area,
     get_active_area,
+    get_active_area_status,
     get_local_machine_id,
     get_tracking_session,
     insert_usage_events,
@@ -449,7 +450,12 @@ def test_sync_preserves_area_tree_and_session_assignments(tmp_path: Path) -> Non
             harness="opencode",
             source_session_id="ses-area-roundtrip",
         )
-        set_active_area(conn_a, area.id, machine_id=machine_id)
+        set_active_area(
+            conn_a,
+            area.id,
+            machine_id=machine_id,
+            expires_at_ms=9_999_999_999_999,
+        )
         conn_a.commit()
     finally:
         conn_a.close()
@@ -493,6 +499,10 @@ def test_sync_preserves_area_tree_and_session_assignments(tmp_path: Path) -> Non
         ).fetchone()
         assert imported_machine is not None
         active = get_active_area(conn_b, machine_id=str(imported_machine["machine_id"]))
+        active_status = get_active_area_status(
+            conn_b,
+            machine_id=str(imported_machine["machine_id"]),
+        )
     finally:
         conn_b.close()
 
@@ -502,6 +512,7 @@ def test_sync_preserves_area_tree_and_session_assignments(tmp_path: Path) -> Non
     assert usage_row["path"] == "work/odoo"
     assert active is not None
     assert active.path == "work/odoo"
+    assert active_status.expires_at_ms == 9_999_999_999_999
 
 
 def test_sync_usage_events_keep_area_after_import(tmp_path: Path) -> None:

@@ -33,6 +33,7 @@ from toktrail.db import (
     insert_usage_events,
     list_tracking_sessions,
     migrate,
+    move_area_path,
     normalize_area_path,
     record_imported_sync_archive,
     set_active_area,
@@ -407,6 +408,37 @@ def test_insert_usage_events_keeps_existing_session_area_after_active_area_chang
     assert [_row["area_id"] for _row in rows] == [first_area.id, first_area.id]
 
 
+def test_expired_active_area_does_not_assign_new_source_session(tmp_path: Path) -> None:
+    conn = connect(tmp_path / "toktrail.db")
+    try:
+        migrate(conn)
+        area = ensure_area(conn, "work/odoo")
+        now_ms = int(time() * 1000)
+        set_active_area(conn, area.id, expires_at_ms=now_ms - 1_000)
+        insert_usage_events(
+            conn,
+            None,
+            [
+                make_usage_event(
+                    dedup_suffix="expired1",
+                    source_session_id="ses-expired",
+                )
+            ],
+        )
+        row = conn.execute(
+            """
+            SELECT area_id
+            FROM usage_events
+            WHERE source_session_id = ?
+            """,
+            ("ses-expired",),
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row is not None
+    assert row["area_id"] is None
+
+
 def test_assign_area_to_existing_session_backfills_usage_events(tmp_path: Path) -> None:
     conn = connect(tmp_path / "toktrail.db")
     try:
@@ -644,6 +676,65 @@ def test_usage_areas_rolls_up_parent_and_leaf(tmp_path: Path) -> None:
         rows_by_path["privat"].tokens.total
         == rows_by_path["privat/toktrail"].tokens.total
     )
+    assert rows_by_path["work"].direct_tokens is not None
+    assert rows_by_path["work"].subtree_tokens is not None
+    assert rows_by_path["work"].direct_tokens.total == 0
+    assert (
+        rows_by_path["work"].subtree_tokens.total
+        == rows_by_path["work/odoo"].subtree_tokens.total
+    )
+
+
+def test_area_move_reassigns_sessions_and_usage_events(tmp_path: Path) -> None:
+    conn = connect(tmp_path / "toktrail.db")
+    try:
+        migrate(conn)
+        old = ensure_area(conn, "privat/toktrail")
+        local_machine_id = get_local_machine_id(conn)
+        insert_usage_events(
+            conn,
+            None,
+            [make_usage_event(dedup_suffix="move1", source_session_id="ses-move")],
+        )
+        assign_area_to_source_session(
+            conn,
+            area_id=old.id,
+            origin_machine_id=local_machine_id,
+            harness="opencode",
+            source_session_id="ses-move",
+        )
+        moved_assignments, moved_events = move_area_path(
+            conn,
+            "privat/toktrail",
+            "private/toktrail",
+        )
+        new_area = get_area_by_path(conn, "private/toktrail")
+        assignment_row = conn.execute(
+            """
+            SELECT area_id
+            FROM area_session_assignments
+            WHERE origin_machine_id = ?
+              AND harness = 'opencode'
+              AND source_session_id = 'ses-move'
+            """,
+            (local_machine_id,),
+        ).fetchone()
+        event_row = conn.execute(
+            """
+            SELECT area_id
+            FROM usage_events
+            WHERE source_session_id = 'ses-move'
+            """,
+        ).fetchone()
+    finally:
+        conn.close()
+    assert moved_assignments == 1
+    assert moved_events == 1
+    assert new_area is not None
+    assert assignment_row is not None
+    assert event_row is not None
+    assert assignment_row["area_id"] == new_area.id
+    assert event_row["area_id"] == new_area.id
 
 
 def test_sync_import_registry_records_archive_hashes(tmp_path: Path) -> None:

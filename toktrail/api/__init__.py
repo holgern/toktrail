@@ -12,13 +12,19 @@ from toktrail.api.config import (
 )
 from toktrail.api.analysis import session_cache_analysis
 from toktrail.api.areas import (
+    assign_area_to_session_key,
     assign_area_to_session,
+    bulk_assign_area,
     clear_active_area,
     create_area,
     get_active_area,
+    get_active_area_status,
     list_areas,
+    list_area_sessions,
+    resolve_area_selector,
     set_active_area,
     unassign_area_from_session,
+    usage_area_tree_report,
 )
 from toktrail.api.environment import prepare_environment
 from toktrail.api.events import record_usage_event, record_usage_events
@@ -36,6 +42,7 @@ from toktrail.api.machines import (
     set_machine_name,
 )
 from toktrail.api.models import (
+    ActiveArea,
     ActivitySummaryRow,
     Area,
     AreaSessionAssignment,
@@ -134,6 +141,7 @@ from toktrail.api.sync import (
 from toktrail.api.workflow import finalize_manual_run, prepare_manual_run
 
 __all__ = [
+    "ActiveArea",
     "ActivitySummaryRow",
     "Area",
     "AreaSessionAssignment",
@@ -182,6 +190,8 @@ __all__ = [
     "UsageSessionRow",
     "UsageSessionsReport",
     "assign_area_to_session",
+    "assign_area_to_session_key",
+    "bulk_assign_area",
     "archive_run",
     "capture_source_snapshot",
     "clear_active_area",
@@ -199,12 +209,14 @@ __all__ = [
     "diff_source_snapshots",
     "finalize_manual_run",
     "get_active_area",
+    "get_active_area_status",
     "get_active_run",
     "get_harness_definition",
     "get_run",
     "import_configured_usage",
     "import_usage",
     "list_areas",
+    "list_area_sessions",
     "list_machines",
     "init_config",
     "init_state",
@@ -247,4 +259,6 @@ __all__ = [
     "usage_sessions_report",
     "usage_runs_report",
     "unassign_area_from_session",
+    "resolve_area_selector",
+    "usage_area_tree_report",
 ]

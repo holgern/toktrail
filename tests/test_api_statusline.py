@@ -6,7 +6,14 @@ from pathlib import Path
 
 from toktrail.api import statusline_report
 from toktrail.cli import _should_skip_statusline_auto_refresh
-from toktrail.db import connect, create_tracking_session, insert_usage_events, migrate
+from toktrail.db import (
+    connect,
+    create_tracking_session,
+    ensure_area,
+    insert_usage_events,
+    migrate,
+    set_active_area,
+)
 from toktrail.models import RunScope, TokenBreakdown, UsageEvent
 from toktrail.statusline import (
     StatuslineRequest,
@@ -79,6 +86,26 @@ def test_statusline_report_selects_latest_source_session(tmp_path: Path) -> None
     assert report.model_id == "gpt-5.3-codex"
     assert report.tokens.total == 2_300
     assert "codex" in report.line
+
+
+def test_statusline_report_exposes_active_area_path(tmp_path: Path) -> None:
+    state_db = tmp_path / "toktrail.db"
+    conn = connect(state_db)
+    try:
+        migrate(conn)
+        area = ensure_area(conn, "work/odoo")
+        set_active_area(conn, area.id)
+        insert_usage_events(
+            conn,
+            None,
+            [make_statusline_event("area", created_ms=2_000)],
+        )
+    finally:
+        conn.close()
+
+    report = statusline_report(state_db, now_ms=2_500, elements=("area", "tokens"))
+    assert report.area_path == "work/odoo"
+    assert "area work/odoo" in report.line
 
 
 def test_statusline_report_prefers_explicit_source_session(tmp_path: Path) -> None:

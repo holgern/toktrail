@@ -6,10 +6,18 @@ from pathlib import Path
 from toktrail import db as db_module
 from toktrail.api._common import _open_state_db
 from toktrail.api._conversions import (
+    _to_public_active_area_status,
     _to_public_area,
     _to_public_area_session_assignment,
 )
-from toktrail.api.models import Area, AreaSessionAssignment
+from toktrail.api.models import (
+    ActiveArea,
+    Area,
+    AreaSessionAssignment,
+    UsageAreasReport,
+    UsageSessionsReport,
+)
+from toktrail.api.reports import usage_areas_report, usage_sessions_report
 
 
 def create_area(
@@ -54,11 +62,22 @@ def get_active_area(db_path: Path | None = None) -> Area | None:
     return _to_public_area(area)
 
 
+def get_active_area_status(db_path: Path | None = None) -> ActiveArea:
+    conn, _ = _open_state_db(db_path)
+    try:
+        db_module.migrate(conn)
+        status = db_module.get_active_area_status(conn)
+    finally:
+        conn.close()
+    return _to_public_active_area_status(status)
+
+
 def set_active_area(
     path: str,
     *,
     db_path: Path | None = None,
     create: bool = True,
+    expires_at_ms: int | None = None,
 ) -> Area:
     conn, _ = _open_state_db(db_path)
     try:
@@ -69,7 +88,7 @@ def set_active_area(
                 msg = f"Area not found: {path}"
                 raise ValueError(msg)
             area = db_module.ensure_area(conn, path)
-        db_module.set_active_area(conn, area.id)
+        db_module.set_active_area(conn, area.id, expires_at_ms=expires_at_ms)
         conn.commit()
     finally:
         conn.close()
@@ -121,6 +140,22 @@ def _resolve_assignment_machine_id(
         )
         raise ValueError(msg)
     return str(rows[0]["origin_machine_id"])
+
+
+def _resolve_session_key(
+    conn: sqlite3.Connection,
+    session_key: str,
+) -> tuple[str, str, str]:
+    parts = session_key.split("/", 2)
+    if len(parts) != 3:
+        msg = (
+            "Session key must be machine/harness/source_session_id, "
+            f"got {session_key!r}."
+        )
+        raise ValueError(msg)
+    machine_selector, harness, source_session_id = parts
+    machine_id = db_module.resolve_machine_selector(conn, machine_selector).machine_id
+    return machine_id, harness.strip(), source_session_id.strip()
 
 
 def assign_area_to_session(
@@ -181,12 +216,156 @@ def unassign_area_from_session(
         conn.close()
 
 
+def resolve_area_selector(
+    path_or_stable_id: str,
+    *,
+    db_path: Path | None = None,
+) -> Area:
+    conn, _ = _open_state_db(db_path)
+    try:
+        db_module.migrate(conn)
+        area = db_module.resolve_area_selector(conn, path_or_stable_id)
+    finally:
+        conn.close()
+    return _to_public_area(area)
+
+
+def assign_area_to_session_key(
+    path: str,
+    session_key: str,
+    *,
+    db_path: Path | None = None,
+) -> AreaSessionAssignment:
+    conn, _ = _open_state_db(db_path)
+    try:
+        db_module.migrate(conn)
+        area = db_module.ensure_area(conn, path)
+        machine_id, harness, source_session_id = _resolve_session_key(conn, session_key)
+        assignment = db_module.assign_area_to_source_session(
+            conn,
+            area_id=area.id,
+            origin_machine_id=machine_id,
+            harness=harness,
+            source_session_id=source_session_id,
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return _to_public_area_session_assignment(assignment)
+
+
+def list_area_sessions(
+    *,
+    db_path: Path | None = None,
+    area: str | None = None,
+    area_exact: bool = False,
+    unassigned: bool = False,
+    harness: str | None = None,
+    machine_id: str | None = None,
+    period: str | None = None,
+    limit: int | None = 20,
+    order: str = "desc",
+) -> UsageSessionsReport:
+    return usage_sessions_report(
+        db_path,
+        area=area,
+        area_exact=area_exact,
+        unassigned_area=unassigned,
+        harness=harness,
+        machine_id=machine_id,
+        period=period,
+        limit=limit,
+        order=order,
+    )
+
+
+def bulk_assign_area(
+    path: str,
+    *,
+    db_path: Path | None = None,
+    area_filter: str | None = None,
+    area_exact: bool = False,
+    unassigned: bool = True,
+    harness: str | None = None,
+    machine_id: str | None = None,
+    period: str | None = None,
+    apply_changes: bool = False,
+    overwrite: bool = False,
+) -> dict[str, int]:
+    report = usage_sessions_report(
+        db_path,
+        area=area_filter,
+        area_exact=area_exact,
+        unassigned_area=unassigned,
+        harness=harness,
+        machine_id=machine_id,
+        period=period,
+        limit=None,
+        order="desc",
+    )
+    candidates = report.sessions
+    assigned = 0
+    skipped = 0
+    if not apply_changes:
+        return {"matched": len(candidates), "assigned": 0, "skipped": len(candidates)}
+    conn, _ = _open_state_db(db_path)
+    try:
+        db_module.migrate(conn)
+        area = db_module.ensure_area(conn, path)
+        for session in candidates:
+            if session.origin_machine_id is None:
+                skipped += 1
+                continue
+            if session.area_id is not None and not overwrite:
+                skipped += 1
+                continue
+            db_module.assign_area_to_source_session(
+                conn,
+                area_id=area.id,
+                origin_machine_id=session.origin_machine_id,
+                harness=session.harness,
+                source_session_id=session.source_session_id,
+            )
+            assigned += 1
+        conn.commit()
+    finally:
+        conn.close()
+    return {"matched": len(candidates), "assigned": assigned, "skipped": skipped}
+
+
+def usage_area_tree_report(
+    *,
+    db_path: Path | None = None,
+    area: str | None = None,
+    area_exact: bool = False,
+    unassigned_area: bool = False,
+    period: str | None = None,
+    harness: str | None = None,
+    machine_id: str | None = None,
+) -> UsageAreasReport:
+    return usage_areas_report(
+        db_path,
+        area=area,
+        area_exact=area_exact,
+        unassigned_area=unassigned_area,
+        period=period,
+        harness=harness,
+        machine_id=machine_id,
+    )
+
+
 __all__ = [
+    "assign_area_to_session_key",
     "assign_area_to_session",
+    "bulk_assign_area",
     "clear_active_area",
     "create_area",
     "get_active_area",
+    "get_active_area_status",
     "list_areas",
+    "list_area_sessions",
+    "resolve_area_selector",
     "set_active_area",
     "unassign_area_from_session",
+    "usage_area_tree_report",
 ]

@@ -213,12 +213,21 @@ toktrail usage runs --last --limit 5
 toktrail usage runs --archived
 toktrail area create work/odoo
 toktrail area use work/odoo
+toktrail area use work/odoo --ttl 4h
 toktrail area status
 toktrail area assign work/odoo --harness opencode --source-session-id ses-1
+toktrail area assign work/odoo --session "pc1/opencode/ses-1"
+toktrail area sessions --unassigned --today
+toktrail area bulk-assign work/odoo --unassigned --today --dry-run
+toktrail area bulk-assign work/odoo --unassigned --today --apply
+toktrail area detect
+toktrail area bind-cwd work/odoo --git-root
 toktrail usage today --area work
 toktrail usage today --area work --area-exact
 toktrail usage today --unassigned-area
 toktrail usage areas --today
+toktrail usage areas --today --direct
+toktrail usage areas --today --leaves --percent --share-by tokens
 toktrail subscriptions status
 toktrail subscriptions status --timezone Europe/Berlin
 toktrail subscriptions status --utc
@@ -264,7 +273,7 @@ refresh = "auto"
 session = "auto"
 max_width = 120
 active_session_window_minutes = 30
-elements = ["harness", "model", "tokens", "cached", "cost", "quota", "burn", "unpriced"]
+elements = ["harness", "area", "model", "tokens", "cached", "cost", "quota", "burn", "unpriced"]
 
 [statusline.cache]
 output_cache_secs = 2
@@ -337,14 +346,25 @@ Area classification:
 
 - `toktrail area use <path>` sets the active area for new source sessions on the
   current machine only.
-- `toktrail area list` shows both local numeric IDs (`local id`) and stable IDs
-  (`sync id`).
+- `toktrail area use <path> --ttl <duration>` or `--until <iso-datetime>` sets an
+  expiring active area.
+- `toktrail area list` defaults to a tree view by path; use
+  `toktrail area list --verbose` for stable/local IDs.
 - `toktrail area assign <path> --harness <h> --source-session-id <id>` assigns an
   area to an existing source session and backfills imported events.
+- `toktrail area assign <path> --session <machine/harness/source-session-id>`
+  assigns from printed session keys.
+- `toktrail area assign <path> --last` defaults to the local machine. Use
+  `--all-machines` for global newest-session behavior.
+- `toktrail area sessions` lists source sessions with area metadata; use
+  `--unassigned` to find cleanup candidates.
+- `toktrail area bulk-assign` supports dry-run and apply flows for historical
+  repair.
 - `toktrail usage ... --area <path>` includes descendants by default.
 - Add `--area-exact` to match only the exact area path.
 - Use `--unassigned-area` to report events without any area.
-- `toktrail usage areas` shows roll-up totals by area hierarchy.
+- `toktrail usage areas` reports subtree totals and explicit direct-vs-subtree
+  columns; use `--direct`, `--subtree`, `--leaves`, and `--percent`.
 - Area identity contract: `area_id`/`local_id` is machine-local SQLite identity,
   while `sync_id`/`stable_id` is durable cross-machine identity.
 

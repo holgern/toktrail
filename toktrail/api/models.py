@@ -608,6 +608,24 @@ class AreaSessionAssignment:
 
 
 @dataclass(frozen=True)
+class ActiveArea:
+    machine_id: str
+    machine_label: str
+    area: Area | None
+    updated_at_ms: int | None
+    expires_at_ms: int | None
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "machine_id": self.machine_id,
+            "machine_label": self.machine_label,
+            "area": None if self.area is None else self.area.as_dict(),
+            "updated_at_ms": self.updated_at_ms,
+            "expires_at_ms": self.expires_at_ms,
+        }
+
+
+@dataclass(frozen=True)
 class MachineSummaryRow:
     machine_id: str | None
     machine_name: str | None
@@ -954,6 +972,7 @@ class StatuslineReport:
     context: StatuslineContext | None = None
     cache: StatuslineCache | None = None
     stale_seconds: int | None = None
+    area_path: str | None = None
 
     @property
     def unpriced_count(self) -> int:
@@ -975,6 +994,7 @@ class StatuslineReport:
             "tokens": self.tokens.as_dict(),
             "costs": self.costs.as_dict(),
             "stale_seconds": self.stale_seconds,
+            "area_path": self.area_path,
         }
         if self.quota is not None:
             payload["quota"] = self.quota.as_dict()
@@ -1456,9 +1476,15 @@ class AreaSummaryRow:
     message_count: int
     tokens: TokenBreakdown
     costs: CostTotals
+    direct_message_count: int | None = None
+    direct_tokens: TokenBreakdown | None = None
+    direct_costs: CostTotals | None = None
+    subtree_message_count: int | None = None
+    subtree_tokens: TokenBreakdown | None = None
+    subtree_costs: CostTotals | None = None
 
     def as_dict(self) -> dict[str, object]:
-        return {
+        payload: dict[str, object] = {
             "area_id": self.area_id,
             "area_sync_id": self.area_sync_id,
             "path": self.path,
@@ -1468,6 +1494,27 @@ class AreaSummaryRow:
             "tokens": self.tokens.as_dict(),
             "costs": self.costs.as_dict(),
         }
+        if (
+            self.direct_message_count is not None
+            and self.direct_tokens is not None
+            and self.direct_costs is not None
+        ):
+            payload["direct"] = {
+                "message_count": self.direct_message_count,
+                "tokens": self.direct_tokens.as_dict(),
+                "costs": self.direct_costs.as_dict(),
+            }
+        if (
+            self.subtree_message_count is not None
+            and self.subtree_tokens is not None
+            and self.subtree_costs is not None
+        ):
+            payload["subtree"] = {
+                "message_count": self.subtree_message_count,
+                "tokens": self.subtree_tokens.as_dict(),
+                "costs": self.subtree_costs.as_dict(),
+            }
+        return payload
 
 
 @dataclass(frozen=True)
@@ -1491,6 +1538,7 @@ class UsageAreasReport:
 
 
 __all__ = [
+    "ActiveArea",
     "Area",
     "AreaSessionAssignment",
     "AreaSummaryRow",

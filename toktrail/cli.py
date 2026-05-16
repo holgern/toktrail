@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import datetime
+import fnmatch
 import json
 import os
+import re
 import shlex
 import sqlite3
 import subprocess
@@ -62,6 +64,7 @@ from toktrail.config import (
 from toktrail.db import (
     InsertUsageResult,
     apply_local_machine_config,
+    archive_area_path,
     archive_tracking_session,
     assign_area_to_source_session,
     clear_skipped_sources,
@@ -69,7 +72,7 @@ from toktrail.db import (
     create_tracking_session,
     end_tracking_session,
     ensure_area,
-    get_active_area,
+    get_active_area_status,
     get_active_tracking_session,
     get_area_by_path,
     get_local_machine_id,
@@ -79,7 +82,10 @@ from toktrail.db import (
     list_areas,
     list_machines,
     list_skipped_sources,
+    merge_area_paths,
     migrate,
+    move_area_path,
+    normalize_area_path,
     resolve_machine_selector,
     set_active_area,
     set_local_machine_name,
@@ -674,10 +680,12 @@ def area_list(
     ctx: typer.Context,
     json_output: JsonOption = False,
     rich_output: RichOption = False,
+    verbose: Annotated[bool, typer.Option("--verbose")] = False,
 ) -> None:
     conn = _open_toktrail_connection(ctx)
     try:
         areas = list_areas(conn)
+        active_status = get_active_area_status(conn)
     finally:
         conn.close()
     if json_output:
@@ -703,25 +711,35 @@ def area_list(
     if not areas:
         typer.echo("No areas defined.")
         return
+    active_area_id = active_status.area.id if active_status.area is not None else None
+    if not verbose:
+        typer.echo("area")
+        for area in areas:
+            depth = area.path.count("/")
+            suffix = " *" if active_area_id == area.id else ""
+            typer.echo(f"{'  ' * depth}{area.path}{suffix}")
+        return
     _print_table(
         [
             {
-                "path": area.path,
-                "name": area.name,
+                "area": f"{'  ' * area.path.count('/')}{area.path}",
+                "stable_id": area.sync_id[:12],
                 "local_id": _format_int(area.id),
-                "sync_id": area.sync_id[:8],
+                "active": "*" if active_area_id == area.id else "",
             }
             for area in areas
         ],
-        ["path", "name", "local_id", "sync_id"],
+        ["area", "stable_id", "local_id", "active"],
         {
-            "path": "path",
-            "name": "name",
+            "area": "area",
+            "stable_id": "stable id",
             "local_id": "local id",
-            "sync_id": "sync id",
+            "active": "active",
         },
         rich_output=rich_output,
         numeric_columns={"local_id"},
+        wrap_columns={"area"},
+        max_widths={"area": 52},
     )
 
 
@@ -730,8 +748,25 @@ def area_use(
     ctx: typer.Context,
     path: Annotated[str, typer.Argument(help="Area path.")],
     create: Annotated[bool, typer.Option("--create/--no-create")] = True,
+    ttl: Annotated[
+        str | None,
+        typer.Option(
+            "--ttl",
+            help="Auto-expire active area after duration like 30m, 4h, or 1d.",
+        ),
+    ] = None,
+    until: Annotated[
+        str | None,
+        typer.Option(
+            "--until",
+            help="Auto-expire active area at ISO local/UTC timestamp.",
+        ),
+    ] = None,
     json_output: JsonOption = False,
 ) -> None:
+    if ttl is not None and until is not None:
+        _exit_with_error("Use either --ttl or --until, not both.")
+    expires_at_ms = _parse_area_expiry_or_exit(ttl=ttl, until=until)
     conn = _open_toktrail_connection(ctx)
     try:
         area = get_area_by_path(conn, path)
@@ -739,7 +774,7 @@ def area_use(
             if not create:
                 _exit_with_error(f"Area not found: {path}")
             area = ensure_area(conn, path)
-        set_active_area(conn, area.id)
+        set_active_area(conn, area.id, expires_at_ms=expires_at_ms)
         conn.commit()
     except ValueError as exc:
         _exit_with_error(str(exc))
@@ -756,6 +791,7 @@ def area_use(
                         "stable_id": area.sync_id,
                         "path": area.path,
                         "name": area.name,
+                        "expires_at_ms": expires_at_ms,
                     }
                 },
                 indent=2,
@@ -763,6 +799,13 @@ def area_use(
         )
         return
     typer.echo(f"Active area: {area.path}")
+    typer.echo(
+        "New source sessions imported on this machine will be assigned to this area."
+    )
+    typer.echo(
+        "Existing imported sessions are unchanged; use "
+        "`toktrail area assign --last` to move the latest session."
+    )
 
 
 @area_app.command("clear")
@@ -773,23 +816,26 @@ def area_clear(ctx: typer.Context) -> None:
         conn.commit()
     finally:
         conn.close()
-    typer.echo("Cleared active area.")
+    typer.echo(
+        "Cleared active area. New source sessions will be unassigned "
+        "until another area is selected."
+    )
 
 
 @area_app.command("status")
 def area_status(ctx: typer.Context, json_output: JsonOption = False) -> None:
     conn = _open_toktrail_connection(ctx)
     try:
-        machine_id = get_local_machine_id(conn)
-        machine = get_machine(conn, machine_id)
-        active = get_active_area(conn, machine_id=machine_id)
+        status = get_active_area_status(conn)
     finally:
         conn.close()
-    machine_label = machine.label if machine is not None else machine_id[:8]
+    active = status.area
     if json_output:
         payload: dict[str, object] = {
-            "machine_id": machine_id,
-            "machine_label": machine_label,
+            "machine_id": status.machine_id,
+            "machine_label": status.machine_label,
+            "updated_at_ms": status.updated_at_ms,
+            "expires_at_ms": status.expires_at_ms,
             "active_area": None,
         }
         if active is not None:
@@ -804,15 +850,28 @@ def area_status(ctx: typer.Context, json_output: JsonOption = False) -> None:
         typer.echo(json.dumps(payload, indent=2))
         return
     if active is None:
-        typer.echo(f"Active area ({machine_label}): none")
+        typer.echo(f"Active area ({status.machine_label}): none")
         return
-    typer.echo(f"Active area ({machine_label}): {active.path}")
+    if status.expires_at_ms is None:
+        typer.echo(f"Active area ({status.machine_label}): {active.path}")
+        return
+    expiry_text = format_epoch_ms_compact(status.expires_at_ms, utc=False)
+    typer.echo(
+        f"Active area ({status.machine_label}): {active.path}, expires {expiry_text}"
+    )
 
 
 @area_app.command("assign")
 def area_assign(
     ctx: typer.Context,
     path: Annotated[str, typer.Argument(help="Area path.")],
+    session: Annotated[
+        str | None,
+        typer.Option(
+            "--session",
+            help="Session key machine/harness/source_session_id from usage sessions.",
+        ),
+    ] = None,
     harness: HarnessOption = None,
     source_session_id: Annotated[
         str | None,
@@ -820,21 +879,43 @@ def area_assign(
     ] = None,
     machine: MachineOption = None,
     last: LastOption = False,
+    all_machines: Annotated[bool, typer.Option("--all-machines")] = False,
 ) -> None:
+    if all_machines and machine is not None:
+        _exit_with_error("Use either --machine or --all-machines, not both.")
+    if session is not None and (
+        harness is not None or source_session_id is not None or last
+    ):
+        _exit_with_error(
+            "Use --session by itself, or use --harness/--source-session-id, or --last."
+        )
     conn = _open_toktrail_connection(ctx)
     try:
         area = ensure_area(conn, path)
-        if last:
+        if session is not None:
+            selected_machine_id, selected_harness, selected_source_session = (
+                _resolve_session_key_or_exit(conn, session)
+            )
+        elif last:
             if source_session_id is not None:
                 _exit_with_error("Use either --last or --source-session-id, not both.")
             from toktrail.db import summarize_usage_sessions
             from toktrail.reporting import UsageSessionsFilter
 
             costing_config = _load_costing_config_or_exit(ctx)
+            default_machine_id = (
+                None
+                if all_machines
+                else (
+                    _resolve_machine_id_or_exit(conn, machine)
+                    if machine is not None
+                    else get_local_machine_id(conn)
+                )
+            )
             latest = summarize_usage_sessions(
                 conn,
                 UsageSessionsFilter(
-                    machine_id=_resolve_machine_id_or_exit(conn, machine),
+                    machine_id=default_machine_id,
                     harness=harness,
                     limit=1,
                     order="desc",
@@ -850,7 +931,8 @@ def area_assign(
         else:
             if harness is None or source_session_id is None:
                 _exit_with_error(
-                    "Provide --harness and --source-session-id, or use --last."
+                    "Provide --harness and --source-session-id, "
+                    "or use --last or --session."
                 )
             selected_machine_id = _resolve_assignment_machine_id_or_exit(
                 conn,
@@ -883,26 +965,49 @@ def area_assign(
 @area_app.command("unassign")
 def area_unassign(
     ctx: typer.Context,
-    harness: Annotated[str, typer.Option("--harness")],
+    session: Annotated[
+        str | None,
+        typer.Option(
+            "--session",
+            help="Session key machine/harness/source_session_id from usage sessions.",
+        ),
+    ] = None,
+    harness: HarnessOption = None,
     source_session_id: Annotated[
-        str,
+        str | None,
         typer.Option("--source-session-id", "--source-session"),
-    ],
+    ] = None,
     machine: MachineOption = None,
 ) -> None:
     conn = _open_toktrail_connection(ctx)
     try:
-        machine_id = _resolve_assignment_machine_id_or_exit(
-            conn,
-            harness=harness,
-            source_session_id=source_session_id,
-            machine=machine,
-        )
+        if session is not None:
+            if harness is not None or source_session_id is not None:
+                _exit_with_error(
+                    "Use --session by itself, or use --harness "
+                    "with --source-session-id."
+                )
+            machine_id, resolved_harness, resolved_source_session = (
+                _resolve_session_key_or_exit(conn, session)
+            )
+        else:
+            if harness is None or source_session_id is None:
+                _exit_with_error(
+                    "Provide --harness and --source-session-id, or use --session."
+                )
+            machine_id = _resolve_assignment_machine_id_or_exit(
+                conn,
+                harness=harness,
+                source_session_id=source_session_id,
+                machine=machine,
+            )
+            resolved_harness = harness
+            resolved_source_session = source_session_id
         unassign_area_from_source_session(
             conn,
             origin_machine_id=machine_id,
-            harness=harness,
-            source_session_id=source_session_id,
+            harness=resolved_harness,
+            source_session_id=resolved_source_session,
         )
         conn.commit()
     except ValueError as exc:
@@ -910,7 +1015,371 @@ def area_unassign(
     finally:
         conn.close()
     typer.echo(
-        f"Unassigned area from {harness}/{source_session_id} ({machine_id[:8]})."
+        "Unassigned area from "
+        f"{resolved_harness}/{resolved_source_session} ({machine_id[:8]})."
+    )
+
+
+@area_app.command("sessions")
+def area_sessions(
+    ctx: typer.Context,
+    path: Annotated[
+        str | None,
+        typer.Argument(help="Area path.", show_default=False),
+    ] = None,
+    exact: Annotated[bool, typer.Option("--exact")] = False,
+    unassigned: Annotated[bool, typer.Option("--unassigned")] = False,
+    recent: Annotated[int, typer.Option("--recent")] = 20,
+    harness: HarnessOption = None,
+    machine: MachineOption = None,
+    today: Annotated[bool, typer.Option("--today")] = False,
+    yesterday: Annotated[bool, typer.Option("--yesterday")] = False,
+    this_week: Annotated[bool, typer.Option("--this-week")] = False,
+    last_week: Annotated[bool, typer.Option("--last-week")] = False,
+    this_month: Annotated[bool, typer.Option("--this-month")] = False,
+    last_month: Annotated[bool, typer.Option("--last-month")] = False,
+    period: UsagePeriodOption = None,
+    timezone_name: TimezoneOption = None,
+    utc: UtcOption = False,
+    order: Annotated[str, typer.Option("--order")] = "desc",
+    json_output: JsonOption = False,
+    rich_output: RichOption = False,
+) -> None:
+    if path is not None and unassigned:
+        _exit_with_error("Use either an area path or --unassigned, not both.")
+    if recent < 1:
+        _exit_with_error("--recent must be positive.")
+    selected_period = _resolve_usage_session_period_or_exit(
+        period=period,
+        today=today,
+        yesterday=yesterday,
+        this_week=this_week,
+        last_week=last_week,
+        this_month=this_month,
+        last_month=last_month,
+    )
+    try:
+        resolved_range = resolve_time_range(
+            period=selected_period,
+            timezone_name=timezone_name,
+            utc=utc,
+        )
+    except ValueError as exc:
+        _exit_with_error(str(exc))
+
+    from toktrail.db import summarize_usage_sessions
+    from toktrail.reporting import UsageSessionsFilter
+
+    conn = _open_toktrail_connection(ctx)
+    try:
+        machine_id = _resolve_machine_id_or_exit(conn, machine)
+        report = summarize_usage_sessions(
+            conn,
+            UsageSessionsFilter(
+                machine_id=machine_id,
+                harness=harness,
+                area=path,
+                area_exact=exact,
+                unassigned_area=unassigned,
+                since_ms=resolved_range.since_ms,
+                until_ms=resolved_range.until_ms,
+                limit=recent,
+                order=order,
+            ),
+            costing_config=_load_costing_config_or_exit(ctx),
+        )
+    finally:
+        conn.close()
+    if json_output:
+        payload = report.as_dict()
+        filters = payload.get("filters")
+        if isinstance(filters, dict) and resolved_range.period is not None:
+            filters["period"] = resolved_range.period
+        typer.echo(json.dumps(payload, indent=2))
+        return
+    _print_usage_sessions(
+        report,
+        compact=True,
+        breakdown=False,
+        utc=utc,
+        rich_output=rich_output,
+        table=True,
+        period=resolved_range.period,
+    )
+
+
+@area_app.command("detect")
+def area_detect(
+    ctx: typer.Context,
+    json_output: JsonOption = False,
+) -> None:
+    loaded = _load_resolved_toktrail_config_or_exit(ctx)
+    rules = loaded.config.areas.rules
+    cwd = Path.cwd()
+    cwd_text = str(cwd)
+    git_remote = _git_remote_origin(cwd)
+    matched: list[tuple[int, str, str]] = []
+    for index, rule in enumerate(rules):
+        for pattern in rule.cwd_globs:
+            expanded = str(Path(pattern).expanduser())
+            if fnmatch.fnmatch(cwd_text, expanded):
+                matched.append((rule.priority, rule.area, f"cwd matched {pattern}"))
+                break
+        else:
+            for remote_pattern in rule.git_remotes:
+                if git_remote and fnmatch.fnmatch(git_remote, remote_pattern):
+                    matched.append(
+                        (
+                            rule.priority,
+                            rule.area,
+                            f"git remote matched {remote_pattern}",
+                        )
+                    )
+                    break
+        if matched and matched[-1][1] == rule.area:
+            matched[-1] = (
+                matched[-1][0],
+                matched[-1][1],
+                f"{matched[-1][2]} (rule {index + 1})",
+            )
+    detected_area: str | None = None
+    reason: str | None = None
+    if matched:
+        matched.sort(key=lambda item: (item[0], item[1]), reverse=True)
+        _, detected_area, reason = matched[0]
+    conn = _open_toktrail_connection(ctx)
+    try:
+        active = get_active_area_status(conn)
+    finally:
+        conn.close()
+    active_path = active.area.path if active.area is not None else None
+    if json_output:
+        typer.echo(
+            json.dumps(
+                {
+                    "cwd": cwd_text,
+                    "git_remote": git_remote,
+                    "detected_area": detected_area,
+                    "reason": reason,
+                    "active_area": active_path,
+                    "suggested_command": (
+                        f"toktrail area use {detected_area}"
+                        if detected_area and detected_area != active_path
+                        else None
+                    ),
+                },
+                indent=2,
+            )
+        )
+        return
+    if detected_area is None:
+        typer.echo("Detected area: none")
+        return
+    typer.echo(f"Detected area: {detected_area}")
+    if reason is not None:
+        typer.echo(f"Reason: {reason}")
+    typer.echo(f"Active area: {active_path or 'none'}")
+    if detected_area != active_path:
+        typer.echo(f"Suggestion: toktrail area use {detected_area}")
+
+
+@area_app.command("bind-cwd")
+def area_bind_cwd(
+    ctx: typer.Context,
+    path: Annotated[str, typer.Argument(help="Area path.")],
+    recursive: Annotated[bool, typer.Option("--recursive/--no-recursive")] = True,
+    git_root: Annotated[bool, typer.Option("--git-root")] = False,
+    dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
+) -> None:
+    base = _resolve_git_root(Path.cwd()) if git_root else Path.cwd()
+    if base is None:
+        _exit_with_error("Could not resolve git root.")
+    glob = f"{base.expanduser()}/**" if recursive else str(base.expanduser())
+    config_path = _resolve_config_path(ctx)
+    rendered = (
+        "\n[areas]\n"
+        "auto_detect = true\n"
+        "warn_on_mismatch = true\n\n"
+        "[[areas.rules]]\n"
+        f'area = "{path}"\n'
+        f'cwd_globs = ["{glob}"]\n'
+        "priority = 100\n"
+    )
+    if dry_run:
+        typer.echo(rendered.strip())
+        return
+    existing = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
+    updated = existing.rstrip() + ("\n\n" if existing.strip() else "") + rendered
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(updated, encoding="utf-8")
+    typer.echo(f"Added cwd rule for {path} in {config_path}")
+
+
+@area_app.command("bulk-assign")
+def area_bulk_assign(
+    ctx: typer.Context,
+    path: Annotated[str, typer.Argument(help="Area path.")],
+    unassigned: Annotated[bool, typer.Option("--unassigned")] = True,
+    harness: HarnessOption = None,
+    machine: MachineOption = None,
+    today: Annotated[bool, typer.Option("--today")] = False,
+    yesterday: Annotated[bool, typer.Option("--yesterday")] = False,
+    this_week: Annotated[bool, typer.Option("--this-week")] = False,
+    last_week: Annotated[bool, typer.Option("--last-week")] = False,
+    this_month: Annotated[bool, typer.Option("--this-month")] = False,
+    last_month: Annotated[bool, typer.Option("--last-month")] = False,
+    period: UsagePeriodOption = None,
+    apply: Annotated[bool, typer.Option("--apply")] = False,
+    dry_run: Annotated[bool, typer.Option("--dry-run")] = True,
+    overwrite: Annotated[bool, typer.Option("--overwrite")] = False,
+) -> None:
+    if apply and dry_run:
+        _exit_with_error("Use either --apply or --dry-run.")
+    selected_period = _resolve_usage_session_period_or_exit(
+        period=period,
+        today=today,
+        yesterday=yesterday,
+        this_week=this_week,
+        last_week=last_week,
+        this_month=this_month,
+        last_month=last_month,
+    )
+    try:
+        resolved_range = resolve_time_range(period=selected_period)
+    except ValueError as exc:
+        _exit_with_error(str(exc))
+    from toktrail.db import summarize_usage_sessions
+    from toktrail.reporting import UsageSessionsFilter
+
+    conn = _open_toktrail_connection(ctx)
+    try:
+        machine_id = _resolve_machine_id_or_exit(conn, machine)
+        area = ensure_area(conn, path)
+        report = summarize_usage_sessions(
+            conn,
+            UsageSessionsFilter(
+                machine_id=machine_id,
+                harness=harness,
+                unassigned_area=unassigned,
+                since_ms=resolved_range.since_ms,
+                until_ms=resolved_range.until_ms,
+                limit=None,
+                order="desc",
+            ),
+            costing_config=_load_costing_config_or_exit(ctx),
+        )
+        candidates = list(report.sessions)
+        if dry_run or not apply:
+            typer.echo(
+                f"Would assign {len(candidates)} source sessions to {area.path}:"
+            )
+            for session in candidates:
+                typer.echo(
+                    f"- {session.key}  "
+                    f"last={format_epoch_ms_compact(session.last_ms)}  "
+                    f"total={_format_int(session.tokens.total)}"
+                )
+            typer.echo("Use --apply to write changes.")
+            return
+        assigned = 0
+        skipped = 0
+        for session in candidates:
+            if session.origin_machine_id is None:
+                skipped += 1
+                continue
+            if session.area_id is not None and not overwrite:
+                skipped += 1
+                continue
+            assign_area_to_source_session(
+                conn,
+                area_id=area.id,
+                origin_machine_id=session.origin_machine_id,
+                harness=session.harness,
+                source_session_id=session.source_session_id,
+            )
+            assigned += 1
+        conn.commit()
+    finally:
+        conn.close()
+    typer.echo(f"Assigned {assigned} sessions to {path}; skipped {skipped}.")
+
+
+@area_app.command("archive")
+def area_archive(
+    ctx: typer.Context,
+    path: Annotated[str, typer.Argument(help="Area path to archive.")],
+) -> None:
+    conn = _open_toktrail_connection(ctx)
+    try:
+        archived = archive_area_path(conn, path)
+        conn.commit()
+    except ValueError as exc:
+        _exit_with_error(str(exc))
+    finally:
+        conn.close()
+    typer.echo(f"Archived {archived} area rows under {path}.")
+
+
+@area_app.command("move")
+def area_move(
+    ctx: typer.Context,
+    old_path: Annotated[str, typer.Argument(help="Current area path.")],
+    new_path: Annotated[str, typer.Argument(help="New area path.")],
+) -> None:
+    conn = _open_toktrail_connection(ctx)
+    try:
+        moved_assignments, moved_events = move_area_path(conn, old_path, new_path)
+        conn.commit()
+    except ValueError as exc:
+        _exit_with_error(str(exc))
+    finally:
+        conn.close()
+    typer.echo(
+        f"Moved {old_path} -> {new_path}; reassigned {moved_assignments} assignments "
+        f"and {moved_events} events."
+    )
+
+
+@area_app.command("rename")
+def area_rename(
+    ctx: typer.Context,
+    old_path: Annotated[str, typer.Argument(help="Current area path.")],
+    new_name: Annotated[str, typer.Argument(help="New leaf name or replacement path.")],
+) -> None:
+    normalized_old, _ = normalize_area_path(old_path)
+    if "/" in new_name:
+        destination = new_name
+    else:
+        parent = normalized_old.rsplit("/", 1)[0] if "/" in normalized_old else ""
+        destination = f"{parent}/{new_name}" if parent else new_name
+    area_move(ctx, old_path=normalized_old, new_path=destination)
+
+
+@area_app.command("merge")
+def area_merge(
+    ctx: typer.Context,
+    target_path: Annotated[str, typer.Argument(help="Target area path.")],
+    source_path: Annotated[str, typer.Argument(help="Source area path to merge.")],
+    dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
+) -> None:
+    if dry_run:
+        typer.echo(f"Would merge {source_path} into {target_path}.")
+        return
+    conn = _open_toktrail_connection(ctx)
+    try:
+        moved_assignments, moved_events = merge_area_paths(
+            conn,
+            target_path,
+            source_path,
+        )
+        conn.commit()
+    except ValueError as exc:
+        _exit_with_error(str(exc))
+    finally:
+        conn.close()
+    typer.echo(
+        f"Merged {source_path} into {target_path}; reassigned {moved_assignments} "
+        f"assignments and {moved_events} events."
     )
 
 
@@ -1769,11 +2238,18 @@ def usage(  # noqa: C901
     last: Annotated[
         bool, typer.Option("--last", help="Show only the newest source session.")
     ] = False,
+    direct: Annotated[bool, typer.Option("--direct")] = False,
+    subtree: Annotated[bool, typer.Option("--subtree")] = False,
+    leaves: Annotated[bool, typer.Option("--leaves")] = False,
+    percent: Annotated[bool, typer.Option("--percent")] = False,
+    share_by: Annotated[str, typer.Option("--share-by")] = "tokens",
 ) -> None:
     if timezone_name is not None and utc:
         _exit_with_error("Use either --timezone or --utc, not both.")
     if area is not None and unassigned_area:
         _exit_with_error("Use either --area or --unassigned-area, not both.")
+    if direct and subtree:
+        _exit_with_error("Use either --direct or --subtree, not both.")
     info_name = ctx.info_name
     if info_name is None:
         _exit_with_error("Missing usage subcommand.")
@@ -1968,6 +2444,11 @@ def usage(  # noqa: C901
             utc=utc,
             split_thinking=split_thinking,
             rich_output=rich_output,
+            direct=direct,
+            subtree=subtree,
+            leaves=leaves,
+            percent=percent,
+            share_by=share_by,
         )
         if json_output:
             if payload is None:
@@ -2554,6 +3035,9 @@ def _usage_machines(
     if resolved_range.period is not None:
         title = f"{title} ({resolved_range.period})"
     typer.echo(title)
+    area_filter_summary = _format_area_filter_summary(report.filters)
+    if area_filter_summary is not None:
+        typer.echo(area_filter_summary)
     _print_usage_machine_rows(report, rich_output=rich_output)
     return None
 
@@ -2764,6 +3248,9 @@ def _print_usage_sessions(
     if period is not None:
         title += f" ({period})"
     typer.echo(title)
+    area_filter_summary = _format_area_filter_summary(report.filters)
+    if area_filter_summary is not None:
+        typer.echo(area_filter_summary)
 
     if not report.sessions:
         typer.echo("No usage data.")
@@ -3086,6 +3573,9 @@ def _print_usage_runs(
         raise TypeError(msg)
 
     typer.echo("toktrail usage runs")
+    area_filter_summary = _format_area_filter_summary(report.filters)
+    if area_filter_summary is not None:
+        typer.echo(area_filter_summary)
 
     if not report.runs:
         typer.echo("No usage data.")
@@ -3204,6 +3694,11 @@ def _usage_areas(
     utc: bool,
     split_thinking: bool,
     rich_output: bool,
+    direct: bool,
+    subtree: bool,
+    leaves: bool,
+    percent: bool,
+    share_by: str,
 ) -> dict[str, object] | None:
     try:
         resolved_range = resolve_time_range(
@@ -3263,15 +3758,27 @@ def _usage_areas(
         report,
         period=resolved_range.period,
         rich_output=rich_output,
+        direct=direct,
+        subtree=subtree,
+        leaves=leaves,
+        percent=percent,
+        share_by=share_by,
+        unassigned_warning_threshold=_load_resolved_toktrail_config_or_exit(ctx).config.areas.unassigned_warning_threshold,
     )
     return None
 
 
-def _print_usage_areas(
+def _print_usage_areas(  # noqa: C901
     report: object,
     *,
     period: str | None,
     rich_output: bool,
+    direct: bool,
+    subtree: bool,
+    leaves: bool,
+    percent: bool,
+    share_by: str,
+    unassigned_warning_threshold: float,
 ) -> None:
     from toktrail.reporting import UsageAreasReport
 
@@ -3283,68 +3790,163 @@ def _print_usage_areas(
     if period is not None:
         title += f" ({period})"
     typer.echo(title)
+    area_filter_summary = _format_area_filter_summary(report.filters)
+    if area_filter_summary is not None:
+        typer.echo(area_filter_summary)
 
     if not report.areas:
         typer.echo("No usage data.")
         return
 
-    rows = [
-        {
+    if share_by not in {"tokens", "actual", "virtual", "messages"}:
+        _exit_with_error(
+            "--share-by must be one of: tokens, actual, virtual, messages."
+        )
+
+    def _direct_msg(area_row) -> int:
+        return area_row.direct_message_count or 0
+
+    def _tree_msg(area_row) -> int:
+        return area_row.subtree_message_count or area_row.message_count
+
+    def _direct_tokens(area_row) -> TokenBreakdown:
+        return area_row.direct_tokens or TokenBreakdown()
+
+    def _tree_tokens(area_row) -> TokenBreakdown:
+        return area_row.subtree_tokens or area_row.tokens
+
+    def _direct_costs(area_row) -> CostTotals:
+        return area_row.direct_costs or CostTotals()
+
+    def _tree_costs(area_row) -> CostTotals:
+        return area_row.subtree_costs or area_row.costs
+
+    if leaves:
+        filtered_areas = [
+            row
+            for row in report.areas
+            if row.path is None or _direct_msg(row) > 0
+        ]
+    else:
+        filtered_areas = list(report.areas)
+
+    def _share_value(area_row) -> float:
+        if share_by == "messages":
+            return float(_tree_msg(area_row))
+        if share_by == "actual":
+            return float(_tree_costs(area_row).actual_cost_usd)
+        if share_by == "virtual":
+            return float(_tree_costs(area_row).virtual_cost_usd)
+        return float(_tree_tokens(area_row).total)
+
+    share_total = sum(_share_value(row) for row in filtered_areas)
+    rows = []
+    for area_row in filtered_areas:
+        direct_tokens = _direct_tokens(area_row)
+        tree_tokens = _tree_tokens(area_row)
+        direct_costs = _direct_costs(area_row)
+        tree_costs = _tree_costs(area_row)
+        row = {
             "area": (
                 "  " * area_row.depth + area_row.path
                 if area_row.path is not None
                 else "unassigned"
             ),
-            "msgs": _format_int(area_row.message_count),
-            "input": _format_int(area_row.tokens.input),
-            "output": _format_int(area_row.tokens.output),
-            "reasoning": _format_int(area_row.tokens.reasoning),
-            "cache_r": _format_int(area_row.tokens.cache_read),
-            "cache_w": _format_int(area_row.tokens.cache_write),
-            "cache_o": _format_int(area_row.tokens.cache_output),
-            "total": _format_int(area_row.tokens.total),
-            "actual": _format_cost(area_row.costs.actual_cost_usd),
-            "virtual": _format_cost(area_row.costs.virtual_cost_usd),
-            "savings": _format_cost(area_row.costs.savings_usd),
-            "unpriced": _format_int(area_row.costs.unpriced_count),
+            "msgs_self": _format_int(_direct_msg(area_row)),
+            "msgs_tree": _format_int(_tree_msg(area_row)),
+            "total_self": _format_int(direct_tokens.total),
+            "total_tree": _format_int(tree_tokens.total),
+            "actual_tree": _format_cost(tree_costs.actual_cost_usd),
+            "virtual_tree": _format_cost(tree_costs.virtual_cost_usd),
+            "share": (
+                f"{(_share_value(area_row) / share_total * 100):.1f}%"
+                if share_total > 0
+                else "0.0%"
+            ),
+            "input": _format_int(tree_tokens.input),
+            "output": _format_int(tree_tokens.output),
+            "reasoning": _format_int(tree_tokens.reasoning),
+            "cache_r": _format_int(tree_tokens.cache_read),
+            "cache_w": _format_int(tree_tokens.cache_write),
+            "cache_o": _format_int(tree_tokens.cache_output),
+            "actual": _format_cost(tree_costs.actual_cost_usd),
+            "virtual": _format_cost(tree_costs.virtual_cost_usd),
+            "savings": _format_cost(tree_costs.savings_usd),
+            "unpriced": _format_int(tree_costs.unpriced_count),
+            "direct_actual": _format_cost(direct_costs.actual_cost_usd),
         }
-        for area_row in report.areas
-    ]
-    _print_table(
-        rows,
-        [
+        rows.append(row)
+
+    if direct:
+        columns = ["area", "msgs_self", "total_self", "direct_actual"]
+        labels = {
+            "area": "area",
+            "msgs_self": "msgs",
+            "total_self": "total",
+            "direct_actual": "actual",
+        }
+    elif subtree:
+        columns = [
             "area",
-            "msgs",
+            "msgs_tree",
             "input",
             "output",
             "reasoning",
             "cache_r",
             "cache_w",
             "cache_o",
-            "total",
+            "total_tree",
             "actual",
             "virtual",
             "savings",
             "unpriced",
-        ],
-        {
+        ]
+        labels = {
             "area": "area",
-            "msgs": "msgs",
+            "msgs_tree": "msgs",
             "input": "input",
             "output": "output",
             "reasoning": "reasoning",
             "cache_r": "cache_r",
             "cache_w": "cache_w",
             "cache_o": "cache_o",
-            "total": "total",
+            "total_tree": "total",
             "actual": "actual",
             "virtual": "virtual",
             "savings": "savings",
             "unpriced": "unpriced",
-        },
+        }
+    else:
+        columns = [
+            "area",
+            "msgs_self",
+            "msgs_tree",
+            "total_self",
+            "total_tree",
+            "actual_tree",
+            "virtual_tree",
+        ]
+        labels = {
+            "area": "area",
+            "msgs_self": "msgs self",
+            "msgs_tree": "msgs tree",
+            "total_self": "total self",
+            "total_tree": "total tree",
+            "actual_tree": "actual tree",
+            "virtual_tree": "virtual tree",
+        }
+    if percent and "share" not in columns:
+        columns.append("share")
+        labels["share"] = "share"
+    _print_table(
+        rows,
+        columns,
+        labels,
         rich_output=rich_output,
         numeric_columns={
             "msgs",
+            "msgs_self",
+            "msgs_tree",
             "input",
             "output",
             "reasoning",
@@ -3352,13 +3954,68 @@ def _print_usage_areas(
             "cache_w",
             "cache_o",
             "total",
+            "total_self",
+            "total_tree",
             "actual",
+            "actual_tree",
+            "direct_actual",
             "virtual",
+            "virtual_tree",
             "savings",
             "unpriced",
         },
         wrap_columns={"area"},
         max_widths={"area": 48},
+    )
+    _print_unassigned_area_warning(
+        report=report,
+        threshold=unassigned_warning_threshold,
+    )
+
+
+def _format_area_filter_summary(filters: object) -> str | None:
+    def _value(key: str) -> object:
+        if isinstance(filters, dict):
+            return filters.get(key)
+        return getattr(filters, key, None)
+
+    if bool(_value("unassigned_area")):
+        return "Area filter: unassigned only"
+    area_value = _value("area")
+    if not isinstance(area_value, str) or not area_value:
+        return None
+    if bool(_value("area_exact")):
+        return f"Area filter: {area_value} (exact only)"
+    return f"Area filter: {area_value} (including descendants)"
+
+
+def _print_unassigned_area_warning(
+    *,
+    report: object,
+    threshold: float,
+) -> None:
+    from toktrail.reporting import UsageAreasReport
+
+    if not isinstance(report, UsageAreasReport):
+        return
+    if threshold <= 0:
+        return
+    unassigned_total = 0
+    for row in report.areas:
+        if row.path is None:
+            unassigned_total = (row.subtree_tokens or row.tokens).total
+            break
+    total = report.totals.tokens.total
+    if total <= 0:
+        return
+    ratio = unassigned_total / total
+    if ratio < threshold:
+        return
+    percent = int(round(ratio * 100))
+    typer.echo(
+        "Warning: "
+        f"{percent}% of this report's usage is unassigned. Run "
+        "`toktrail area sessions --unassigned --today` to classify it."
     )
 
 
@@ -3409,28 +4066,37 @@ def _usage_aggregate(
         limit=limit,
     )
     conn = _open_toktrail_connection(ctx)
+    unassigned_total = 0
     try:
         machine_id = _resolve_machine_id_or_exit(conn, machine)
+        base_filter = UsageReportFilter(
+            tracking_session_id=None,
+            machine_id=machine_id,
+            harness=harness,
+            source_session_id=source_session_id,
+            provider_id=provider_id,
+            model_id=model_id,
+            thinking_level=thinking_level,
+            agent=agent,
+            area=area,
+            area_exact=area_exact,
+            unassigned_area=unassigned_area,
+            since_ms=resolved_range.since_ms,
+            until_ms=resolved_range.until_ms,
+            split_thinking=split_thinking,
+        )
         report = summarize_usage(
             conn,
-            UsageReportFilter(
-                tracking_session_id=None,
-                machine_id=machine_id,
-                harness=harness,
-                source_session_id=source_session_id,
-                provider_id=provider_id,
-                model_id=model_id,
-                thinking_level=thinking_level,
-                agent=agent,
-                area=area,
-                area_exact=area_exact,
-                unassigned_area=unassigned_area,
-                since_ms=resolved_range.since_ms,
-                until_ms=resolved_range.until_ms,
-                split_thinking=split_thinking,
-            ),
+            base_filter,
             costing_config=costing_config,
         )
+        if area is None and not unassigned_area:
+            unassigned_report = summarize_usage(
+                conn,
+                replace(base_filter, unassigned_area=True),
+                costing_config=costing_config,
+            )
+            unassigned_total = unassigned_report.totals.tokens.total
     finally:
         conn.close()
 
@@ -3476,6 +4142,26 @@ def _usage_aggregate(
     if resolved_range.period is not None:
         title = f"{title} ({resolved_range.period})"
     typer.echo(title)
+    area_filter_summary = _format_area_filter_summary(report.filters)
+    if area_filter_summary is not None:
+        typer.echo(area_filter_summary)
+    if (
+        resolved_range.period == "today"
+        and report.totals.tokens.total > 0
+        and area is None
+        and not unassigned_area
+    ):
+        threshold = (
+            _load_resolved_toktrail_config_or_exit(ctx)
+            .config.areas.unassigned_warning_threshold
+        )
+        ratio = unassigned_total / report.totals.tokens.total
+        if threshold > 0 and ratio >= threshold:
+            typer.echo(
+                "Warning: "
+                f"{int(round(ratio * 100))}% of today's usage is unassigned. "
+                "Run `toktrail area sessions --unassigned --today` to classify it."
+            )
     _print_usage_summary(
         report,
         rich_output=rich_output,
@@ -7655,6 +8341,113 @@ def _resolve_assignment_machine_id_or_exit(
         msg = "Expected origin_machine_id to be a string."
         raise TypeError(msg)
     return value
+
+
+def _resolve_session_key_or_exit(
+    conn: sqlite3.Connection,
+    session_key: str,
+) -> tuple[str, str, str]:
+    parts = session_key.split("/", 2)
+    if len(parts) != 3:
+        _exit_with_error(
+            "Session key must be machine/harness/source_session_id, "
+            f"got {session_key!r}."
+        )
+    machine_selector, harness, source_session_id = (
+        parts[0].strip(),
+        parts[1].strip(),
+        parts[2].strip(),
+    )
+    if not machine_selector or not harness or not source_session_id:
+        _exit_with_error(
+            "Session key must be machine/harness/source_session_id "
+            "with non-empty segments."
+        )
+    selector_candidates = [machine_selector]
+    if machine_selector.startswith("machine:"):
+        selector_candidates.append(machine_selector.split(":", 1)[1])
+    if machine_selector.endswith(")") and "(" in machine_selector:
+        selector_candidates.append(machine_selector.rsplit("(", 1)[1].rstrip(")"))
+    machine_id: str | None = None
+    last_error: ValueError | None = None
+    for candidate in selector_candidates:
+        try:
+            machine_id = resolve_machine_selector(conn, candidate).machine_id
+            break
+        except ValueError as exc:
+            last_error = exc
+    if machine_id is None:
+        _exit_with_error(
+            str(last_error)
+            if last_error is not None
+            else "Invalid machine selector in session key."
+        )
+    return machine_id, harness, source_session_id
+
+
+def _parse_area_expiry_or_exit(*, ttl: str | None, until: str | None) -> int | None:
+    if ttl is None and until is None:
+        return None
+    now_ms = int(time.time() * 1000)
+    if ttl is not None:
+        ttl_text = ttl.strip().lower()
+        if not ttl_text:
+            _exit_with_error("--ttl must not be empty.")
+        token_pattern = re.compile(r"(\d+)([smhd])")
+        offset_ms = 0
+        consumed = 0
+        for match in token_pattern.finditer(ttl_text):
+            value = int(match.group(1))
+            unit = match.group(2)
+            consumed += len(match.group(0))
+            multiplier = {"s": 1000, "m": 60_000, "h": 3_600_000, "d": 86_400_000}[unit]
+            offset_ms += value * multiplier
+        if consumed != len(ttl_text) or offset_ms <= 0:
+            _exit_with_error("--ttl must look like 30m, 4h, 1d, or 1h30m.")
+        return now_ms + offset_ms
+    assert until is not None
+    raw = until.strip()
+    if not raw:
+        _exit_with_error("--until must not be empty.")
+    normalized = raw[:-1] + "+00:00" if raw.endswith("Z") else raw
+    try:
+        parsed = datetime.datetime.fromisoformat(normalized)
+    except ValueError:
+        _exit_with_error("--until must be an ISO datetime, e.g. 2026-05-16T18:00.")
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=datetime.datetime.now().astimezone().tzinfo)
+    expires_at_ms = int(parsed.timestamp() * 1000)
+    if expires_at_ms <= now_ms:
+        _exit_with_error("--until must be in the future.")
+    return expires_at_ms
+
+
+def _resolve_git_root(cwd: Path) -> Path | None:
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(cwd), "rev-parse", "--show-toplevel"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    text = completed.stdout.strip()
+    return Path(text) if text else None
+
+
+def _git_remote_origin(cwd: Path) -> str | None:
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(cwd), "config", "--get", "remote.origin.url"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    value = completed.stdout.strip()
+    return value or None
 
 
 def _load_machine_config_or_exit(ctx: typer.Context) -> LoadedMachineConfig:

@@ -67,7 +67,7 @@ from toktrail.reporting import (
     UsageSessionsReport,
 )
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 _PERIOD_SORT: dict[str, int] = {
     "5h": 0,
     "daily": 1,
@@ -129,6 +129,15 @@ class AreaSessionAssignment:
     assigned_at_ms: int
     updated_at_ms: int
     imported_at_ms: int | None = None
+
+
+@dataclass(frozen=True)
+class ActiveAreaStatus:
+    machine_id: str
+    machine_label: str
+    area: Area | None
+    updated_at_ms: int | None
+    expires_at_ms: int | None
 
 
 @dataclass(frozen=True)
@@ -287,6 +296,9 @@ def migrate(conn: sqlite3.Connection) -> None:
     if current_version == 11:
         _migrate_v11_to_v12(conn)
         current_version = 12
+    if current_version == 12:
+        _migrate_v12_to_v13(conn)
+        current_version = 13
 
     _ensure_machine_id(conn)
     conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
@@ -550,7 +562,8 @@ def _create_schema(conn: sqlite3.Connection) -> None:
                 REFERENCES machines(machine_id) ON DELETE CASCADE,
             area_id INTEGER REFERENCES areas(id) ON DELETE SET NULL,
             updated_at_ms INTEGER NOT NULL,
-            imported_at_ms INTEGER
+            imported_at_ms INTEGER,
+            expires_at_ms INTEGER
         );
 
         CREATE TABLE IF NOT EXISTS source_sessions (
@@ -975,6 +988,16 @@ def _migrate_v11_to_v12(conn: sqlite3.Connection) -> None:
         )
 
 
+def _migrate_v12_to_v13(conn: sqlite3.Connection) -> None:
+    _create_machine_active_areas_table(conn)
+    _add_column_if_missing(
+        conn,
+        "machine_active_areas",
+        "expires_at_ms",
+        "INTEGER",
+    )
+
+
 def _migrate_v6_to_v7(conn: sqlite3.Connection) -> None:
     _add_column_if_missing(
         conn,
@@ -1151,7 +1174,8 @@ def _create_machine_active_areas_table(conn: sqlite3.Connection) -> None:
                 REFERENCES machines(machine_id) ON DELETE CASCADE,
             area_id INTEGER REFERENCES areas(id) ON DELETE SET NULL,
             updated_at_ms INTEGER NOT NULL,
-            imported_at_ms INTEGER
+            imported_at_ms INTEGER,
+            expires_at_ms INTEGER
         )
         """
     )
@@ -1898,6 +1922,45 @@ def get_area_by_path(conn: sqlite3.Connection, path: str) -> Area | None:
     return _area_from_row(row)
 
 
+def get_area_by_sync_id(conn: sqlite3.Connection, sync_id: str) -> Area | None:
+    row = conn.execute(
+        """
+        SELECT
+            id,
+            sync_id,
+            parent_id,
+            slug,
+            name,
+            path,
+            archived_at_ms,
+            created_at_ms,
+            updated_at_ms,
+            imported_at_ms
+        FROM areas
+        WHERE sync_id = ?
+        """,
+        (sync_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    return _area_from_row(row)
+
+
+def resolve_area_selector(conn: sqlite3.Connection, selector: str) -> Area:
+    raw = selector.strip()
+    if not raw:
+        msg = "Area selector must not be empty."
+        raise ValueError(msg)
+    by_path = get_area_by_path(conn, raw)
+    if by_path is not None:
+        return by_path
+    by_sync_id = get_area_by_sync_id(conn, raw)
+    if by_sync_id is not None:
+        return by_sync_id
+    msg = f"Area not found: {selector}"
+    raise ValueError(msg)
+
+
 def list_areas(
     conn: sqlite3.Connection,
     *,
@@ -2055,19 +2118,73 @@ def get_active_area(
     *,
     machine_id: str | None = None,
 ) -> Area | None:
+    status = get_active_area_status(conn, machine_id=machine_id)
+    return status.area
+
+
+def get_active_area_status(
+    conn: sqlite3.Connection,
+    *,
+    machine_id: str | None = None,
+) -> ActiveAreaStatus:
     _create_machine_active_areas_table(conn)
     effective_machine_id = machine_id or get_local_machine_id(conn)
+    labels = machine_label_map(conn)
     row = conn.execute(
         """
-        SELECT area_id
+        SELECT area_id, updated_at_ms, expires_at_ms
         FROM machine_active_areas
         WHERE machine_id = ?
         """,
         (effective_machine_id,),
     ).fetchone()
-    if row is None or row["area_id"] is None:
-        return None
-    return get_area(conn, _required_int(row["area_id"]))
+    if row is None:
+        return ActiveAreaStatus(
+            machine_id=effective_machine_id,
+            machine_label=labels.get(
+                effective_machine_id,
+                f"machine:{effective_machine_id[:8]}",
+            ),
+            area=None,
+            updated_at_ms=None,
+            expires_at_ms=None,
+        )
+    updated_at_ms = _optional_int(row["updated_at_ms"])
+    expires_at_ms = _optional_int(row["expires_at_ms"])
+    area_id = _optional_int(row["area_id"])
+    now_ms = _now_ms()
+    if expires_at_ms is not None and expires_at_ms <= now_ms:
+        conn.execute(
+            """
+            UPDATE machine_active_areas
+            SET area_id = NULL,
+                expires_at_ms = NULL,
+                updated_at_ms = ?
+            WHERE machine_id = ?
+            """,
+            (now_ms, effective_machine_id),
+        )
+        return ActiveAreaStatus(
+            machine_id=effective_machine_id,
+            machine_label=labels.get(
+                effective_machine_id,
+                f"machine:{effective_machine_id[:8]}",
+            ),
+            area=None,
+            updated_at_ms=now_ms,
+            expires_at_ms=None,
+        )
+    area = get_area(conn, area_id) if area_id is not None else None
+    return ActiveAreaStatus(
+        machine_id=effective_machine_id,
+        machine_label=labels.get(
+            effective_machine_id,
+            f"machine:{effective_machine_id[:8]}",
+        ),
+        area=area,
+        updated_at_ms=updated_at_ms,
+        expires_at_ms=expires_at_ms,
+    )
 
 
 def set_active_area(
@@ -2076,6 +2193,7 @@ def set_active_area(
     *,
     machine_id: str | None = None,
     imported_at_ms: int | None = None,
+    expires_at_ms: int | None = None,
 ) -> None:
     _create_machine_active_areas_table(conn)
     effective_machine_id = machine_id or get_local_machine_id(conn)
@@ -2098,12 +2216,14 @@ def set_active_area(
             machine_id,
             area_id,
             updated_at_ms,
-            imported_at_ms
+            imported_at_ms,
+            expires_at_ms
         )
-        VALUES (?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?)
         ON CONFLICT(machine_id) DO UPDATE SET
             area_id = excluded.area_id,
             updated_at_ms = excluded.updated_at_ms,
+            expires_at_ms = excluded.expires_at_ms,
             imported_at_ms = CASE
                 WHEN machine_active_areas.imported_at_ms IS NULL
                     THEN excluded.imported_at_ms
@@ -2112,7 +2232,13 @@ def set_active_area(
                 ELSE MAX(machine_active_areas.imported_at_ms, excluded.imported_at_ms)
             END
         """,
-        (effective_machine_id, area_id, now_ms, imported_at_ms),
+        (
+            effective_machine_id,
+            area_id,
+            now_ms,
+            imported_at_ms,
+            expires_at_ms if area_id is not None else None,
+        ),
     )
 
 
@@ -2296,6 +2422,180 @@ def unassign_area_from_source_session(
         """,
         (origin_machine_id, harness, source_session_id),
     )
+
+
+def archive_area_path(
+    conn: sqlite3.Connection,
+    path: str,
+) -> int:
+    area = get_area_by_path(conn, path)
+    if area is None:
+        msg = f"Area not found: {path}"
+        raise ValueError(msg)
+    rows = conn.execute(
+        """
+        WITH RECURSIVE descendants(id) AS (
+            SELECT id
+            FROM areas
+            WHERE id = ?
+            UNION ALL
+            SELECT child.id
+            FROM areas AS child
+            JOIN descendants AS d ON child.parent_id = d.id
+        )
+        SELECT id
+        FROM descendants
+        """,
+        (area.id,),
+    ).fetchall()
+    ids = tuple(_required_int(row["id"]) for row in rows)
+    if not ids:
+        return 0
+    placeholders = ", ".join("?" for _ in ids)
+    now_ms = _now_ms()
+    conn.execute(
+        f"""
+        UPDATE areas
+        SET archived_at_ms = ?,
+            updated_at_ms = ?
+        WHERE id IN ({placeholders})
+        """,
+        (now_ms, now_ms, *ids),
+    )
+    return len(ids)
+
+
+def move_area_path(
+    conn: sqlite3.Connection,
+    old_path: str,
+    new_path: str,
+) -> tuple[int, int]:
+    normalized_old, _ = normalize_area_path(old_path)
+    normalized_new, _ = normalize_area_path(new_path)
+    if normalized_old == normalized_new:
+        return (0, 0)
+    if normalized_new.startswith(f"{normalized_old}/"):
+        msg = "Cannot move an area into its own subtree."
+        raise ValueError(msg)
+    if get_area_by_path(conn, normalized_old) is None:
+        msg = f"Area not found: {old_path}"
+        raise ValueError(msg)
+    rows = conn.execute(
+        """
+        SELECT id, path, name
+        FROM areas
+        WHERE path = ?
+           OR path LIKE ?
+        ORDER BY LENGTH(path), path
+        """,
+        (normalized_old, f"{normalized_old}/%"),
+    ).fetchall()
+    old_to_new_area_id: dict[int, int] = {}
+    for row in rows:
+        old_id = _required_int(row["id"])
+        current_path = str(row["path"])
+        relative = current_path[len(normalized_old) :].lstrip("/")
+        target_path = (
+            normalized_new
+            if not relative
+            else f"{normalized_new}/{relative}"
+        )
+        target = ensure_area(conn, target_path, name=str(row["name"]))
+        old_to_new_area_id[old_id] = target.id
+
+    moved_assignments = 0
+    moved_events = 0
+    for old_id, new_id in old_to_new_area_id.items():
+        if old_id == new_id:
+            continue
+        cursor = conn.execute(
+            """
+            UPDATE area_session_assignments
+            SET area_id = ?,
+                updated_at_ms = ?
+            WHERE area_id = ?
+            """,
+            (new_id, _now_ms(), old_id),
+        )
+        moved_assignments += int(cursor.rowcount or 0)
+        cursor = conn.execute(
+            """
+            UPDATE usage_events
+            SET area_id = ?
+            WHERE area_id = ?
+            """,
+            (new_id, old_id),
+        )
+        moved_events += int(cursor.rowcount or 0)
+    archive_area_path(conn, normalized_old)
+    return moved_assignments, moved_events
+
+
+def merge_area_paths(
+    conn: sqlite3.Connection,
+    target_path: str,
+    source_path: str,
+) -> tuple[int, int]:
+    normalized_target, _ = normalize_area_path(target_path)
+    normalized_source, _ = normalize_area_path(source_path)
+    if normalized_target == normalized_source:
+        return (0, 0)
+    if normalized_target.startswith(f"{normalized_source}/"):
+        msg = "Cannot merge into a descendant of the source area."
+        raise ValueError(msg)
+    if get_area_by_path(conn, normalized_source) is None:
+        msg = f"Area not found: {source_path}"
+        raise ValueError(msg)
+    ensure_area(conn, normalized_target)
+    rows = conn.execute(
+        """
+        SELECT id, path, name
+        FROM areas
+        WHERE path = ?
+           OR path LIKE ?
+        ORDER BY LENGTH(path), path
+        """,
+        (normalized_source, f"{normalized_source}/%"),
+    ).fetchall()
+    source_to_target: dict[int, int] = {}
+    for row in rows:
+        source_id = _required_int(row["id"])
+        current_path = str(row["path"])
+        relative = current_path[len(normalized_source) :].lstrip("/")
+        mapped_path = (
+            normalized_target
+            if not relative
+            else f"{normalized_target}/{relative}"
+        )
+        mapped = ensure_area(conn, mapped_path, name=str(row["name"]))
+        source_to_target[source_id] = mapped.id
+
+    moved_assignments = 0
+    moved_events = 0
+    for source_id, target_id in source_to_target.items():
+        if source_id == target_id:
+            continue
+        cursor = conn.execute(
+            """
+            UPDATE area_session_assignments
+            SET area_id = ?,
+                updated_at_ms = ?
+            WHERE area_id = ?
+            """,
+            (target_id, _now_ms(), source_id),
+        )
+        moved_assignments += int(cursor.rowcount or 0)
+        cursor = conn.execute(
+            """
+            UPDATE usage_events
+            SET area_id = ?
+            WHERE area_id = ?
+            """,
+            (target_id, source_id),
+        )
+        moved_events += int(cursor.rowcount or 0)
+    archive_area_path(conn, normalized_source)
+    return moved_assignments, moved_events
 
 
 def _source_session_has_usage_events(
@@ -4337,7 +4637,8 @@ def summarize_usage_areas(
     areas_by_id = _areas_by_id(conn)
     allowed_area_ids = set(usage_filters.area_ids)
     root_depth = usage_filters.area.count("/") if usage_filters.area is not None else 0
-    buckets: dict[int | None, _ReportBucket] = {}
+    direct_buckets: dict[int | None, _ReportBucket] = {}
+    subtree_buckets: dict[int | None, _ReportBucket] = {}
     totals_tokens = TokenBreakdown()
     totals_costs = CostTotals()
 
@@ -4363,20 +4664,30 @@ def summarize_usage_areas(
         totals_tokens = _add_tokens(totals_tokens, atom.tokens)
         totals_costs = _add_cost_breakdown(totals_costs, breakdown)
         if row.area_id is None:
-            buckets.setdefault(None, _ReportBucket()).add(atom, breakdown)
+            direct_buckets.setdefault(None, _ReportBucket()).add(atom, breakdown)
+            subtree_buckets.setdefault(None, _ReportBucket()).add(atom, breakdown)
             continue
+        direct_buckets.setdefault(row.area_id, _ReportBucket()).add(atom, breakdown)
         current_area_id: int | None = row.area_id
         while current_area_id is not None:
             if allowed_area_ids and current_area_id not in allowed_area_ids:
                 break
-            buckets.setdefault(current_area_id, _ReportBucket()).add(atom, breakdown)
+            subtree_buckets.setdefault(current_area_id, _ReportBucket()).add(
+                atom,
+                breakdown,
+            )
             area = areas_by_id.get(current_area_id)
             if area is None:
                 break
             current_area_id = area.parent_id
 
     area_rows: list[AreaSummaryRow] = []
-    for area_id, bucket in buckets.items():
+    for area_id in sorted(
+        set(direct_buckets.keys()) | set(subtree_buckets.keys()),
+        key=lambda item: (item is None, item if item is not None else -1),
+    ):
+        direct_bucket = direct_buckets.get(area_id, _ReportBucket())
+        subtree_bucket = subtree_buckets.get(area_id, _ReportBucket())
         if area_id is None:
             area_rows.append(
                 AreaSummaryRow(
@@ -4385,9 +4696,15 @@ def summarize_usage_areas(
                     path=None,
                     name="unassigned",
                     depth=0,
-                    message_count=bucket.message_count,
-                    tokens=bucket.tokens,
-                    costs=bucket.costs,
+                    message_count=subtree_bucket.message_count,
+                    tokens=subtree_bucket.tokens,
+                    costs=subtree_bucket.costs,
+                    direct_message_count=direct_bucket.message_count,
+                    direct_tokens=direct_bucket.tokens,
+                    direct_costs=direct_bucket.costs,
+                    subtree_message_count=subtree_bucket.message_count,
+                    subtree_tokens=subtree_bucket.tokens,
+                    subtree_costs=subtree_bucket.costs,
                 )
             )
             continue
@@ -4401,9 +4718,15 @@ def summarize_usage_areas(
                 path=area.path,
                 name=area.name,
                 depth=max(area.path.count("/") - root_depth, 0),
-                message_count=bucket.message_count,
-                tokens=bucket.tokens,
-                costs=bucket.costs,
+                message_count=subtree_bucket.message_count,
+                tokens=subtree_bucket.tokens,
+                costs=subtree_bucket.costs,
+                direct_message_count=direct_bucket.message_count,
+                direct_tokens=direct_bucket.tokens,
+                direct_costs=direct_bucket.costs,
+                subtree_message_count=subtree_bucket.message_count,
+                subtree_tokens=subtree_bucket.tokens,
+                subtree_costs=subtree_bucket.costs,
             )
         )
 

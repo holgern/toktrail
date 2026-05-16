@@ -219,6 +219,7 @@ def statusline_report_from_dict(payload: Mapping[str, object]) -> StatuslineRepo
             else None
         ),
         stale_seconds=_mapping_int(payload, "stale_seconds"),
+        area_path=_mapping_string(payload, "area_path"),
     )
 
 
@@ -374,6 +375,7 @@ def build_statusline_report(
         source_session_id=source_session_id,
         config_path=config_path,
     )
+    active_area_path = _active_area_path(db_path)
 
     report = StatuslineReport(
         line="",
@@ -393,6 +395,8 @@ def build_statusline_report(
         context=context,
         cache=cache,
         stale_seconds=stale_seconds,
+        area_path=active_area_path
+        or (selected_session.area_path if selected_session is not None else None),
     )
     return StatuslineReport(
         line=render_statusline(
@@ -417,6 +421,7 @@ def build_statusline_report(
         context=report.context,
         cache=report.cache,
         stale_seconds=report.stale_seconds,
+        area_path=report.area_path,
     )
 
 
@@ -458,6 +463,15 @@ def _active_run_scope(db_path: Path | None) -> RunScope | None:
         return None if run is None else run.scope
     finally:
         conn.close()
+
+
+def _active_area_path(db_path: Path | None) -> str | None:
+    conn, _ = _open_state_db(db_path)
+    try:
+        area = db_module.get_active_area(conn)
+    finally:
+        conn.close()
+    return area.path if area is not None else None
 
 
 def _select_session_row(
@@ -706,6 +720,8 @@ def _render_element(
         return report.model_id
     if element == "session" and report.source_session_id is not None:
         return report.source_session_id
+    if element == "area":
+        return f"area {report.area_path}" if report.area_path else "area -"
     if element == "tokens":
         return f"{_format_compact_int(report.tokens.total)} tok"
     if element == "cached":

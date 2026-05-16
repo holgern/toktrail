@@ -43,8 +43,13 @@ hierarchical area paths.
    from pathlib import Path
 
    from toktrail.api import (
+       assign_area_to_session_key,
        assign_area_to_session,
+       bulk_assign_area,
        create_area,
+       get_active_area_status,
+       list_area_sessions,
+       resolve_area_selector,
        set_active_area,
        usage_areas_report,
        usage_report,
@@ -60,6 +65,17 @@ hierarchical area paths.
        source_session_id="ses-1",
        db_path=db_path,
    )
+   assign_area_to_session_key("work/odoo", "pc1/opencode/ses-1", db_path=db_path)
+   active = get_active_area_status(db_path=db_path)
+   resolved = resolve_area_selector("work/odoo", db_path=db_path)
+   sessions = list_area_sessions(db_path=db_path, unassigned=True, period="today")
+   bulk_result = bulk_assign_area(
+       "work/odoo",
+       db_path=db_path,
+       unassigned=True,
+       period="today",
+       apply_changes=False,  # dry-run
+   )
 
    rollup = usage_report(db_path, period="today", area="work")
    exact = usage_report(db_path, period="today", area="work", area_exact=True)
@@ -68,6 +84,7 @@ hierarchical area paths.
 
    print(rollup.totals.tokens.total, exact.totals.tokens.total)
    print(unassigned.totals.tokens.total, len(by_area.areas))
+   print(active.expires_at_ms, resolved.sync_id, bulk_result["matched"], len(sessions.sessions))
 
 Scan a harness source without writing state
 -------------------------------------------

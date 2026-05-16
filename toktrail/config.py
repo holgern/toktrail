@@ -89,6 +89,7 @@ _VALID_STATUSLINE_EMPTY_MODES = {"silent", "message"}
 _VALID_STATUSLINE_ELEMENTS = {
     "harness",
     "agent",
+    "area",
     "provider",
     "model",
     "session",
@@ -177,6 +178,13 @@ _STATUSLINE_THRESHOLDS_FIELDS = {
     "context_warning_percent",
     "context_danger_percent",
 }
+_AREAS_FIELDS = {
+    "auto_detect",
+    "warn_on_mismatch",
+    "unassigned_warning_threshold",
+    "rules",
+}
+_AREA_RULE_FIELDS = {"area", "cwd_globs", "git_remotes", "priority"}
 _CONTEXT_WINDOW_FIELDS = {"provider", "model", "tokens"}
 _SUBSCRIPTION_FIELDS = {
     "id",
@@ -207,6 +215,7 @@ _ROOT_FIELDS = {
     "pricing",
     "subscriptions",
     "statusline",
+    "areas",
     "context_window",
 }
 _RUNTIME_CONFIG_ROOT_FIELDS = {
@@ -216,6 +225,7 @@ _RUNTIME_CONFIG_ROOT_FIELDS = {
     "costing",
     "actual_cost",
     "statusline",
+    "areas",
     "context_window",
 }
 _PRICE_CONFIG_ROOT_FIELDS = {
@@ -982,6 +992,22 @@ class StatuslineConfig:
 
 
 @dataclass(frozen=True)
+class AreaRuleConfig:
+    area: str
+    cwd_globs: tuple[str, ...] = ()
+    git_remotes: tuple[str, ...] = ()
+    priority: int = 0
+
+
+@dataclass(frozen=True)
+class AreasConfig:
+    auto_detect: bool = False
+    warn_on_mismatch: bool = False
+    unassigned_warning_threshold: float = 0.20
+    rules: tuple[AreaRuleConfig, ...] = ()
+
+
+@dataclass(frozen=True)
 class ContextWindowConfig:
     provider: str
     model: str
@@ -993,6 +1019,7 @@ class ToktrailConfig:
     costing: CostingConfig
     imports: ImportConfig
     statusline: StatuslineConfig = field(default_factory=StatuslineConfig)
+    areas: AreasConfig = field(default_factory=AreasConfig)
     context_windows: tuple[ContextWindowConfig, ...] = ()
 
 
@@ -1007,6 +1034,7 @@ class RuntimeConfig:
     price_profile: str | None = None
     actual_rules: tuple[ActualCostRule, ...] = ()
     statusline: StatuslineConfig = field(default_factory=StatuslineConfig)
+    areas: AreasConfig = field(default_factory=AreasConfig)
     context_windows: tuple[ContextWindowConfig, ...] = ()
 
 
@@ -1203,6 +1231,7 @@ def default_runtime_config() -> RuntimeConfig:
         price_profile=costing.price_profile,
         actual_rules=costing.actual_rules,
         statusline=StatuslineConfig(),
+        areas=AreasConfig(),
         context_windows=(),
     )
 
@@ -1825,6 +1854,10 @@ def parse_runtime_config(data: object) -> RuntimeConfig:
             data.get("statusline"),
             default_config.statusline,
         ),
+        areas=_parse_areas_config(
+            data.get("areas"),
+            default_config.areas,
+        ),
         context_windows=_parse_context_windows(data.get("context_window")),
     )
 
@@ -1923,6 +1956,7 @@ def merge_configs(
         ),
         imports=runtime.imports,
         statusline=runtime.statusline,
+        areas=runtime.areas,
         context_windows=runtime.context_windows,
     )
 
@@ -2519,6 +2553,85 @@ def _parse_statusline_thresholds_config(
     )
 
 
+def _parse_areas_config(
+    value: object,
+    default_config: AreasConfig,
+) -> AreasConfig:
+    table = _parse_optional_table(value, context="areas")
+    _validate_allowed_keys(table, _AREAS_FIELDS, context="areas")
+    return AreasConfig(
+        auto_detect=_parse_bool(
+            table.get("auto_detect", default_config.auto_detect),
+            context="areas.auto_detect",
+        ),
+        warn_on_mismatch=_parse_bool(
+            table.get("warn_on_mismatch", default_config.warn_on_mismatch),
+            context="areas.warn_on_mismatch",
+        ),
+        unassigned_warning_threshold=_parse_fraction(
+            table.get(
+                "unassigned_warning_threshold",
+                default_config.unassigned_warning_threshold,
+            ),
+            context="areas.unassigned_warning_threshold",
+        ),
+        rules=_parse_area_rules(
+            table.get("rules"),
+            context="areas.rules",
+        ),
+    )
+
+
+def _parse_area_rules(
+    value: object,
+    *,
+    context: str,
+) -> tuple[AreaRuleConfig, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, list):
+        msg = f"{context} must be an array of tables."
+        raise ValueError(msg)
+    rules: list[AreaRuleConfig] = []
+    for index, raw_rule in enumerate(value, start=1):
+        if not isinstance(raw_rule, dict):
+            msg = f"{context}[{index}] must be a TOML table."
+            raise ValueError(msg)
+        _validate_allowed_keys(
+            raw_rule,
+            _AREA_RULE_FIELDS,
+            context=f"{context}[{index}]",
+        )
+        area = _parse_string(
+            raw_rule.get("area"),
+            context=f"{context}[{index}].area",
+        )
+        cwd_globs = _parse_string_sequence(
+            raw_rule.get("cwd_globs"),
+            context=f"{context}[{index}].cwd_globs",
+        )
+        git_remotes = _parse_string_sequence(
+            raw_rule.get("git_remotes"),
+            context=f"{context}[{index}].git_remotes",
+        )
+        priority = _parse_non_negative_int(
+            raw_rule.get("priority", 0),
+            context=f"{context}[{index}].priority",
+            required=True,
+        )
+        if priority is None:
+            priority = 0
+        rules.append(
+            AreaRuleConfig(
+                area=area,
+                cwd_globs=tuple(cwd_globs),
+                git_remotes=tuple(git_remotes),
+                priority=priority,
+            )
+        )
+    return tuple(rules)
+
+
 def _parse_statusline_default_harness(value: object, *, context: str) -> str:
     if not isinstance(value, str):
         msg = f"{context} must be a string."
@@ -2927,6 +3040,32 @@ def _parse_bool(value: object, *, context: str) -> bool:
         msg = f"{context} must be a boolean."
         raise ValueError(msg)
     return value
+
+
+def _parse_fraction(value: object, *, context: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        msg = f"{context} must be a number between 0 and 1."
+        raise ValueError(msg)
+    numeric = float(value)
+    if numeric < 0 or numeric > 1:
+        msg = f"{context} must be between 0 and 1."
+        raise ValueError(msg)
+    return numeric
+
+
+def _parse_string_sequence(value: object, *, context: str) -> list[str]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        msg = f"{context} must be a list of strings."
+        raise ValueError(msg)
+    items: list[str] = []
+    for index, item in enumerate(value, start=1):
+        parsed = _parse_string(item, context=f"{context}[{index}]")
+        if not parsed:
+            continue
+        items.append(parsed)
+    return items
 
 
 def _parse_rule_identity(value: object, *, context: str) -> str | None:

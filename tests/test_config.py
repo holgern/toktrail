@@ -458,6 +458,38 @@ elements = ["harness", "bogus"]
         load_runtime_config(config_path)
 
 
+def test_load_runtime_config_parses_areas_rules(tmp_path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        """
+config_version = 1
+
+[areas]
+auto_detect = true
+warn_on_mismatch = true
+unassigned_warning_threshold = 0.25
+
+[[areas.rules]]
+area = "work/odoo"
+cwd_globs = ["~/work/odoo/**"]
+git_remotes = ["git@github.com:company/odoo*.git"]
+priority = 100
+""".strip(),
+        encoding="utf-8",
+    )
+    config = load_runtime_config(config_path)
+    assert config.areas.auto_detect is True
+    assert config.areas.warn_on_mismatch is True
+    assert config.areas.unassigned_warning_threshold == 0.25
+    assert len(config.areas.rules) == 1
+    assert config.areas.rules[0].area == "work/odoo"
+    assert config.areas.rules[0].cwd_globs == ("~/work/odoo/**",)
+    assert config.areas.rules[0].git_remotes == (
+        "git@github.com:company/odoo*.git",
+    )
+    assert config.areas.rules[0].priority == 100
+
+
 def test_load_costing_config_parses_copilot_template(tmp_path) -> None:
     config_path = tmp_path / "toktrail.toml"
     config_path.write_text(

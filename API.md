@@ -144,6 +144,8 @@ Key public models:
   `started_at_ms` / `ended_at_ms`, persisted `scope`, and `archived_at_ms`
 - `Area`: includes local integer `id` plus aliases `area_id` and `local_id`,
   and durable cross-machine `sync_id` plus alias `stable_id`
+- `ActiveArea`: machine-scoped active-area status with `area`,
+  `updated_at_ms`, and optional `expires_at_ms`
 - `RunScope`: persisted run membership filters (`harnesses`, `provider_ids`,
   `model_ids`, `source_session_ids`, `thinking_levels`, `agents`)
 - `SourceSessionSummary`, `SourceSessionSnapshot`, `SourceSessionDiff`
@@ -163,6 +165,13 @@ All public dataclasses are frozen.
 
 Usage session/area report rows include both local and stable area metadata:
 `area_id` (local), `area_sync_id` (stable), and `area_path`.
+Area summary rows preserve backward-compatible rollup `tokens`/`costs` and add
+explicit nested `direct` and `subtree` objects in `as_dict()` payloads.
+
+Area helpers in `toktrail.api` include:
+`resolve_area_selector()`, `list_area_sessions()`,
+`assign_area_to_session_key()`, `bulk_assign_area()`,
+and `usage_area_tree_report()`.
 
 ## Errors
 

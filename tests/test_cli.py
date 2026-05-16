@@ -31,6 +31,7 @@ from toktrail.db import (
     get_local_machine_id,
     insert_usage_events,
     migrate,
+    set_active_area,
     upsert_machine,
 )
 from toktrail.models import TokenBreakdown, UsageEvent
@@ -386,6 +387,55 @@ def test_cli_statusline_json_shape(tmp_path: Path) -> None:
     assert payload["tokens"]["total"] == 500
     assert "line" in payload
     assert payload["cache"]["cached_tokens"] == 200
+
+
+def test_cli_statusline_area_element(tmp_path: Path) -> None:
+    state_db = tmp_path / "toktrail.db"
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        """
+config_version = 1
+
+[statusline]
+elements = ["area", "tokens"]
+""".strip(),
+        encoding="utf-8",
+    )
+    conn = connect(state_db)
+    try:
+        migrate(conn)
+        area = ensure_area(conn, "privat/toktrail")
+        set_active_area(conn, area.id)
+        insert_usage_events(
+            conn,
+            None,
+            [
+                make_cli_usage_event(
+                    "statusline-area",
+                    source_session_id="ses-statusline-area",
+                    created_ms=_future_ms(),
+                    tokens=TokenBreakdown(input=9, output=2),
+                )
+            ],
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "--config",
+            str(config_path),
+            "statusline",
+            "--no-refresh",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "area privat/toktrail" in result.output
 
 
 def test_cli_statusline_harnessbridge_refresh_always_bypasses_cached_empty_output(
@@ -7111,8 +7161,15 @@ def test_cli_area_create_list_use_status(tmp_path) -> None:
     list_result = runner.invoke(app, ["--db", str(state_db), "area", "list"])
     assert list_result.exit_code == 0, list_result.output
     assert "privat/toktrail" in list_result.output
-    assert "local id" in list_result.output
-    assert "sync id" in list_result.output
+    assert "local id" not in list_result.output
+
+    verbose_result = runner.invoke(
+        app,
+        ["--db", str(state_db), "area", "list", "--verbose"],
+    )
+    assert verbose_result.exit_code == 0, verbose_result.output
+    assert "local id" in verbose_result.output
+    assert "stable id" in verbose_result.output
 
     list_json = runner.invoke(app, ["--db", str(state_db), "area", "list", "--json"])
     assert list_json.exit_code == 0, list_json.output
@@ -7126,6 +7183,10 @@ def test_cli_area_create_list_use_status(tmp_path) -> None:
     )
     assert use_result.exit_code == 0, use_result.output
     assert "Active area: privat/toktrail" in use_result.output
+    assert (
+        "New source sessions imported on this machine will be assigned"
+        in use_result.output
+    )
 
     use_json = runner.invoke(
         app,
@@ -7150,6 +7211,27 @@ def test_cli_area_create_list_use_status(tmp_path) -> None:
     status_active = status_payload["active_area"]
     assert status_active["area_id"] == status_active["local_id"]
     assert status_active["sync_id"] == status_active["stable_id"]
+
+
+def test_cli_area_use_ttl_sets_expiry_in_status_json(tmp_path: Path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    runner.invoke(app, ["--db", str(state_db), "init"])
+
+    use_result = runner.invoke(
+        app,
+        ["--db", str(state_db), "area", "use", "work/odoo", "--ttl", "1h"],
+    )
+    assert use_result.exit_code == 0, use_result.output
+
+    status_json = runner.invoke(
+        app,
+        ["--db", str(state_db), "area", "status", "--json"],
+    )
+    assert status_json.exit_code == 0, status_json.output
+    payload = json.loads(status_json.output)
+    assert payload["active_area"]["path"] == "work/odoo"
+    assert isinstance(payload["expires_at_ms"], int)
 
 
 def test_cli_area_assign_and_unassign_old_session(tmp_path) -> None:
@@ -7221,6 +7303,255 @@ def test_cli_area_assign_and_unassign_old_session(tmp_path) -> None:
     assert sessions_unassigned.exit_code == 0, sessions_unassigned.output
     unassigned_payload = json.loads(sessions_unassigned.output)
     assert unassigned_payload["sessions"][0]["area_path"] is None
+
+
+def test_cli_area_assign_and_unassign_by_session_key(tmp_path: Path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    conn = connect(state_db)
+    try:
+        migrate(conn)
+        insert_usage_events(
+            conn,
+            None,
+            [
+                make_cli_usage_event(
+                    "assign-key",
+                    source_session_id="ses-assign-key",
+                    created_ms=_future_ms(),
+                    tokens=TokenBreakdown(input=12, output=3),
+                )
+            ],
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    sessions = runner.invoke(
+        app,
+        ["--db", str(state_db), "usage", "sessions", "--json", "--no-refresh"],
+    )
+    assert sessions.exit_code == 0, sessions.output
+    key = json.loads(sessions.output)["sessions"][0]["key"]
+
+    assign_result = runner.invoke(
+        app,
+        ["--db", str(state_db), "area", "assign", "privat/toktrail", "--session", key],
+    )
+    assert assign_result.exit_code == 0, assign_result.output
+
+    sessions_after_assign = runner.invoke(
+        app,
+        ["--db", str(state_db), "usage", "sessions", "--json", "--no-refresh"],
+    )
+    assert sessions_after_assign.exit_code == 0, sessions_after_assign.output
+    assert (
+        json.loads(sessions_after_assign.output)["sessions"][0]["area_path"]
+        == "privat/toktrail"
+    )
+
+    unassign_result = runner.invoke(
+        app,
+        ["--db", str(state_db), "area", "unassign", "--session", key],
+    )
+    assert unassign_result.exit_code == 0, unassign_result.output
+
+    sessions_after_unassign = runner.invoke(
+        app,
+        ["--db", str(state_db), "usage", "sessions", "--json", "--no-refresh"],
+    )
+    assert sessions_after_unassign.exit_code == 0, sessions_after_unassign.output
+    assert (
+        json.loads(sessions_after_unassign.output)["sessions"][0]["area_path"]
+        is None
+    )
+
+
+def test_cli_area_assign_last_defaults_local_machine_and_all_machines_override(
+    tmp_path: Path,
+) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    conn = connect(state_db)
+    try:
+        migrate(conn)
+        local_machine_id = get_local_machine_id(conn)
+        remote_machine_id = "remote-machine-1234abcd"
+        upsert_machine(
+            conn,
+            machine_id=remote_machine_id,
+            name="pc2",
+            seen_ms=_future_ms(),
+            is_local=False,
+        )
+        insert_usage_events(
+            conn,
+            None,
+            [
+                make_cli_usage_event(
+                    "last-local",
+                    source_session_id="ses-local",
+                    created_ms=_future_ms() - 5_000,
+                    tokens=TokenBreakdown(input=10, output=1),
+                )
+            ],
+            origin_machine_id=local_machine_id,
+        )
+        insert_usage_events(
+            conn,
+            None,
+            [
+                make_cli_usage_event(
+                    "last-remote",
+                    source_session_id="ses-remote",
+                    created_ms=_future_ms(),
+                    tokens=TokenBreakdown(input=20, output=2),
+                )
+            ],
+            origin_machine_id=remote_machine_id,
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    local_only = runner.invoke(
+        app,
+        ["--db", str(state_db), "area", "assign", "work/odoo", "--last"],
+    )
+    assert local_only.exit_code == 0, local_only.output
+    assert "ses-local" in local_only.output
+
+    all_machines = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "area",
+            "assign",
+            "privat/toktrail",
+            "--last",
+            "--all-machines",
+        ],
+    )
+    assert all_machines.exit_code == 0, all_machines.output
+    assert "ses-remote" in all_machines.output
+
+
+def test_cli_usage_summary_prints_area_filter_semantics(tmp_path: Path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    conn = connect(state_db)
+    try:
+        migrate(conn)
+        insert_usage_events(
+            conn,
+            None,
+            [
+                make_cli_usage_event(
+                    "summary-area",
+                    source_session_id="ses-summary-area",
+                    created_ms=_future_ms(),
+                    tokens=TokenBreakdown(input=30, output=5),
+                )
+            ],
+        )
+        machine_id = get_local_machine_id(conn)
+        area = ensure_area(conn, "work/odoo")
+        assign_area_to_source_session(
+            conn,
+            area_id=area.id,
+            origin_machine_id=machine_id,
+            harness="opencode",
+            source_session_id="ses-summary-area",
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    descendants = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "usage",
+            "summary",
+            "--area",
+            "work",
+            "--no-refresh",
+        ],
+    )
+    assert descendants.exit_code == 0, descendants.output
+    assert "Area filter: work (including descendants)" in descendants.output
+
+    exact = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "usage",
+            "summary",
+            "--area",
+            "work",
+            "--area-exact",
+            "--no-refresh",
+        ],
+    )
+    assert exact.exit_code == 0, exact.output
+    assert "Area filter: work (exact only)" in exact.output
+
+
+def test_cli_area_sessions_unassigned_json(tmp_path: Path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    conn = connect(state_db)
+    try:
+        migrate(conn)
+        insert_usage_events(
+            conn,
+            None,
+            [
+                make_cli_usage_event(
+                    "area-sessions-assigned",
+                    source_session_id="ses-area-assigned",
+                    created_ms=_future_ms(),
+                    tokens=TokenBreakdown(input=10, output=2),
+                ),
+                make_cli_usage_event(
+                    "area-sessions-unassigned",
+                    source_session_id="ses-area-unassigned",
+                    created_ms=_future_ms(),
+                    tokens=TokenBreakdown(input=8, output=1),
+                ),
+            ],
+        )
+        machine_id = get_local_machine_id(conn)
+        area = ensure_area(conn, "work/odoo")
+        assign_area_to_source_session(
+            conn,
+            area_id=area.id,
+            origin_machine_id=machine_id,
+            harness="opencode",
+            source_session_id="ses-area-assigned",
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "area",
+            "sessions",
+            "--unassigned",
+            "--json",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["sessions"]
+    assert all(session["area_path"] is None for session in payload["sessions"])
 
 
 def test_cli_usage_summary_area_filters(tmp_path) -> None:

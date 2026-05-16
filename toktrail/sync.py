@@ -1323,7 +1323,7 @@ def _merge_machine_active_areas(
     updated = 0
     rows = imported.execute(
         """
-        SELECT machine_id, area_id, updated_at_ms, imported_at_ms
+        SELECT machine_id, area_id, updated_at_ms, imported_at_ms, expires_at_ms
         FROM machine_active_areas
         ORDER BY machine_id
         """
@@ -1342,7 +1342,7 @@ def _merge_machine_active_areas(
         )
         local = target.execute(
             """
-            SELECT area_id, updated_at_ms, imported_at_ms
+            SELECT area_id, updated_at_ms, imported_at_ms, expires_at_ms
             FROM machine_active_areas
             WHERE machine_id = ?
             """,
@@ -1359,11 +1359,18 @@ def _merge_machine_active_areas(
                     machine_id,
                     area_id,
                     updated_at_ms,
-                    imported_at_ms
+                    imported_at_ms,
+                    expires_at_ms
                 )
-                VALUES (?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?)
                 """,
-                (machine_id, mapped_area_id, updated_at_ms, merged_imported_at),
+                (
+                    machine_id,
+                    mapped_area_id,
+                    updated_at_ms,
+                    merged_imported_at,
+                    _optional_int_value(row["expires_at_ms"]),
+                ),
             )
             inserted += 1
             continue
@@ -1374,10 +1381,17 @@ def _merge_machine_active_areas(
                 UPDATE machine_active_areas
                 SET area_id = ?,
                     updated_at_ms = ?,
+                    expires_at_ms = ?,
                     imported_at_ms = ?
                 WHERE machine_id = ?
                 """,
-                (mapped_area_id, updated_at_ms, merged_imported_at, machine_id),
+                (
+                    mapped_area_id,
+                    updated_at_ms,
+                    _optional_int_value(row["expires_at_ms"]),
+                    merged_imported_at,
+                    machine_id,
+                ),
             )
             updated += 1
         else:
