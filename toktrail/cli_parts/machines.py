@@ -81,7 +81,7 @@ def register_machine_commands(
             bool,
             typer.Option(
                 "--rich",
-                help="Render tables with Rich formatting. Default output stays borderless.",
+                help="Render tables with Rich formatting. Default is borderless.",
             ),
         ] = False,
     ) -> None:
