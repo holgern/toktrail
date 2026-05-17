@@ -37,7 +37,9 @@ def _iter_python_files(root: Path) -> list[Path]:
     )
 
 
-def _iter_top_level_functions(tree: ast.AST) -> list[ast.FunctionDef | ast.AsyncFunctionDef]:
+def _iter_top_level_functions(
+    tree: ast.AST,
+) -> list[ast.FunctionDef | ast.AsyncFunctionDef]:
     return [
         node
         for node in ast.walk(tree)
@@ -144,8 +146,7 @@ def main() -> None:
         offenders = [stat for stat in file_stats if stat.lines > args.fail_over_lines]
         if offenders:
             print(
-                f"\nFAIL: {len(offenders)} modules exceed {args.fail_over_lines} lines:",
-                file=sys.stderr,
+                f"\nFAIL: {len(offenders)} modules exceed {args.fail_over_lines} lines:"
             )
             for stat in offenders:
                 print(

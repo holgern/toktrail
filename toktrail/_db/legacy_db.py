@@ -4451,7 +4451,6 @@ def summarize_usage_series(
     *,
     costing_config: CostingConfig | None = None,
 ) -> UsageSeriesReport:
-
     from toktrail.periods import (
         TimeBucket,
         iter_time_buckets,
@@ -5972,7 +5971,6 @@ def _run_archive_filter_sql(filters: UsageRunsFilter, where_clause: str) -> str:
 def _build_runs_where_clause(
     usage_filters: UsageReportFilter,
 ) -> tuple[str, list[object]]:
-
     clauses: list[str] = []
     params: list[object] = []
     if usage_filters.harness is not None:

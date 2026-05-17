@@ -15,4 +15,8 @@ def __getattr__(name: str):  # type: ignore[no-untyped-def]
     return getattr(_legacy_db, name)
 
 
-__all__ = list(getattr(_legacy_db, "__all__", [name for name in globals() if not name.startswith("_")]))
+__all__ = list(
+    getattr(
+        _legacy_db, "__all__", [name for name in globals() if not name.startswith("_")]
+    )
+)
