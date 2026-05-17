@@ -20,6 +20,10 @@ from toktrail.config import (
 )
 
 
+def _toml_path_value(path) -> str:
+    return str(path).replace("\\", "/")
+
+
 def test_load_costing_config_missing_file_returns_default_config(tmp_path) -> None:
     config = load_costing_config(tmp_path / "missing.toml")
 
@@ -1362,7 +1366,7 @@ def test_load_resolved_toktrail_config_uses_git_repo_for_tracked_costing_files(
 config_version = 1
 
 [sync.git]
-repo = "{repo}"
+repo = "{_toml_path_value(repo)}"
 track = ["prices", "provider-prices", "subscriptions"]
 """.strip(),
         encoding="utf-8",
@@ -1388,7 +1392,7 @@ def test_load_resolved_toktrail_config_env_overrides_git_tracked_paths(
 config_version = 1
 
 [sync.git]
-repo = "{repo}"
+repo = "{_toml_path_value(repo)}"
 track = ["prices", "provider-prices", "subscriptions"]
 """.strip(),
         encoding="utf-8",
@@ -1416,7 +1420,7 @@ def test_load_resolved_toktrail_config_cli_overrides_git_tracked_paths(
 config_version = 1
 
 [sync.git]
-repo = "{repo}"
+repo = "{_toml_path_value(repo)}"
 track = ["prices", "provider-prices", "subscriptions"]
 """.strip(),
         encoding="utf-8",
