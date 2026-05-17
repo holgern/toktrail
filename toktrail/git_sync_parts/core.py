@@ -316,7 +316,7 @@ def export_repo_state(
     if include_config:
         msg = (
             "sync.git.include_config is not supported for git sync; "
-            "use [sync.git].track = [\"config\", ...] instead."
+            'use [sync.git].track = ["config", ...] instead.'
         )
         raise ValueError(msg)
     _write_repo_layout(resolved_repo)
@@ -1048,11 +1048,14 @@ def _export_text_state(
                         usage_key_by_id=usage_key_by_id,
                     )
                     target = staged_root / relpath
-                    payload = json.dumps(
-                        record,
-                        sort_keys=True,
-                        separators=(",", ":"),
-                    ).encode("utf-8") + b"\n"
+                    payload = (
+                        json.dumps(
+                            record,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        ).encode("utf-8")
+                        + b"\n"
+                    )
                     _write_if_changed(target, payload)
                     files.append(
                         {
