@@ -353,7 +353,7 @@ def export_repo_state(
         redact_raw_json=redact_raw_json,
     )
 
-    _run_git(resolved_repo, "add", "-A", str(state_root.relative_to(resolved_repo)))
+    _run_git(resolved_repo, "add", "-A", _repo_relpath(state_root, resolved_repo))
     _run_git(
         resolved_repo,
         "add",
@@ -423,7 +423,7 @@ def git_sync_status(
             conn.close()
 
     state_db_paths = tuple(
-        str(path.relative_to(resolved_repo))
+        _repo_relpath(path, resolved_repo)
         for path in _find_state_db_files(resolved_repo)
     )
     return GitSyncRepoStatus(
@@ -641,6 +641,18 @@ def _require_repo(repo_path: Path) -> Path:
     return resolved
 
 
+def _repo_relpath(path: Path, repo_path: Path) -> str:
+    """Return a Git-compatible repo-relative path.
+
+    pathlib uses backslashes in stringified Windows paths, but Git porcelain
+    output and pathspecs are slash-separated on every platform. Keep all
+    internally compared/stored repo paths in POSIX form so dirty-path checks,
+    manifests, and import fingerprints are stable across Linux/macOS/Windows.
+    """
+
+    return path.resolve().relative_to(repo_path.resolve()).as_posix()
+
+
 def _set_remote_url(repo_path: Path, remote: str, remote_url: str) -> None:
     remotes = _run_git_output(repo_path, "remote").splitlines()
     if remote in remotes:
@@ -765,7 +777,7 @@ def _repo_relative_tracked_paths(
         resolved = expanded.resolve()
         if resolved_repo != resolved and resolved_repo not in resolved.parents:
             continue
-        relpath = str(resolved.relative_to(resolved_repo))
+        relpath = resolved.relative_to(resolved_repo).as_posix()
         if expanded.exists():
             if expanded.is_dir():
                 prefix = f"{relpath.rstrip('/')}/"
@@ -874,7 +886,7 @@ def _fail_if_contains_state_db_files(repo_path: Path) -> None:
     matches = _find_state_db_files(repo_path)
     if not matches:
         return
-    listed = ", ".join(str(path.relative_to(repo_path)) for path in matches)
+    listed = ", ".join(_repo_relpath(path, repo_path) for path in matches)
     msg = (
         "Git sync repo contains live sqlite state files "
         f"({listed}). Remove them from the repo before continuing."
@@ -961,7 +973,7 @@ def import_repo_state(
                 archive_sha256=state_fingerprint,
                 source_machine_id=context.imported_machine_id,
                 exported_at_ms=context.imported_at_ms,
-                archive_path=str(state_root.relative_to(resolved_repo)),
+                archive_path=_repo_relpath(state_root, resolved_repo),
                 result_json=json.dumps(
                     _state_import_result_dict(result),
                     sort_keys=True,
@@ -1346,7 +1358,7 @@ def _write_if_changed(path: Path, content: bytes) -> None:
 def _state_files_fingerprint(state_root: Path, files: list[Path]) -> str:
     digest = sha256()
     for path in files:
-        rel = str(path.relative_to(state_root)).encode("utf-8")
+        rel = path.relative_to(state_root).as_posix().encode("utf-8")
         digest.update(rel)
         digest.update(b"\0")
         digest.update(_sha256_file(path).encode("utf-8"))

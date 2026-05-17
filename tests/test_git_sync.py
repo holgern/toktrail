@@ -20,6 +20,7 @@ from toktrail.db import (
     summarize_usage,
     upsert_source_session_metadata,
 )
+from toktrail.git_sync_parts import core as git_sync_core
 from toktrail.git_sync import (
     ensure_git_repo,
     export_repo_archive,
@@ -832,6 +833,43 @@ def test_git_sync_include_config_is_rejected(tmp_path: Path) -> None:
             push=False,
             allow_dirty=False,
         )
+
+
+def test_git_sync_repo_relative_tracked_paths_are_posix_for_git(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    prices_file = repo / "config" / "prices.toml"
+    provider_dir = repo / "config" / "prices"
+
+    ensure_git_repo(repo, remote_url=None, branch="main")
+    prices_file.parent.mkdir(parents=True)
+    prices_file.write_text("config_version = 1\n", encoding="utf-8")
+
+    relpaths, prefixes = git_sync_core._repo_relative_tracked_paths(
+        repo,
+        (prices_file, provider_dir),
+    )
+
+    assert "config/prices.toml" in relpaths
+    assert "config/prices/" in prefixes
+    assert not any("\\" in item for item in (*relpaths, *prefixes))
+
+
+def test_git_sync_state_fingerprint_uses_posix_relative_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state_root = tmp_path / "state"
+    state_file = state_root / "usage-events" / "opencode" / "event.json"
+    state_file.parent.mkdir(parents=True)
+    state_file.write_text("{}\n", encoding="utf-8")
+
+    monkeypatch.setattr(git_sync_core, "_sha256_file", lambda path: "file-digest")
+
+    expected = __import__("hashlib").sha256(
+        b"usage-events/opencode/event.json\0file-digest\n"
+    ).hexdigest()
+    assert git_sync_core._state_files_fingerprint(state_root, [state_file]) == expected
 
 
 def test_git_sync_export_stages_tracked_config_files(tmp_path: Path) -> None:
