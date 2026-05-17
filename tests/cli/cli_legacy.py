@@ -6343,8 +6343,16 @@ auto_push = true
     )
     assert second.exit_code == 0, second.output
 
-    archive_count = len(list((repo / "archives").rglob("*.tar.gz")))
-    assert archive_count == 1
+    # The auto-export creates a git commit (text state, not tar.gz).
+    # First refresh should produce exactly 1 export commit; second should not.
+    import subprocess
+
+    commit_count = int(
+        subprocess.check_output(
+            ["git", "rev-list", "--count", "HEAD"], cwd=str(repo)
+        ).strip()
+    )
+    assert commit_count == 1
 
 
 @pytest.mark.skipif(not HAS_GIT, reason="git executable is required")
