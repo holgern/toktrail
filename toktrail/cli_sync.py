@@ -318,7 +318,7 @@ def maybe_auto_export_to_git_repo(
             repo_path,
             archive_dir=runtime.state_dir or DEFAULT_STATE_DIR,
             config_path=loaded.config_path,
-            include_config=runtime.include_config,
+            include_config=False,
             redact_raw_json=runtime.redact_raw_json,
             commit_message=f"toktrail auto-export: {reason}",
             remote=runtime.remote or DEFAULT_REMOTE,
