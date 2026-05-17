@@ -164,6 +164,65 @@ def test_git_sync_export_writes_text_state_files(
     assert _usage_total_tokens(db_a) == _usage_total_tokens(db_b)
 
 
+def test_git_sync_export_replaces_existing_state_dir_on_windows_like_rename(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = tmp_path / "repo"
+    db_a = tmp_path / "a.db"
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("config_version = 1\n", encoding="utf-8")
+
+    ensure_git_repo(repo, remote_url=None, branch="main")
+    _configure_git_identity(repo)
+    _seed_db(db_a, event=_event("1", created_ms=1_777_801_200_000))
+
+    export_repo_archive(
+        db_a,
+        repo,
+        archive_dir="state",
+        config_path=config_path,
+        include_config=False,
+        redact_raw_json=True,
+        commit_message="initial sync",
+        remote="origin",
+        branch="main",
+        push=False,
+        allow_dirty=False,
+    )
+    assert (repo / "state" / "manifest.json").is_file()
+
+    original_rename = Path.rename
+
+    def windows_like_rename(self: Path, target: str | Path) -> Path:
+        target_path = Path(target)
+        if self.name.startswith(".state.staging.") and target_path.exists():
+            raise FileExistsError(
+                183,
+                "Cannot create a file when that file already exists",
+                str(target_path),
+            )
+        return original_rename(self, target)
+
+    monkeypatch.setattr(Path, "rename", windows_like_rename)
+
+    # A second export replaces the already-existing state directory. This used to
+    # depend on POSIX directory rename semantics and failed on Windows.
+    export_repo_archive(
+        db_a,
+        repo,
+        archive_dir="state",
+        config_path=config_path,
+        include_config=False,
+        redact_raw_json=True,
+        commit_message="second sync",
+        remote="origin",
+        branch="main",
+        push=False,
+        allow_dirty=False,
+    )
+    assert (repo / "state" / "manifest.json").is_file()
+
+
 def test_git_sync_export_records_machine_name(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

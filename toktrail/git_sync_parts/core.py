@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import shlex
+import shutil
 import sqlite3
 import subprocess
 import tempfile
@@ -1084,14 +1085,7 @@ def _export_text_state(
                     + b"\n"
                 ),
             )
-            if state_root.exists():
-                for old_file in sorted(state_root.rglob("*"), reverse=True):
-                    if old_file.is_file():
-                        old_file.unlink()
-                    elif old_file.is_dir():
-                        old_file.rmdir()
-            state_root.parent.mkdir(parents=True, exist_ok=True)
-            staged_root.rename(state_root)
+            _replace_directory(staged_root, state_root)
         finally:
             dest.close()
             src.close()
@@ -1108,6 +1102,22 @@ def _export_text_state(
         run_event_count=counts["run_events"],
         raw_json_count=raw_json_rows,
     )
+
+
+def _replace_directory(staged_root: Path, target_root: Path) -> None:
+    """Replace a directory tree with a staged tree on all supported platforms.
+
+    `Path.rename(src, dst)` can replace an existing empty directory on POSIX, but
+    Windows raises FileExistsError when `dst` already exists. Remove the old tree
+    first so repeated git-sync exports work on both platforms.
+    """
+
+    target_root.parent.mkdir(parents=True, exist_ok=True)
+    if target_root.is_symlink() or target_root.is_file():
+        target_root.unlink()
+    elif target_root.exists():
+        shutil.rmtree(target_root)
+    staged_root.rename(target_root)
 
 
 def _load_text_state_into_db(
