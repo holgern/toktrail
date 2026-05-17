@@ -18,6 +18,7 @@ from toktrail.models import RunScope, TokenBreakdown, UsageEvent
 from toktrail.statusline import (
     StatuslineRequest,
     load_statusline_output_cache,
+    statusline_cache_dir,
     statusline_cache_key,
     write_statusline_output_cache,
 )
@@ -547,6 +548,15 @@ def test_statusline_output_cache_invalidates_on_config_change(tmp_path: Path) ->
     )
 
     assert cached is None
+
+
+def test_statusline_cache_dir_without_getuid(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
+    globals_ = statusline_cache_dir.__globals__
+    monkeypatch.setattr(globals_["tempfile"], "gettempdir", lambda: str(tmp_path))
+    monkeypatch.delattr(globals_["os"], "getuid", raising=False)
+
+    assert statusline_cache_dir() == tmp_path / "toktrail" / "statusline"
 
 
 def test_statusline_cache_atomic_write(tmp_path: Path) -> None:

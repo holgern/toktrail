@@ -67,7 +67,15 @@ def statusline_cache_dir() -> Path:
     runtime_dir = os.environ.get("XDG_RUNTIME_DIR")
     if runtime_dir:
         return Path(runtime_dir).expanduser() / "toktrail" / "statusline"
-    return Path(tempfile.gettempdir()) / f"toktrail-{os.getuid()}" / "statusline"
+
+    temp_dir = Path(tempfile.gettempdir())
+    getuid = getattr(os, "getuid", None)
+    if callable(getuid):
+        return temp_dir / f"toktrail-{getuid()}" / "statusline"
+
+    # Windows does not expose os.getuid(). Its default temp directory is already
+    # user-scoped, so avoid a POSIX-only owner suffix there.
+    return temp_dir / "toktrail" / "statusline"
 
 
 def statusline_cache_key(
