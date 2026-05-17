@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import shlex
+import sqlite3
 import subprocess
 import tarfile
 import tempfile
@@ -9,20 +10,22 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from hashlib import sha256
 from pathlib import Path
+from time import time
 
 from toktrail import db
 from toktrail.sync import (
     MANIFEST_NAME,
     ConflictMode,
+    ImportedStateContext,
     RemoteActiveMode,
     StateExportResult,
     StateImportResult,
-    export_state_archive,
-    import_state_archive,
+    merge_imported_state_db,
 )
 
-GIT_SYNC_FORMAT = "toktrail.git-sync.v1"
-DEFAULT_ARCHIVE_DIR = "archives"
+GIT_SYNC_FORMAT = "toktrail.git-sync.v2"
+DEFAULT_STATE_DIR = "state"
+DEFAULT_ARCHIVE_DIR = DEFAULT_STATE_DIR
 DEFAULT_REMOTE = "origin"
 DEFAULT_BRANCH = "main"
 _STATE_DB_FILE_NAMES = frozenset({"toktrail.db", "toktrail.db-wal", "toktrail.db-shm"})
@@ -197,13 +200,7 @@ def list_archives(
     repo_path: Path,
     archive_dir: str = DEFAULT_ARCHIVE_DIR,
 ) -> list[Path]:
-    resolved_repo = _require_repo(repo_path)
-    base = resolved_repo / archive_dir
-    if not base.exists():
-        return []
-    archives = [path for path in base.rglob("*.tar.gz") if path.is_file()]
-    archives.sort()
-    return archives
+    return list_state_files(repo_path, state_dir=archive_dir)
 
 
 def read_archive_manifest(archive_path: Path) -> dict[str, object]:
@@ -232,63 +229,13 @@ def import_repo_archives(
     on_conflict: ConflictMode = "fail",
     remote_active: RemoteActiveMode = "close-at-export",
 ) -> GitSyncImportResult:
-    resolved_repo = _require_repo(repo_path)
-    archives = list_archives(resolved_repo, archive_dir)
-
-    imported_results: list[StateImportResult] = []
-    seen = 0
-    imported = 0
-    skipped = 0
-    for archive_path in archives:
-        seen += 1
-        archive_sha = _sha256_file(archive_path)
-
-        conn = db.connect(db_path.expanduser())
-        try:
-            db.migrate(conn)
-            if db.has_imported_sync_archive(conn, archive_sha):
-                skipped += 1
-                continue
-        finally:
-            conn.close()
-
-        manifest = read_archive_manifest(archive_path)
-        result = import_state_archive(
-            db_path.expanduser(),
-            archive_path,
-            dry_run=dry_run,
-            on_conflict=on_conflict,
-            remote_active=remote_active,
-        )
-        imported_results.append(result)
-
-        if not dry_run:
-            source_machine_id = _optional_manifest_str(manifest, "machine_id")
-            exported_at_ms = _optional_manifest_int(manifest, "exported_at_ms")
-            archive_relpath = str(archive_path.relative_to(resolved_repo))
-            result_json = json.dumps(_state_import_result_dict(result), sort_keys=True)
-            conn = db.connect(db_path.expanduser())
-            try:
-                db.migrate(conn)
-                db.record_imported_sync_archive(
-                    conn,
-                    archive_sha256=archive_sha,
-                    source_machine_id=source_machine_id,
-                    exported_at_ms=exported_at_ms,
-                    archive_path=archive_relpath,
-                    result_json=result_json,
-                )
-                conn.commit()
-            finally:
-                conn.close()
-        imported += 1
-
-    return GitSyncImportResult(
-        repo_path=resolved_repo,
-        archives_seen=seen,
-        archives_imported=imported,
-        archives_skipped=skipped,
-        import_results=tuple(imported_results),
+    return import_repo_state(
+        db_path,
+        repo_path,
+        dry_run=dry_run,
+        state_dir=archive_dir,
+        on_conflict=on_conflict,
+        remote_active=remote_active,
     )
 
 
@@ -297,6 +244,37 @@ def export_repo_archive(
     repo_path: Path,
     *,
     archive_dir: str = DEFAULT_ARCHIVE_DIR,
+    config_path: Path,
+    include_config: bool,
+    redact_raw_json: bool,
+    commit_message: str | None,
+    remote: str,
+    branch: str,
+    push: bool,
+    allow_dirty: bool,
+    tracked_config_paths: tuple[Path, ...] = (),
+) -> GitSyncExportResult:
+    return export_repo_state(
+        db_path,
+        repo_path,
+        state_dir=archive_dir,
+        config_path=config_path,
+        include_config=include_config,
+        redact_raw_json=redact_raw_json,
+        commit_message=commit_message,
+        remote=remote,
+        branch=branch,
+        push=push,
+        allow_dirty=allow_dirty,
+        tracked_config_paths=tracked_config_paths,
+    )
+
+
+def export_repo_state(
+    db_path: Path,
+    repo_path: Path,
+    *,
+    state_dir: str = DEFAULT_STATE_DIR,
     config_path: Path,
     include_config: bool,
     redact_raw_json: bool,
@@ -316,7 +294,14 @@ def export_repo_archive(
     )
     if not allow_dirty and _has_uncommitted_disallowed_changes(
         resolved_repo,
-        allowed_prefixes=("README.md", ".gitignore", "meta/", *tracked_prefixes),
+        allowed_prefixes=(
+            "README.md",
+            ".gitignore",
+            ".gitattributes",
+            "meta/",
+            f"{state_dir.rstrip('/')}/",
+            *tracked_prefixes,
+        ),
         allowed_relpaths=set(tracked_relpaths),
     ):
         msg = (
@@ -325,39 +310,22 @@ def export_repo_archive(
         )
         raise ValueError(msg)
 
-    with tempfile.NamedTemporaryFile(
-        dir=resolved_repo,
-        prefix=".toktrail-export-",
-        suffix=".tar.gz",
-        delete=False,
-    ) as handle:
-        temp_archive_path = Path(handle.name)
+    state_root = resolved_repo / state_dir
+    export_result = _export_text_state(
+        db_path.expanduser(),
+        state_root,
+        redact_raw_json=redact_raw_json,
+    )
 
-    try:
-        export_result = export_state_archive(
-            db_path.expanduser(),
-            temp_archive_path,
-            config_path=config_path,
-            include_config=include_config,
-            redact_raw_json=redact_raw_json,
-        )
-        archive_sha = _sha256_file(temp_archive_path)
-        exported_at = datetime.fromtimestamp(
-            export_result.exported_at_ms / 1000,
-            tz=timezone.utc,
-        )
-        archive_name = f"{exported_at:%Y%m%dT%H%M%SZ}-{archive_sha[:8]}.tar.gz"
-        final_archive = (
-            resolved_repo / archive_dir / export_result.machine_id / archive_name
-        )
-        final_archive.parent.mkdir(parents=True, exist_ok=True)
-        temp_archive_path.replace(final_archive)
-    finally:
-        if temp_archive_path.exists():
-            temp_archive_path.unlink()
-
-    _run_git(resolved_repo, "add", str(final_archive.relative_to(resolved_repo)))
-    _run_git(resolved_repo, "add", "meta/format.json", ".gitignore", "README.md")
+    _run_git(resolved_repo, "add", "-A", str(state_root.relative_to(resolved_repo)))
+    _run_git(
+        resolved_repo,
+        "add",
+        "meta/format.json",
+        ".gitignore",
+        ".gitattributes",
+        "README.md",
+    )
     for relpath in tracked_relpaths:
         _run_git(resolved_repo, "add", "-A", relpath)
     for relpath in tracked_prefixes:
@@ -386,7 +354,7 @@ def export_repo_archive(
 
     return GitSyncExportResult(
         repo_path=resolved_repo,
-        archive_path=final_archive,
+        archive_path=state_root,
         committed=committed,
         pushed=pushed,
         commit_hash=commit_hash,
@@ -406,18 +374,8 @@ def git_sync_status(
     remote_url = _remote_url(resolved_repo, remote)
     dirty = _repo_is_dirty(resolved_repo)
     ahead, behind = _ahead_behind(resolved_repo)
-    archives = list_archives(resolved_repo, archive_dir)
-
+    archives = list_state_files(resolved_repo, state_dir=archive_dir)
     pending = 0
-    conn = db.connect(db_path.expanduser())
-    try:
-        db.migrate(conn)
-        for archive_path in archives:
-            archive_sha = _sha256_file(archive_path)
-            if not db.has_imported_sync_archive(conn, archive_sha):
-                pending += 1
-    finally:
-        conn.close()
 
     state_db_paths = tuple(
         str(path.relative_to(resolved_repo))
@@ -540,25 +498,57 @@ def _write_repo_layout(repo_path: Path) -> None:
             json.dumps(
                 {
                     "format": GIT_SYNC_FORMAT,
-                    "archive_format": "toktrail.sync-archive.v1",
+                    "state_format": "toktrail.text-state.v1",
                     "created_by": "toktrail",
                 },
                 indent=2,
+                sort_keys=True,
             )
             + "\n",
             encoding="utf-8",
         )
 
     gitignore_path = repo_path / ".gitignore"
-    gitignore_lines = ["*.tmp", "*.lock", ".DS_Store"]
+    gitignore_lines = [
+        "*.tmp",
+        "*.lock",
+        ".DS_Store",
+        "toktrail.db",
+        "toktrail.db-wal",
+        "toktrail.db-shm",
+        "*.sqlite",
+        "*.sqlite3",
+        "*.tar.gz",
+        "archives/",
+    ]
     if not gitignore_path.exists():
         gitignore_path.write_text("\n".join(gitignore_lines) + "\n", encoding="utf-8")
+    gitattributes_path = repo_path / ".gitattributes"
+    if not gitattributes_path.exists():
+        gitattributes_path.write_text(
+            "\n".join(
+                (
+                    "*.json text eol=lf",
+                    "*.jsonl text eol=lf",
+                    "*.toml text eol=lf",
+                    "*.md text eol=lf",
+                    "*.db binary",
+                    "*.sqlite binary",
+                    "*.sqlite3 binary",
+                    "*.db-wal binary",
+                    "*.db-shm binary",
+                    "*.tar.gz binary",
+                )
+            )
+            + "\n",
+            encoding="utf-8",
+        )
 
     readme_path = repo_path / "README.md"
     if not readme_path.exists():
         readme_path.write_text(
             "# Toktrail state sync\n\n"
-            "This repo stores immutable toktrail sync archives under `archives/`.\n"
+            "This repo stores toktrail text state files under `state/`.\n"
             "Do not commit live sqlite state files (`toktrail.db*`).\n",
             encoding="utf-8",
         )
@@ -811,6 +801,261 @@ def _sha256_file(path: Path) -> str:
                 break
             digest.update(block)
     return digest.hexdigest()
+
+
+def list_state_files(
+    repo_path: Path, *, state_dir: str = DEFAULT_STATE_DIR
+) -> list[Path]:
+    resolved_repo = _require_repo(repo_path)
+    base = resolved_repo / state_dir
+    if not base.exists():
+        return []
+    files = [path for path in base.rglob("*") if path.is_file()]
+    files.sort()
+    return files
+
+
+def import_repo_state(
+    db_path: Path,
+    repo_path: Path,
+    *,
+    dry_run: bool,
+    state_dir: str = DEFAULT_STATE_DIR,
+    on_conflict: ConflictMode = "fail",
+    remote_active: RemoteActiveMode = "close-at-export",
+) -> GitSyncImportResult:
+    resolved_repo = _require_repo(repo_path)
+    state_root = resolved_repo / state_dir
+    if not state_root.exists():
+        return GitSyncImportResult(
+            repo_path=resolved_repo,
+            archives_seen=0,
+            archives_imported=0,
+            archives_skipped=0,
+            import_results=(),
+        )
+    state_files = list_state_files(resolved_repo, state_dir=state_dir)
+    state_fingerprint = _state_files_fingerprint(state_root, state_files)
+    conn = db.connect(db_path.expanduser())
+    try:
+        db.migrate(conn)
+        if state_fingerprint and db.has_imported_sync_archive(conn, state_fingerprint):
+            return GitSyncImportResult(
+                repo_path=resolved_repo,
+                archives_seen=len(state_files),
+                archives_imported=0,
+                archives_skipped=len(state_files),
+                import_results=(),
+            )
+    finally:
+        conn.close()
+    with tempfile.TemporaryDirectory(
+        prefix="toktrail-sync-state-import-"
+    ) as temp_dir_text:
+        temp_db_path = Path(temp_dir_text) / "imported-state.sqlite"
+        context = _load_text_state_into_db(state_root, temp_db_path)
+        result = merge_imported_state_db(
+            target_db_path=db_path.expanduser(),
+            imported_db_path=temp_db_path,
+            context=context,
+            dry_run=dry_run,
+            on_conflict=on_conflict,
+            remote_active=remote_active,
+        )
+    if not dry_run and state_fingerprint:
+        conn = db.connect(db_path.expanduser())
+        try:
+            db.migrate(conn)
+            db.record_imported_sync_archive(
+                conn,
+                archive_sha256=state_fingerprint,
+                source_machine_id=context.imported_machine_id,
+                exported_at_ms=context.imported_at_ms,
+                archive_path=str(state_root.relative_to(resolved_repo)),
+                result_json=json.dumps(
+                    _state_import_result_dict(result),
+                    sort_keys=True,
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    return GitSyncImportResult(
+        repo_path=resolved_repo,
+        archives_seen=len(state_files),
+        archives_imported=1,
+        archives_skipped=0,
+        import_results=(result,),
+    )
+
+
+def _export_text_state(
+    db_path: Path,
+    state_root: Path,
+    *,
+    redact_raw_json: bool,
+) -> StateExportResult:
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        db.migrate(conn)
+        from toktrail.config import load_machine_config
+
+        machine_config = load_machine_config().config
+        db.apply_local_machine_config(conn, machine_config)
+        conn.commit()
+        exported_at_ms = int(time() * 1000)
+        machine = conn.execute(
+            "SELECT machine_id, name FROM machines "
+            "WHERE is_local = 1 "
+            "ORDER BY updated_at_ms DESC LIMIT 1"
+        ).fetchone()
+        if machine is None:
+            msg = "No local machine row found for git sync export."
+            raise ValueError(msg)
+        machine_id = str(machine["machine_id"])
+        machine_name = machine["name"]
+
+        staged_root = state_root.parent / f".{state_root.name}.staging"
+        if staged_root.exists():
+            for path in sorted(staged_root.rglob("*"), reverse=True):
+                if path.is_file():
+                    path.unlink()
+                elif path.is_dir():
+                    path.rmdir()
+        staged_root.mkdir(parents=True, exist_ok=True)
+
+        counts: dict[str, int] = {}
+        raw_json_rows = 0
+        for table in (
+            "machines",
+            "areas",
+            "area_session_assignments",
+            "machine_active_areas",
+            "runs",
+            "source_sessions",
+            "source_session_metadata",
+            "usage_events",
+            "run_events",
+        ):
+            rows = conn.execute(f"SELECT * FROM {table} ORDER BY rowid").fetchall()
+            counts[table] = len(rows)
+            target = staged_root / f"{table}.jsonl"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            lines: list[str] = []
+            for row in rows:
+                record = {key: row[key] for key in row.keys()}
+                if table == "usage_events" and redact_raw_json:
+                    record["raw_json"] = None
+                elif table == "usage_events" and row["raw_json"] is not None:
+                    raw_json_rows += 1
+                lines.append(json.dumps(record, sort_keys=True, separators=(",", ":")))
+            serialized = ("\n".join(lines) + ("\n" if lines else "")).encode("utf-8")
+            _write_if_changed(target, serialized)
+
+        if state_root.exists():
+            for old_file in sorted(state_root.rglob("*"), reverse=True):
+                if old_file.is_file():
+                    old_file.unlink()
+                elif old_file.is_dir():
+                    old_file.rmdir()
+        state_root.parent.mkdir(parents=True, exist_ok=True)
+        staged_root.rename(state_root)
+
+        return StateExportResult(
+            archive_path=state_root,
+            exported_at_ms=exported_at_ms,
+            schema_version=db.SCHEMA_VERSION,
+            machine_id=machine_id,
+            machine_name=machine_name if isinstance(machine_name, str) else None,
+            run_count=counts["runs"],
+            source_session_count=counts["source_sessions"],
+            usage_event_count=counts["usage_events"],
+            run_event_count=counts["run_events"],
+            raw_json_count=raw_json_rows,
+        )
+    finally:
+        conn.close()
+
+
+def _load_text_state_into_db(
+    state_root: Path, temp_db_path: Path
+) -> ImportedStateContext:
+    conn = sqlite3.connect(temp_db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        db.migrate(conn)
+        for table in (
+            "machines",
+            "areas",
+            "area_session_assignments",
+            "machine_active_areas",
+            "runs",
+            "source_sessions",
+            "source_session_metadata",
+            "usage_events",
+            "run_events",
+        ):
+            path = state_root / f"{table}.jsonl"
+            if not path.exists():
+                continue
+            rows = []
+            for line in path.read_text(encoding="utf-8").splitlines():
+                text = line.strip()
+                if not text:
+                    continue
+                rows.append(json.loads(text))
+            if not rows:
+                continue
+            columns = sorted(rows[0].keys())
+            col_sql = ", ".join(columns)
+            val_sql = ", ".join("?" for _ in columns)
+            for row in rows:
+                values = [row.get(column) for column in columns]
+                conn.execute(
+                    f"INSERT OR REPLACE INTO {table} ({col_sql}) VALUES ({val_sql})",
+                    values,
+                )
+        conn.commit()
+        machine = conn.execute(
+            "SELECT machine_id, name FROM machines "
+            "ORDER BY is_local DESC, updated_at_ms DESC LIMIT 1"
+        ).fetchone()
+        if machine is None:
+            msg = f"State files missing machines row under {state_root}"
+            raise ValueError(msg)
+        return ImportedStateContext(
+            source_path=state_root,
+            imported_at_ms=int(time() * 1000),
+            imported_machine_id=str(machine["machine_id"]),
+            imported_machine_name=(
+                machine["name"] if isinstance(machine["name"], str) else None
+            ),
+            schema_version=db.SCHEMA_VERSION,
+            source_format="toktrail.text-state.v1",
+        )
+    finally:
+        conn.close()
+
+
+def _write_if_changed(path: Path, content: bytes) -> None:
+    if path.exists() and path.read_bytes() == content:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_bytes(content)
+    tmp.replace(path)
+
+
+def _state_files_fingerprint(state_root: Path, files: list[Path]) -> str:
+    digest = sha256()
+    for path in files:
+        rel = str(path.relative_to(state_root)).encode("utf-8")
+        digest.update(rel)
+        digest.update(b"\0")
+        digest.update(_sha256_file(path).encode("utf-8"))
+        digest.update(b"\n")
+    return digest.hexdigest() if files else ""
 
 
 def _state_export_result_dict(result: StateExportResult) -> dict[str, object]:

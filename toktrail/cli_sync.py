@@ -18,9 +18,9 @@ from toktrail.api.sync import (
 )
 from toktrail.config import LoadedToktrailConfig, load_resolved_toktrail_config
 from toktrail.git_sync import (
-    DEFAULT_ARCHIVE_DIR,
     DEFAULT_BRANCH,
     DEFAULT_REMOTE,
+    DEFAULT_STATE_DIR,
     ensure_git_repo,
     export_repo_archive,
     git_hooks_status,
@@ -316,7 +316,7 @@ def maybe_auto_export_to_git_repo(
         result = export_repo_archive(
             db_path,
             repo_path,
-            archive_dir=runtime.archive_dir or DEFAULT_ARCHIVE_DIR,
+            archive_dir=runtime.state_dir or DEFAULT_STATE_DIR,
             config_path=loaded.config_path,
             include_config=runtime.include_config,
             redact_raw_json=runtime.redact_raw_json,
@@ -484,7 +484,7 @@ def sync_git_init(
                 _resolve_state_db(ctx),
                 repo_path,
                 dry_run=False,
-                archive_dir=runtime.sync_git.archive_dir or DEFAULT_ARCHIVE_DIR,
+                archive_dir=runtime.sync_git.state_dir or DEFAULT_STATE_DIR,
                 on_conflict=_parse_sync_conflict_mode(runtime.sync_git.on_conflict),
                 remote_active=_parse_sync_remote_active_mode(
                     runtime.sync_git.remote_active
@@ -494,7 +494,7 @@ def sync_git_init(
         status = git_sync_status(
             _resolve_state_db(ctx),
             repo_path,
-            archive_dir=runtime.sync_git.archive_dir or DEFAULT_ARCHIVE_DIR,
+            archive_dir=runtime.sync_git.state_dir or DEFAULT_STATE_DIR,
             remote=runtime.sync_git.remote or DEFAULT_REMOTE,
         )
     except (OSError, ValueError) as exc:
@@ -523,8 +523,8 @@ def sync_git_init(
     if import_payload is not None:
         typer.echo(
             "  import: "
-            f"seen {import_payload['archives_seen']}, "
-            f"imported {import_payload['archives_imported']}, "
+            f"files {import_payload['archives_seen']}, "
+            f"imports {import_payload['archives_imported']}, "
             f"skipped {import_payload['archives_skipped']}"
         )
     if status.state_db_paths:
@@ -547,7 +547,7 @@ def sync_git_status(
         status = git_sync_status(
             _resolve_state_db(ctx),
             repo_path,
-            archive_dir=runtime.sync_git.archive_dir or DEFAULT_ARCHIVE_DIR,
+            archive_dir=runtime.sync_git.state_dir or DEFAULT_STATE_DIR,
             remote=runtime.sync_git.remote or DEFAULT_REMOTE,
         )
     except (OSError, ValueError) as exc:
@@ -565,7 +565,7 @@ def sync_git_status(
     ahead_text = "?" if status.ahead is None else str(status.ahead)
     behind_text = "?" if status.behind is None else str(status.behind)
     typer.echo(f"  ahead/behind: {ahead_text}/{behind_text}")
-    typer.echo(f"  archives: {status.archive_count}")
+    typer.echo(f"  state files: {status.archive_count}")
     typer.echo(f"  pending imports: {status.pending_import_count}")
     if status.state_db_paths:
         typer.echo("  warning: live sqlite files found in repo:")
@@ -670,7 +670,7 @@ def sync_git_import_local(
             _resolve_state_db(ctx),
             repo_path,
             dry_run=dry_run,
-            archive_dir=runtime.sync_git.archive_dir or DEFAULT_ARCHIVE_DIR,
+            archive_dir=runtime.sync_git.state_dir or DEFAULT_STATE_DIR,
             on_conflict=_parse_sync_conflict_mode(conflict_mode),
             remote_active=_parse_sync_remote_active_mode(remote_active_mode),
         )
@@ -686,9 +686,9 @@ def sync_git_import_local(
     heading = "Dry-run local import:" if dry_run else "Local import:"
     typer.echo(heading)
     typer.echo(f"  repo: {result.repo_path}")
-    typer.echo(f"  archives: seen {result.archives_seen}")
-    typer.echo(f"  archives: imported {result.archives_imported}")
-    typer.echo(f"  archives: skipped {result.archives_skipped}")
+    typer.echo(f"  state files: scanned {result.archives_seen}")
+    typer.echo(f"  state imports: {result.archives_imported}")
+    typer.echo(f"  state skipped: {result.archives_skipped}")
 
 
 @sync_git_app.command("export-local")
@@ -714,7 +714,7 @@ def sync_git_export_local(
         result = export_repo_archive(
             _resolve_state_db(ctx),
             repo_path,
-            archive_dir=runtime.sync_git.archive_dir or DEFAULT_ARCHIVE_DIR,
+            archive_dir=runtime.sync_git.state_dir or DEFAULT_STATE_DIR,
             config_path=loaded.config_path,
             include_config=runtime.sync_git.include_config,
             redact_raw_json=runtime.sync_git.redact_raw_json,
@@ -746,7 +746,7 @@ def sync_git_export_local(
 
     typer.echo("Git export (local only):")
     typer.echo(f"  repo: {result.repo_path}")
-    typer.echo(f"  archive: {result.archive_path}")
+    typer.echo(f"  state: {result.archive_path}")
     typer.echo(f"  committed: {'yes' if result.committed else 'no'}")
     typer.echo(f"  commit: {result.commit_hash or 'none'}")
 
@@ -773,7 +773,7 @@ def sync_git_pull(
             _resolve_state_db(ctx),
             repo_path,
             dry_run=dry_run,
-            archive_dir=runtime.sync_git.archive_dir or DEFAULT_ARCHIVE_DIR,
+            archive_dir=runtime.sync_git.state_dir or DEFAULT_STATE_DIR,
             on_conflict=_parse_sync_conflict_mode(conflict_mode),
             remote_active=_parse_sync_remote_active_mode(remote_active_mode),
         )
@@ -787,9 +787,9 @@ def sync_git_pull(
     heading = "Dry-run git pull/import:" if dry_run else "Git pull/import:"
     typer.echo(heading)
     typer.echo(f"  repo: {result.repo_path}")
-    typer.echo(f"  archives: seen {result.archives_seen}")
-    typer.echo(f"  archives: imported {result.archives_imported}")
-    typer.echo(f"  archives: skipped {result.archives_skipped}")
+    typer.echo(f"  state files: scanned {result.archives_seen}")
+    typer.echo(f"  state imports: {result.archives_imported}")
+    typer.echo(f"  state skipped: {result.archives_skipped}")
 
 
 @sync_git_app.command("push")
@@ -816,7 +816,7 @@ def sync_git_push(
         result = export_repo_archive(
             _resolve_state_db(ctx),
             repo_path,
-            archive_dir=runtime.sync_git.archive_dir or DEFAULT_ARCHIVE_DIR,
+            archive_dir=runtime.sync_git.state_dir or DEFAULT_STATE_DIR,
             config_path=loaded.config_path,
             include_config=runtime.sync_git.include_config,
             redact_raw_json=runtime.sync_git.redact_raw_json,
@@ -842,7 +842,7 @@ def sync_git_push(
 
     typer.echo("Git push/export:")
     typer.echo(f"  repo: {result.repo_path}")
-    typer.echo(f"  archive: {result.archive_path}")
+    typer.echo(f"  state: {result.archive_path}")
     typer.echo(f"  committed: {'yes' if result.committed else 'no'}")
     typer.echo(f"  commit: {result.commit_hash or 'none'}")
     typer.echo(f"  pushed: {'yes' if pushed else 'no'}")
@@ -873,7 +873,7 @@ def sync_git_sync(
             _resolve_state_db(ctx),
             repo_path,
             dry_run=dry_run,
-            archive_dir=runtime.sync_git.archive_dir or DEFAULT_ARCHIVE_DIR,
+            archive_dir=runtime.sync_git.state_dir or DEFAULT_STATE_DIR,
             on_conflict=_parse_sync_conflict_mode(conflict_mode),
             remote_active=_parse_sync_remote_active_mode(remote_active_mode),
         )
@@ -889,7 +889,7 @@ def sync_git_sync(
             push_result = export_repo_archive(
                 _resolve_state_db(ctx),
                 repo_path,
-                archive_dir=runtime.sync_git.archive_dir or DEFAULT_ARCHIVE_DIR,
+                archive_dir=runtime.sync_git.state_dir or DEFAULT_STATE_DIR,
                 config_path=loaded.config_path,
                 include_config=runtime.sync_git.include_config,
                 redact_raw_json=runtime.sync_git.redact_raw_json,
@@ -910,14 +910,14 @@ def sync_git_sync(
         payload: dict[str, object] = {
             "repo_path": str(repo_path),
             "pull": {
-                "archives_seen": pull_result.archives_seen,
-                "archives_imported": pull_result.archives_imported,
-                "archives_skipped": pull_result.archives_skipped,
+                "state_files_scanned": pull_result.archives_seen,
+                "state_imports": pull_result.archives_imported,
+                "state_skipped": pull_result.archives_skipped,
             },
             "push": None
             if push_result is None
             else {
-                "archive_path": str(push_result.archive_path),
+                "state_path": str(push_result.archive_path),
                 "committed": push_result.committed,
                 "pushed": pushed,
                 "commit_hash": push_result.commit_hash,
@@ -931,8 +931,8 @@ def sync_git_sync(
     typer.echo(f"  branch: {branch_name}")
     typer.echo("  pulled: yes")
     typer.echo(
-        f"  archives: seen {pull_result.archives_seen}, "
-        f"imported {pull_result.archives_imported}, "
+        f"  state files: scanned {pull_result.archives_seen}, "
+        f"imports {pull_result.archives_imported}, "
         f"skipped {pull_result.archives_skipped}"
     )
     if push_result is not None:

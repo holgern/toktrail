@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import subprocess
-import tarfile
 from decimal import Decimal
 from pathlib import Path
 from shutil import which
@@ -127,7 +126,7 @@ def test_git_sync_init_creates_repo_layout(tmp_path: Path) -> None:
     assert (repo / ".gitignore").is_file()
 
 
-def test_git_sync_export_writes_immutable_archive_under_machine_id(
+def test_git_sync_export_writes_text_state_files(
     tmp_path: Path,
 ) -> None:
     repo = tmp_path / "repo"
@@ -143,7 +142,7 @@ def test_git_sync_export_writes_immutable_archive_under_machine_id(
     result = export_repo_archive(
         db_a,
         repo,
-        archive_dir="archives",
+        archive_dir="state",
         config_path=config_path,
         include_config=False,
         redact_raw_json=True,
@@ -155,16 +154,15 @@ def test_git_sync_export_writes_immutable_archive_under_machine_id(
     )
 
     assert result.archive_path.exists()
-    rel = result.archive_path.relative_to(repo)
-    assert rel.parts[0] == "archives"
-    assert rel.parts[1] == result.export_result.machine_id
+    assert (repo / "state" / "usage_events.jsonl").is_file()
+    assert not list(repo.rglob("*.tar.gz"))
 
     import_result = import_repo_archives(db_b, repo, dry_run=False)
     assert import_result.archives_imported == 1
     assert _usage_total_tokens(db_a) == _usage_total_tokens(db_b)
 
 
-def test_git_sync_export_manifest_includes_machine_name(
+def test_git_sync_export_records_machine_name(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     repo = tmp_path / "repo"
@@ -180,7 +178,7 @@ def test_git_sync_export_manifest_includes_machine_name(
     result = export_repo_archive(
         db_a,
         repo,
-        archive_dir="archives",
+        archive_dir="state",
         config_path=config_path,
         include_config=False,
         redact_raw_json=True,
@@ -191,11 +189,16 @@ def test_git_sync_export_manifest_includes_machine_name(
         allow_dirty=False,
     )
 
-    with tarfile.open(result.archive_path, "r:gz") as tar:
-        manifest_member = tar.extractfile("manifest.json")
-        assert manifest_member is not None
-        manifest = json.loads(manifest_member.read().decode("utf-8"))
-    assert manifest["machine_name"] == "thinkpad"
+    machine_rows = [
+        json.loads(line)
+        for line in (repo / "state" / "machines.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line.strip()
+    ]
+    local_rows = [row for row in machine_rows if int(row.get("is_local", 0)) == 1]
+    assert local_rows
+    assert local_rows[0]["name"] == "thinkpad"
     assert result.export_result.machine_name == "thinkpad"
 
 
@@ -215,7 +218,7 @@ def test_git_sync_commit_message_uses_machine_name(
     export_repo_archive(
         db_a,
         repo,
-        archive_dir="archives",
+        archive_dir="state",
         config_path=config_path,
         include_config=False,
         redact_raw_json=True,
@@ -243,7 +246,7 @@ def test_git_sync_import_skips_already_imported_archive(tmp_path: Path) -> None:
     export_repo_archive(
         db_a,
         repo,
-        archive_dir="archives",
+        archive_dir="state",
         config_path=config_path,
         include_config=False,
         redact_raw_json=True,
@@ -279,7 +282,7 @@ def test_git_sync_two_machine_round_trip(tmp_path: Path) -> None:
     export_repo_archive(
         db_a,
         repo_a,
-        archive_dir="archives",
+        archive_dir="state",
         config_path=config_path,
         include_config=False,
         redact_raw_json=True,
@@ -299,7 +302,7 @@ def test_git_sync_two_machine_round_trip(tmp_path: Path) -> None:
     export_repo_archive(
         db_b,
         repo_b,
-        archive_dir="archives",
+        archive_dir="state",
         config_path=config_path,
         include_config=False,
         redact_raw_json=True,
@@ -346,7 +349,7 @@ def test_git_sync_round_trip_preserves_areas(tmp_path: Path) -> None:
     export_repo_archive(
         db_a,
         repo,
-        archive_dir="archives",
+        archive_dir="state",
         config_path=config_path,
         include_config=False,
         redact_raw_json=True,
@@ -426,7 +429,7 @@ def test_git_sync_round_trip_preserves_source_session_metadata(tmp_path: Path) -
     export_repo_archive(
         db_a,
         repo,
-        archive_dir="archives",
+        archive_dir="state",
         config_path=config_path,
         include_config=False,
         redact_raw_json=True,
@@ -499,7 +502,7 @@ def test_git_sync_area_numeric_id_is_local_when_pc2_has_existing_areas(
     export_repo_archive(
         db_a,
         repo,
-        archive_dir="archives",
+        archive_dir="state",
         config_path=config_path,
         include_config=False,
         redact_raw_json=True,
@@ -543,7 +546,7 @@ def test_git_sync_redacts_raw_json_by_default(tmp_path: Path) -> None:
     export_repo_archive(
         db_a,
         repo,
-        archive_dir="archives",
+        archive_dir="state",
         config_path=config_path,
         include_config=False,
         redact_raw_json=True,
@@ -581,7 +584,7 @@ def test_git_sync_dirty_repo_protection(tmp_path: Path) -> None:
         export_repo_archive(
             db_a,
             repo,
-            archive_dir="archives",
+            archive_dir="state",
             config_path=config_path,
             include_config=False,
             redact_raw_json=True,
@@ -611,7 +614,7 @@ def test_git_sync_remote_active_default_close_at_export(tmp_path: Path) -> None:
     export_repo_archive(
         db_remote,
         repo,
-        archive_dir="archives",
+        archive_dir="state",
         config_path=config_path,
         include_config=False,
         redact_raw_json=True,
@@ -637,15 +640,15 @@ def test_git_sync_list_archives_returns_sorted_paths(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     ensure_git_repo(repo, remote_url=None, branch="main")
 
-    first = repo / "archives" / "machine-a" / "b.tar.gz"
-    second = repo / "archives" / "machine-a" / "a.tar.gz"
+    first = repo / "state" / "b.json"
+    second = repo / "state" / "a.json"
     first.parent.mkdir(parents=True, exist_ok=True)
     first.write_bytes(b"a")
     second.write_bytes(b"b")
 
     paths = list_archives(repo)
 
-    assert [path.name for path in paths] == ["a.tar.gz", "b.tar.gz"]
+    assert [path.name for path in paths] == ["a.json", "b.json"]
 
 
 def test_git_sync_export_stages_tracked_config_files(tmp_path: Path) -> None:
@@ -674,7 +677,7 @@ def test_git_sync_export_stages_tracked_config_files(tmp_path: Path) -> None:
     export_repo_archive(
         db_path,
         repo,
-        archive_dir="archives",
+        archive_dir="state",
         config_path=config_path,
         include_config=False,
         redact_raw_json=True,
@@ -713,7 +716,7 @@ def test_git_sync_export_still_rejects_untracked_dirty_changes(tmp_path: Path) -
         export_repo_archive(
             db_path,
             repo,
-            archive_dir="archives",
+            archive_dir="state",
             config_path=config_path,
             include_config=False,
             redact_raw_json=True,

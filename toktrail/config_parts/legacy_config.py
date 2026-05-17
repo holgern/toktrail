@@ -132,7 +132,7 @@ _SYNC_GIT_FIELDS = {
     "repo",
     "remote",
     "branch",
-    "archive_dir",
+    "state_dir",
     "auto_pull",
     "auto_push",
     "auto_import",
@@ -289,7 +289,7 @@ vibe = "~/.vibe/logs/session"
 # repo = "~/.local/share/toktrail/git-sync"
 # remote = "origin"
 # branch = "main"
-# archive_dir = "archives"
+# state_dir = "state"
 # auto_import = true  # alias: auto_pull
 # auto_export = true  # alias: auto_push
 # redact_raw_json = true
@@ -947,7 +947,7 @@ class GitSyncConfig:
     repo: str | None = None
     remote: str = "origin"
     branch: str = "main"
-    archive_dir: str = "archives"
+    state_dir: str = "state"
     auto_pull: bool = True
     auto_push: bool = True
     redact_raw_json: bool = True
@@ -2305,9 +2305,9 @@ def _parse_sync_config(value: object, default_config: GitSyncConfig) -> GitSyncC
             git_table.get("branch", default_config.branch),
             context="sync.git.branch",
         ),
-        archive_dir=_parse_string(
-            git_table.get("archive_dir", default_config.archive_dir),
-            context="sync.git.archive_dir",
+        state_dir=_parse_string(
+            git_table.get("state_dir", default_config.state_dir),
+            context="sync.git.state_dir",
         ),
         auto_pull=auto_import,
         auto_push=auto_export,

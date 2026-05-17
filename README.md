@@ -375,9 +375,9 @@ machine-scoped active areas, and event-level `area_id` values.
 
 ## Git sync
 
-Use `toktrail sync git` to exchange immutable state archives through a Git repo.
-The live SQLite DB remains local; toktrail imports archives idempotently into
-local state.
+Use `toktrail sync git` to exchange deterministic text state files through a Git
+repo. The live SQLite DB remains local; toktrail imports state files
+idempotently into local state.
 
 ```bash
 toktrail sync git init --repo ~/toktrail-state --remote git@github.com:me/toktrail-state.git
@@ -395,11 +395,12 @@ git pull
 ```
 
 `toktrail sync git init` installs local Git hooks by default so plain `git pull`
-imports archives into the local toktrail DB. Hooks are clone-local, so run
+imports state files into the local toktrail DB. Hooks are clone-local, so run
 `toktrail sync git init` (or `toktrail sync git hooks install`) once per clone.
 
-By default Git sync exports with raw JSON redaction and stores archives under
-`archives/<machine_id>/...tar.gz`. Do not commit live sqlite files
+By default Git sync exports with raw JSON redaction and stores text files under
+`state/` (for example `state/usage_events.jsonl`, `state/runs.jsonl`, and
+`state/source_sessions.jsonl`). Do not commit live sqlite files
 (`toktrail.db`, `toktrail.db-wal`, `toktrail.db-shm`) into the sync repo.
 
 ### Git-backed prices and subscriptions

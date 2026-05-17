@@ -62,6 +62,16 @@ class StateImportResult:
     conflicts: tuple[StateImportConflict, ...]
 
 
+@dataclass(frozen=True)
+class ImportedStateContext:
+    source_path: Path
+    imported_at_ms: int
+    imported_machine_id: str
+    imported_machine_name: str | None
+    schema_version: int
+    source_format: str
+
+
 class _ImportConflictError(ValueError):
     def __init__(self, conflicts: tuple[StateImportConflict, ...]) -> None:
         self.conflicts = conflicts
@@ -221,97 +231,124 @@ def import_state_archive(
             )
             raise ValueError(msg)
 
-        imported_at_ms = _required_int(manifest, "exported_at_ms")
-        imported_machine_id = _required_str(manifest, "machine_id")
-        imported_machine_name = _optional_manifest_str(manifest, "machine_name")
+        context = ImportedStateContext(
+            source_path=archive_path,
+            imported_at_ms=_required_int(manifest, "exported_at_ms"),
+            imported_machine_id=_required_str(manifest, "machine_id"),
+            imported_machine_name=_optional_manifest_str(manifest, "machine_name"),
+            schema_version=imported_schema_version,
+            source_format=_required_str(manifest, "format"),
+        )
+        return merge_imported_state_db(
+            target_db_path=db_path.expanduser(),
+            imported_db_path=imported_db_path,
+            context=context,
+            dry_run=dry_run,
+            on_conflict=on_conflict,
+            remote_active=remote_active,
+        )
 
-        target = db_module.connect(db_path.expanduser())
-        imported = sqlite3.connect(imported_db_path)
-        imported.row_factory = sqlite3.Row
+
+def default_archive_name() -> str:
+    host = socket.gethostname().strip().lower().replace(" ", "-") or "host"
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    return f"toktrail-state-{host}-{stamp}.tar.gz"
+
+
+def merge_imported_state_db(
+    *,
+    target_db_path: Path,
+    imported_db_path: Path,
+    context: ImportedStateContext,
+    dry_run: bool,
+    on_conflict: ConflictMode,
+    remote_active: RemoteActiveMode,
+) -> StateImportResult:
+    target = db_module.connect(target_db_path.expanduser())
+    imported = sqlite3.connect(imported_db_path.expanduser())
+    imported.row_factory = sqlite3.Row
+    try:
+        db_module.migrate(target)
+        db_module.migrate(imported)
+        _validate_imported_db(imported)
+
+        target.execute("BEGIN")
         try:
-            db_module.migrate(target)
-            db_module.migrate(imported)
-            _validate_imported_db(imported)
+            _merge_machines(
+                target,
+                imported,
+                imported_machine_id=context.imported_machine_id,
+                imported_machine_name=context.imported_machine_name,
+                imported_at_ms=context.imported_at_ms,
+            )
+            area_id_map, _areas_inserted, _areas_updated = _merge_areas(
+                target,
+                imported,
+                imported_at_ms=context.imported_at_ms,
+            )
+            run_id_map, runs_inserted, runs_updated = _merge_runs(
+                target,
+                imported,
+                imported_machine_id=context.imported_machine_id,
+                imported_at_ms=context.imported_at_ms,
+                remote_active=remote_active,
+            )
+            source_id_map, source_inserted, source_updated = _merge_source_sessions(
+                target,
+                imported,
+                run_id_map=run_id_map,
+            )
+            _metadata_inserted, _metadata_updated = _merge_source_session_metadata(
+                target,
+                imported,
+                imported_at_ms=context.imported_at_ms,
+            )
+            (
+                usage_id_map,
+                usage_inserted,
+                usage_skipped,
+                conflicts,
+            ) = _merge_usage_events(
+                target,
+                imported,
+                run_id_map=run_id_map,
+                source_session_id_map=source_id_map,
+                area_id_map=area_id_map,
+                imported_machine_id=context.imported_machine_id,
+                on_conflict=on_conflict,
+            )
+            _assignment_inserted, _assignment_updated = _merge_area_session_assignments(
+                target,
+                imported,
+                area_id_map=area_id_map,
+                imported_at_ms=context.imported_at_ms,
+            )
+            _active_inserted, _active_updated = _merge_machine_active_areas(
+                target,
+                imported,
+                area_id_map=area_id_map,
+                imported_at_ms=context.imported_at_ms,
+            )
+            run_events_inserted = _merge_run_events(
+                target,
+                imported,
+                run_id_map=run_id_map,
+                usage_event_id_map=usage_id_map,
+            )
+        except Exception:
+            target.rollback()
+            raise
 
-            target.execute("BEGIN")
-            try:
-                _merge_machines(
-                    target,
-                    imported,
-                    imported_machine_id=imported_machine_id,
-                    imported_machine_name=imported_machine_name,
-                    imported_at_ms=imported_at_ms,
-                )
-                area_id_map, _areas_inserted, _areas_updated = _merge_areas(
-                    target,
-                    imported,
-                    imported_at_ms=imported_at_ms,
-                )
-                run_id_map, runs_inserted, runs_updated = _merge_runs(
-                    target,
-                    imported,
-                    imported_machine_id=imported_machine_id,
-                    imported_at_ms=imported_at_ms,
-                    remote_active=remote_active,
-                )
-                source_id_map, source_inserted, source_updated = _merge_source_sessions(
-                    target,
-                    imported,
-                    run_id_map=run_id_map,
-                )
-                _metadata_inserted, _metadata_updated = _merge_source_session_metadata(
-                    target,
-                    imported,
-                    imported_at_ms=imported_at_ms,
-                )
-                (
-                    usage_id_map,
-                    usage_inserted,
-                    usage_skipped,
-                    conflicts,
-                ) = _merge_usage_events(
-                    target,
-                    imported,
-                    run_id_map=run_id_map,
-                    source_session_id_map=source_id_map,
-                    area_id_map=area_id_map,
-                    imported_machine_id=imported_machine_id,
-                    on_conflict=on_conflict,
-                )
-                _assignment_inserted, _assignment_updated = (
-                    _merge_area_session_assignments(
-                        target,
-                        imported,
-                        area_id_map=area_id_map,
-                        imported_at_ms=imported_at_ms,
-                    )
-                )
-                _active_inserted, _active_updated = _merge_machine_active_areas(
-                    target,
-                    imported,
-                    area_id_map=area_id_map,
-                    imported_at_ms=imported_at_ms,
-                )
-                run_events_inserted = _merge_run_events(
-                    target,
-                    imported,
-                    run_id_map=run_id_map,
-                    usage_event_id_map=usage_id_map,
-                )
-            except Exception:
-                target.rollback()
-                raise
-
-            if dry_run:
-                target.rollback()
-            else:
-                target.commit()
-        finally:
-            imported.close()
-            target.close()
+        if dry_run:
+            target.rollback()
+        else:
+            target.commit()
+    finally:
+        imported.close()
+        target.close()
 
     return StateImportResult(
-        archive_path=archive_path,
+        archive_path=context.source_path,
         dry_run=dry_run,
         runs_inserted=runs_inserted,
         runs_updated=runs_updated,
@@ -322,12 +359,6 @@ def import_state_archive(
         run_events_inserted=run_events_inserted,
         conflicts=conflicts,
     )
-
-
-def default_archive_name() -> str:
-    host = socket.gethostname().strip().lower().replace(" ", "-") or "host"
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    return f"toktrail-state-{host}-{stamp}.tar.gz"
 
 
 def _create_state_snapshot(

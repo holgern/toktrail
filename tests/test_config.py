@@ -183,7 +183,7 @@ def test_load_runtime_config_sync_git_defaults(tmp_path) -> None:
     assert config.sync_git.repo is None
     assert config.sync_git.remote == "origin"
     assert config.sync_git.branch == "main"
-    assert config.sync_git.archive_dir == "archives"
+    assert config.sync_git.state_dir == "state"
     assert config.sync_git.redact_raw_json is True
     assert config.sync_git.include_config is False
     assert config.sync_git.remote_active == "close-at-export"
@@ -201,7 +201,7 @@ config_version = 1
 repo = "~/toktrail-state"
 remote = "origin"
 branch = "main"
-archive_dir = "archives"
+state_dir = "state"
 auto_pull = true
 auto_push = false
 redact_raw_json = true
@@ -218,7 +218,7 @@ track = ["prices", "provider-prices", "subscriptions"]
     assert config.sync_git.repo == "~/toktrail-state"
     assert config.sync_git.remote == "origin"
     assert config.sync_git.branch == "main"
-    assert config.sync_git.archive_dir == "archives"
+    assert config.sync_git.state_dir == "state"
     assert config.sync_git.auto_pull is True
     assert config.sync_git.auto_push is False
     assert config.sync_git.redact_raw_json is True

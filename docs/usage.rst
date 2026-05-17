@@ -73,8 +73,8 @@ Use area paths (for example ``work/odoo``) as the human selector.
 Git sync
 --------
 
-Use ``toktrail sync git`` to exchange immutable state archives through a Git
-repository while keeping the live sqlite state database local:
+Use ``toktrail sync git`` to exchange deterministic text state files through a
+Git repository while keeping the live sqlite state database local:
 
 .. code-block:: bash
 
