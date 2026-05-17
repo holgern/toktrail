@@ -6063,8 +6063,8 @@ def test_cli_sync_git_sync_json_shape(tmp_path: Path) -> None:
     payload = json.loads(sync_result.output)
     assert payload["repo_path"] == str(repo)
     assert set(payload["pull"]) == {
-        "state_files_scanned",
-        "state_imports",
+        "state_files_seen",
+        "state_imported",
         "state_skipped",
     }
     assert payload["push"] is not None
@@ -6131,7 +6131,7 @@ def test_cli_sync_git_push_no_refresh(tmp_path: Path) -> None:
     payload = json.loads(result.output)
     assert payload["committed"] is True
     assert payload["pushed"] is True
-    assert "state" in payload["archive_path"]
+    assert "state" in payload["state_path"]
 
 
 @pytest.mark.skipif(not HAS_GIT, reason="git executable is required")
@@ -6211,8 +6211,8 @@ def test_cli_sync_git_import_local_does_not_call_git_pull(
     )
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
-    assert payload["archives_seen"] >= 1
-    assert payload["archives_imported"] >= 1
+    assert payload["state_files_seen"] >= 1
+    assert payload["state_imported"] is True
 
 
 @pytest.mark.skipif(not HAS_GIT, reason="git executable is required")

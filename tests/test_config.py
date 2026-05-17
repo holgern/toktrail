@@ -185,7 +185,6 @@ def test_load_runtime_config_sync_git_defaults(tmp_path) -> None:
     assert config.sync_git.branch == "main"
     assert config.sync_git.state_dir == "state"
     assert config.sync_git.redact_raw_json is True
-    assert config.sync_git.include_config is False
     assert config.sync_git.remote_active == "close-at-export"
     assert config.sync_git.on_conflict == "fail"
     assert config.sync_git.track == ()
@@ -202,10 +201,8 @@ repo = "~/toktrail-state"
 remote = "origin"
 branch = "main"
 state_dir = "state"
-auto_pull = true
 auto_push = false
 redact_raw_json = true
-include_config = false
 remote_active = "keep"
 on_conflict = "skip"
 track = ["prices", "provider-prices", "subscriptions"]
@@ -219,16 +216,14 @@ track = ["prices", "provider-prices", "subscriptions"]
     assert config.sync_git.remote == "origin"
     assert config.sync_git.branch == "main"
     assert config.sync_git.state_dir == "state"
-    assert config.sync_git.auto_pull is True
     assert config.sync_git.auto_push is False
     assert config.sync_git.redact_raw_json is True
-    assert config.sync_git.include_config is False
     assert config.sync_git.remote_active == "keep"
     assert config.sync_git.on_conflict == "skip"
     assert config.sync_git.track == ("prices", "provider-prices", "subscriptions")
 
 
-def test_load_runtime_config_parses_sync_git_auto_aliases(tmp_path) -> None:
+def test_load_runtime_config_rejects_sync_git_auto_import(tmp_path) -> None:
     config_path = tmp_path / "config.toml"
     config_path.write_text(
         """
@@ -236,34 +231,28 @@ config_version = 1
 
 [sync.git]
 auto_import = false
-auto_export = true
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="sync.git.auto_import is no longer supported"):
+        load_runtime_config(config_path)
+
+
+def test_load_runtime_config_parses_sync_git_auto_export_alias(tmp_path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        """
+config_version = 1
+
+[sync.git]
+auto_export = false
 """.strip(),
         encoding="utf-8",
     )
 
     config = load_runtime_config(config_path)
-
-    assert config.sync_git.auto_pull is False
-    assert config.sync_git.auto_push is True
-
-
-def test_load_runtime_config_rejects_sync_git_conflicting_auto_aliases(
-    tmp_path,
-) -> None:
-    config_path = tmp_path / "config.toml"
-    config_path.write_text(
-        """
-config_version = 1
-
-[sync.git]
-auto_pull = true
-auto_import = false
-""".strip(),
-        encoding="utf-8",
-    )
-
-    with pytest.raises(ValueError, match="auto_pull and sync.git.auto_import conflict"):
-        load_runtime_config(config_path)
+    assert config.sync_git.auto_push is False
 
 
 def test_load_runtime_config_parses_sync_git_track_all(tmp_path) -> None:

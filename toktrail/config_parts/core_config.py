@@ -133,12 +133,10 @@ _SYNC_GIT_FIELDS = {
     "remote",
     "branch",
     "state_dir",
-    "auto_pull",
     "auto_push",
     "auto_import",
     "auto_export",
     "redact_raw_json",
-    "include_config",
     "remote_active",
     "on_conflict",
     "track",
@@ -290,13 +288,12 @@ vibe = "~/.vibe/logs/session"
 # remote = "origin"
 # branch = "main"
 # state_dir = "state"
-# auto_import = true  # alias: auto_pull
+# auto_import = true
 # auto_export = true  # alias: auto_push
 # redact_raw_json = true
-# include_config = false
 # remote_active = "close-at-export"
 # on_conflict = "fail"
-# track = ["prices", "provider-prices", "subscriptions"]
+# track = ["config", "prices", "provider-prices", "subscriptions"]
 
 [costing]
 default_actual_mode = "source"
@@ -948,10 +945,8 @@ class GitSyncConfig:
     remote: str = "origin"
     branch: str = "main"
     state_dir: str = "state"
-    auto_pull: bool = True
     auto_push: bool = True
     redact_raw_json: bool = True
-    include_config: bool = False
     remote_active: GitSyncRemoteActiveMode = "close-at-export"
     on_conflict: GitSyncConflictMode = "fail"
     track: tuple[GitSyncTrackedFile, ...] = ()
@@ -2260,23 +2255,14 @@ def _parse_sync_config(value: object, default_config: GitSyncConfig) -> GitSyncC
     git_table = _parse_optional_table(sync_table.get("git"), context="sync.git")
     _validate_allowed_keys(git_table, _SYNC_GIT_FIELDS, context="sync.git")
 
-    auto_pull_configured = "auto_pull" in git_table
     auto_import_configured = "auto_import" in git_table
     auto_push_configured = "auto_push" in git_table
     auto_export_configured = "auto_export" in git_table
 
-    auto_pull = _parse_bool(
-        git_table.get("auto_pull", default_config.auto_pull),
-        context="sync.git.auto_pull",
-    )
-    auto_import = _parse_bool(
-        git_table.get("auto_import", auto_pull),
-        context="sync.git.auto_import",
-    )
-    if auto_pull_configured and auto_import_configured and auto_pull != auto_import:
+    if auto_import_configured:
         msg = (
-            "sync.git.auto_pull and sync.git.auto_import conflict; "
-            "set only one or use the same value."
+            "sync.git.auto_import is no longer supported; "
+            "use explicit sync git pull/import-local."
         )
         raise ValueError(msg)
 
@@ -2309,15 +2295,10 @@ def _parse_sync_config(value: object, default_config: GitSyncConfig) -> GitSyncC
             git_table.get("state_dir", default_config.state_dir),
             context="sync.git.state_dir",
         ),
-        auto_pull=auto_import,
         auto_push=auto_export,
         redact_raw_json=_parse_bool(
             git_table.get("redact_raw_json", default_config.redact_raw_json),
             context="sync.git.redact_raw_json",
-        ),
-        include_config=_parse_bool(
-            git_table.get("include_config", default_config.include_config),
-            context="sync.git.include_config",
         ),
         remote_active=cast(
             GitSyncRemoteActiveMode,

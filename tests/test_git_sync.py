@@ -25,6 +25,7 @@ from toktrail.git_sync import (
     export_repo_archive,
     git_hooks_status,
     git_pull,
+    git_sync_status,
     import_repo_archives,
     install_git_hooks,
     list_archives,
@@ -153,8 +154,9 @@ def test_git_sync_export_writes_text_state_files(
         allow_dirty=False,
     )
 
-    assert result.archive_path.exists()
-    assert (repo / "state" / "usage_events.jsonl").is_file()
+    assert result.state_path.exists()
+    assert (repo / "state" / "manifest.json").is_file()
+    assert list((repo / "state" / "usage-events").rglob("*.json"))
     assert not list(repo.rglob("*.tar.gz"))
 
     import_result = import_repo_archives(db_b, repo, dry_run=False)
@@ -190,11 +192,8 @@ def test_git_sync_export_records_machine_name(
     )
 
     machine_rows = [
-        json.loads(line)
-        for line in (repo / "state" / "machines.jsonl")
-        .read_text(encoding="utf-8")
-        .splitlines()
-        if line.strip()
+        json.loads(path.read_text(encoding="utf-8"))
+        for path in sorted((repo / "state" / "machines").glob("*.json"))
     ]
     local_rows = [row for row in machine_rows if int(row.get("is_local", 0)) == 1]
     assert local_rows
@@ -649,6 +648,131 @@ def test_git_sync_list_archives_returns_sorted_paths(tmp_path: Path) -> None:
     paths = list_archives(repo)
 
     assert [path.name for path in paths] == ["a.json", "b.json"]
+
+
+def test_git_sync_existing_empty_main_branch_is_idempotent(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _git(tmp_path, "init", str(repo), "--initial-branch=main")
+
+    ensure_git_repo(repo, remote_url=None, branch="main")
+    ensure_git_repo(repo, remote_url=None, branch="main")
+
+
+def test_git_sync_status_reports_pending_import(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    db_a = tmp_path / "a.db"
+    db_b = tmp_path / "b.db"
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("config_version = 1\n", encoding="utf-8")
+
+    ensure_git_repo(repo, remote_url=None, branch="main")
+    _configure_git_identity(repo)
+    _seed_db(db_a, event=_event("pending", created_ms=1_777_801_200_000))
+    export_repo_archive(
+        db_a,
+        repo,
+        archive_dir="state",
+        config_path=config_path,
+        include_config=False,
+        redact_raw_json=True,
+        commit_message="sync",
+        remote="origin",
+        branch="main",
+        push=False,
+        allow_dirty=False,
+    )
+
+    before = git_sync_status(db_b, repo)
+    assert before.pending_import_count == 1
+
+    import_repo_archives(db_b, repo, dry_run=False)
+    after = git_sync_status(db_b, repo)
+    assert after.pending_import_count == 0
+
+
+def test_git_sync_import_rejects_state_checksum_mismatch(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    db_a = tmp_path / "a.db"
+    db_b = tmp_path / "b.db"
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("config_version = 1\n", encoding="utf-8")
+
+    ensure_git_repo(repo, remote_url=None, branch="main")
+    _configure_git_identity(repo)
+    _seed_db(db_a, event=_event("checksum", created_ms=1_777_801_200_000))
+    export_repo_archive(
+        db_a,
+        repo,
+        archive_dir="state",
+        config_path=config_path,
+        include_config=False,
+        redact_raw_json=True,
+        commit_message="sync",
+        remote="origin",
+        branch="main",
+        push=False,
+        allow_dirty=False,
+    )
+    usage_file = next((repo / "state" / "usage-events").rglob("*.json"))
+    usage_file.write_text('{"tampered":true}\n', encoding="utf-8")
+
+    with pytest.raises(ValueError, match="checksum mismatch"):
+        import_repo_archives(db_b, repo, dry_run=False)
+
+
+def test_git_sync_stale_staging_dir_does_not_block_export(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    db_a = tmp_path / "a.db"
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("config_version = 1\n", encoding="utf-8")
+
+    ensure_git_repo(repo, remote_url=None, branch="main")
+    _configure_git_identity(repo)
+    _seed_db(db_a, event=_event("staging", created_ms=1_777_801_200_000))
+    stale = repo / ".state.staging.deadbeef"
+    stale.mkdir(parents=True, exist_ok=True)
+    (stale / "junk.txt").write_text("junk\n", encoding="utf-8")
+
+    result = export_repo_archive(
+        db_a,
+        repo,
+        archive_dir="state",
+        config_path=config_path,
+        include_config=False,
+        redact_raw_json=True,
+        commit_message="sync",
+        remote="origin",
+        branch="main",
+        push=False,
+        allow_dirty=False,
+    )
+    assert result.state_path.exists()
+
+
+def test_git_sync_include_config_is_rejected(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    db_a = tmp_path / "a.db"
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("config_version = 1\n", encoding="utf-8")
+
+    ensure_git_repo(repo, remote_url=None, branch="main")
+    _configure_git_identity(repo)
+    _seed_db(db_a, event=_event("cfg", created_ms=1_777_801_200_000))
+
+    with pytest.raises(ValueError, match="track"):
+        export_repo_archive(
+            db_a,
+            repo,
+            archive_dir="state",
+            config_path=config_path,
+            include_config=True,
+            redact_raw_json=True,
+            commit_message="sync",
+            remote="origin",
+            branch="main",
+            push=False,
+            allow_dirty=False,
+        )
 
 
 def test_git_sync_export_stages_tracked_config_files(tmp_path: Path) -> None:

@@ -4,7 +4,6 @@ import json
 import shlex
 import sqlite3
 import subprocess
-import tarfile
 import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -14,7 +13,6 @@ from time import time
 
 from toktrail import db
 from toktrail.sync import (
-    MANIFEST_NAME,
     ConflictMode,
     ImportedStateContext,
     RemoteActiveMode,
@@ -28,9 +26,22 @@ DEFAULT_STATE_DIR = "state"
 DEFAULT_ARCHIVE_DIR = DEFAULT_STATE_DIR
 DEFAULT_REMOTE = "origin"
 DEFAULT_BRANCH = "main"
+_STATE_FORMAT = "toktrail.text-state.v3"
+_STAGING_PREFIX = ".state.staging."
 _STATE_DB_FILE_NAMES = frozenset({"toktrail.db", "toktrail.db-wal", "toktrail.db-shm"})
 _HOOK_MARKER = "# toktrail-managed-hook v1"
 _MANAGED_HOOKS = ("post-merge", "post-checkout", "post-rewrite")
+_STATE_TABLES: tuple[str, ...] = (
+    "machines",
+    "areas",
+    "area_session_assignments",
+    "machine_active_areas",
+    "runs",
+    "source_sessions",
+    "source_session_metadata",
+    "usage_events",
+    "run_events",
+)
 
 
 @dataclass(frozen=True)
@@ -41,9 +52,13 @@ class GitSyncRepoStatus:
     dirty: bool
     ahead: int | None
     behind: int | None
-    archive_count: int
+    state_file_count: int
     pending_import_count: int
     state_db_paths: tuple[str, ...] = ()
+
+    @property
+    def archive_count(self) -> int:
+        return self.state_file_count
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -53,7 +68,8 @@ class GitSyncRepoStatus:
             "dirty": self.dirty,
             "ahead": self.ahead,
             "behind": self.behind,
-            "archive_count": self.archive_count,
+            "state_file_count": self.state_file_count,
+            "archive_count": self.state_file_count,
             "pending_import_count": self.pending_import_count,
             "state_db_paths": list(self.state_db_paths),
         }
@@ -62,14 +78,29 @@ class GitSyncRepoStatus:
 @dataclass(frozen=True)
 class GitSyncImportResult:
     repo_path: Path
-    archives_seen: int
-    archives_imported: int
-    archives_skipped: int
+    state_files_seen: int
+    state_imported: bool
+    state_skipped: bool
     import_results: tuple[StateImportResult, ...]
+
+    @property
+    def archives_seen(self) -> int:
+        return self.state_files_seen
+
+    @property
+    def archives_imported(self) -> int:
+        return 1 if self.state_imported else 0
+
+    @property
+    def archives_skipped(self) -> int:
+        return self.state_files_seen if self.state_skipped else 0
 
     def as_dict(self) -> dict[str, object]:
         return {
             "repo_path": str(self.repo_path),
+            "state_files_seen": self.state_files_seen,
+            "state_imported": self.state_imported,
+            "state_skipped": self.state_skipped,
             "archives_seen": self.archives_seen,
             "archives_imported": self.archives_imported,
             "archives_skipped": self.archives_skipped,
@@ -82,16 +113,21 @@ class GitSyncImportResult:
 @dataclass(frozen=True)
 class GitSyncExportResult:
     repo_path: Path
-    archive_path: Path
+    state_path: Path
     committed: bool
     pushed: bool
     commit_hash: str | None
     export_result: StateExportResult
 
+    @property
+    def archive_path(self) -> Path:
+        return self.state_path
+
     def as_dict(self) -> dict[str, object]:
         return {
             "repo_path": str(self.repo_path),
-            "archive_path": str(self.archive_path),
+            "state_path": str(self.state_path),
+            "archive_path": str(self.state_path),
             "committed": self.committed,
             "pushed": self.pushed,
             "commit_hash": self.commit_hash,
@@ -204,18 +240,9 @@ def list_archives(
 
 
 def read_archive_manifest(archive_path: Path) -> dict[str, object]:
-    with tarfile.open(archive_path, "r:gz") as tar:
-        member = tar.extractfile(MANIFEST_NAME)
-        if member is None:
-            msg = f"Archive missing {MANIFEST_NAME}: {archive_path}"
-            raise ValueError(msg)
-        try:
-            payload: object = json.loads(member.read().decode("utf-8"))
-        except json.JSONDecodeError as exc:
-            msg = f"Invalid archive manifest JSON: {archive_path}"
-            raise ValueError(msg) from exc
+    payload: object = json.loads(archive_path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
-        msg = f"Archive manifest is not an object: {archive_path}"
+        msg = f"State manifest is not an object: {archive_path}"
         raise ValueError(msg)
     return payload
 
@@ -286,7 +313,14 @@ def export_repo_state(
     tracked_config_paths: tuple[Path, ...] = (),
 ) -> GitSyncExportResult:
     resolved_repo = _require_repo(repo_path)
+    if include_config:
+        msg = (
+            "sync.git.include_config is not supported for git sync; "
+            "use [sync.git].track = [\"config\", ...] instead."
+        )
+        raise ValueError(msg)
     _write_repo_layout(resolved_repo)
+    _cleanup_stale_staging_dirs(resolved_repo)
     _fail_if_contains_state_db_files(resolved_repo)
     tracked_relpaths, tracked_prefixes = _repo_relative_tracked_paths(
         resolved_repo,
@@ -300,6 +334,7 @@ def export_repo_state(
             ".gitattributes",
             "meta/",
             f"{state_dir.rstrip('/')}/",
+            f"{_STAGING_PREFIX}",
             *tracked_prefixes,
         ),
         allowed_relpaths=set(tracked_relpaths),
@@ -354,7 +389,7 @@ def export_repo_state(
 
     return GitSyncExportResult(
         repo_path=resolved_repo,
-        archive_path=state_root,
+        state_path=state_root,
         committed=committed,
         pushed=pushed,
         commit_hash=commit_hash,
@@ -374,8 +409,17 @@ def git_sync_status(
     remote_url = _remote_url(resolved_repo, remote)
     dirty = _repo_is_dirty(resolved_repo)
     ahead, behind = _ahead_behind(resolved_repo)
-    archives = list_state_files(resolved_repo, state_dir=archive_dir)
+    state_root = resolved_repo / archive_dir
+    state_files = list_state_files(resolved_repo, state_dir=archive_dir)
+    state_fingerprint = _state_files_fingerprint(state_root, state_files)
     pending = 0
+    if state_fingerprint:
+        conn = db.connect(db_path.expanduser())
+        try:
+            db.migrate(conn)
+            pending = 0 if db.has_imported_sync_archive(conn, state_fingerprint) else 1
+        finally:
+            conn.close()
 
     state_db_paths = tuple(
         str(path.relative_to(resolved_repo))
@@ -388,7 +432,7 @@ def git_sync_status(
         dirty=dirty,
         ahead=ahead,
         behind=behind,
-        archive_count=len(archives),
+        state_file_count=len(state_files),
         pending_import_count=pending,
         state_db_paths=state_db_paths,
     )
@@ -498,7 +542,7 @@ def _write_repo_layout(repo_path: Path) -> None:
             json.dumps(
                 {
                     "format": GIT_SYNC_FORMAT,
-                    "state_format": "toktrail.text-state.v1",
+                    "state_format": _STATE_FORMAT,
                     "created_by": "toktrail",
                 },
                 indent=2,
@@ -520,6 +564,7 @@ def _write_repo_layout(repo_path: Path) -> None:
         "*.sqlite3",
         "*.tar.gz",
         "archives/",
+        ".state.staging.*",
     ]
     if not gitignore_path.exists():
         gitignore_path.write_text("\n".join(gitignore_lines) + "\n", encoding="utf-8")
@@ -604,10 +649,54 @@ def _set_remote_url(repo_path: Path, remote: str, remote_url: str) -> None:
 
 
 def _ensure_branch(repo_path: Path, branch: str) -> None:
-    try:
+    if _current_symbolic_branch(repo_path) == branch:
+        return
+    if _local_branch_exists(repo_path, branch):
         _run_git(repo_path, "checkout", branch)
+        return
+    remote_ref = _remote_branch_ref(repo_path, branch)
+    if remote_ref is not None:
+        _run_git(repo_path, "checkout", "-B", branch, "--track", remote_ref)
+        return
+    _run_git(repo_path, "checkout", "-b", branch)
+
+
+def _current_symbolic_branch(repo_path: Path) -> str | None:
+    try:
+        text = _run_git_output(
+            repo_path,
+            "symbolic-ref",
+            "--quiet",
+            "--short",
+            "HEAD",
+        ).strip()
     except ValueError:
-        _run_git(repo_path, "checkout", "-b", branch)
+        return None
+    return text or None
+
+
+def _local_branch_exists(repo_path: Path, branch: str) -> bool:
+    result = subprocess.run(
+        ["git", "show-ref", "--verify", "--quiet", f"refs/heads/{branch}"],
+        cwd=repo_path,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    return result.returncode == 0
+
+
+def _remote_branch_ref(repo_path: Path, branch: str) -> str | None:
+    refs = _run_git_output(repo_path, "for-each-ref", "--format=%(refname:short)")
+    for line in refs.splitlines():
+        text = line.strip()
+        if not text:
+            continue
+        if text.endswith(f"/{branch}") and "/" in text:
+            remote, _, name = text.partition("/")
+            if remote and name == branch and remote != branch:
+                return f"{remote}/{branch}"
+    return None
 
 
 def _run_git(repo_path: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -829,9 +918,9 @@ def import_repo_state(
     if not state_root.exists():
         return GitSyncImportResult(
             repo_path=resolved_repo,
-            archives_seen=0,
-            archives_imported=0,
-            archives_skipped=0,
+            state_files_seen=0,
+            state_imported=False,
+            state_skipped=False,
             import_results=(),
         )
     state_files = list_state_files(resolved_repo, state_dir=state_dir)
@@ -842,9 +931,9 @@ def import_repo_state(
         if state_fingerprint and db.has_imported_sync_archive(conn, state_fingerprint):
             return GitSyncImportResult(
                 repo_path=resolved_repo,
-                archives_seen=len(state_files),
-                archives_imported=0,
-                archives_skipped=len(state_files),
+                state_files_seen=len(state_files),
+                state_imported=False,
+                state_skipped=True,
                 import_results=(),
             )
     finally:
@@ -882,9 +971,9 @@ def import_repo_state(
             conn.close()
     return GitSyncImportResult(
         repo_path=resolved_repo,
-        archives_seen=len(state_files),
-        archives_imported=1,
-        archives_skipped=0,
+        state_files_seen=len(state_files),
+        state_imported=True,
+        state_skipped=False,
         import_results=(result,),
     )
 
@@ -895,119 +984,144 @@ def _export_text_state(
     *,
     redact_raw_json: bool,
 ) -> StateExportResult:
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    try:
-        db.migrate(conn)
-        from toktrail.config import load_machine_config
+    from toktrail.config import load_machine_config
 
-        machine_config = load_machine_config().config
-        db.apply_local_machine_config(conn, machine_config)
-        conn.commit()
-        exported_at_ms = int(time() * 1000)
-        machine = conn.execute(
-            "SELECT machine_id, name FROM machines "
-            "WHERE is_local = 1 "
-            "ORDER BY updated_at_ms DESC LIMIT 1"
-        ).fetchone()
-        if machine is None:
-            msg = "No local machine row found for git sync export."
-            raise ValueError(msg)
-        machine_id = str(machine["machine_id"])
-        machine_name = machine["name"]
+    _cleanup_stale_staging_dirs(state_root.parent)
 
-        staged_root = state_root.parent / f".{state_root.name}.staging"
-        if staged_root.exists():
-            for path in sorted(staged_root.rglob("*"), reverse=True):
-                if path.is_file():
-                    path.unlink()
-                elif path.is_dir():
-                    path.rmdir()
-        staged_root.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="toktrail-git-sync-export-") as temp_dir:
+        snapshot_path = Path(temp_dir) / "snapshot.sqlite"
+        src = db.connect(db_path)
+        src.row_factory = sqlite3.Row
+        dest = sqlite3.connect(snapshot_path)
+        dest.row_factory = sqlite3.Row
+        try:
+            db.migrate(src)
+            machine_config = load_machine_config().config
+            db.apply_local_machine_config(src, machine_config)
+            src.commit()
+            src.backup(dest)
+            if redact_raw_json:
+                dest.execute("UPDATE usage_events SET raw_json = NULL")
+            dest.commit()
+            exported_at_ms = int(time() * 1000)
+            machine = dest.execute(
+                "SELECT machine_id, name FROM machines "
+                "WHERE is_local = 1 "
+                "ORDER BY updated_at_ms DESC LIMIT 1"
+            ).fetchone()
+            if machine is None:
+                msg = "No local machine row found for git sync export."
+                raise ValueError(msg)
+            machine_id = str(machine["machine_id"])
+            machine_name = machine["name"] if isinstance(machine["name"], str) else None
+            raw_json_rows = int(
+                dest.execute(
+                    "SELECT COUNT(*) AS count FROM usage_events "
+                    "WHERE raw_json IS NOT NULL"
+                ).fetchone()["count"]
+            )
+            run_sync_by_id = {
+                int(row["id"]): str(row["sync_id"])
+                for row in dest.execute("SELECT id, sync_id FROM runs").fetchall()
+            }
+            usage_key_by_id = {
+                int(row["id"]): f"{row['harness']}:{row['global_dedup_key'] or ''}"
+                for row in dest.execute(
+                    "SELECT id, harness, global_dedup_key FROM usage_events"
+                ).fetchall()
+            }
+            staged_root = Path(
+                tempfile.mkdtemp(prefix=_STAGING_PREFIX, dir=str(state_root.parent))
+            )
+            counts: dict[str, int] = {}
+            manifest_tables: dict[str, dict[str, object]] = {}
+            for table in _STATE_TABLES:
+                rows = _fetch_export_rows(dest, table)
+                counts[table] = len(rows)
+                files: list[dict[str, object]] = []
+                for row in rows:
+                    record = {key: row[key] for key in row.keys()}
+                    relpath = _state_record_relpath(
+                        table,
+                        record,
+                        run_sync_by_id=run_sync_by_id,
+                        usage_key_by_id=usage_key_by_id,
+                    )
+                    target = staged_root / relpath
+                    payload = json.dumps(
+                        record,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode("utf-8") + b"\n"
+                    _write_if_changed(target, payload)
+                    files.append(
+                        {
+                            "path": relpath,
+                            "sha256": _sha256_file(target),
+                        }
+                    )
+                manifest_tables[table] = {
+                    "rows": len(rows),
+                    "files": len(files),
+                    "entries": files,
+                }
+            manifest = {
+                "format": _STATE_FORMAT,
+                "schema_version": db.SCHEMA_VERSION,
+                "exported_at_ms": exported_at_ms,
+                "machine_id": machine_id,
+                "machine_name": machine_name,
+                "raw_json_redacted": redact_raw_json,
+                "tables": manifest_tables,
+            }
+            _write_if_changed(
+                staged_root / "manifest.json",
+                (
+                    json.dumps(manifest, indent=2, sort_keys=True).encode("utf-8")
+                    + b"\n"
+                ),
+            )
+            if state_root.exists():
+                for old_file in sorted(state_root.rglob("*"), reverse=True):
+                    if old_file.is_file():
+                        old_file.unlink()
+                    elif old_file.is_dir():
+                        old_file.rmdir()
+            state_root.parent.mkdir(parents=True, exist_ok=True)
+            staged_root.rename(state_root)
+        finally:
+            dest.close()
+            src.close()
 
-        counts: dict[str, int] = {}
-        raw_json_rows = 0
-        for table in (
-            "machines",
-            "areas",
-            "area_session_assignments",
-            "machine_active_areas",
-            "runs",
-            "source_sessions",
-            "source_session_metadata",
-            "usage_events",
-            "run_events",
-        ):
-            rows = conn.execute(f"SELECT * FROM {table} ORDER BY rowid").fetchall()
-            counts[table] = len(rows)
-            target = staged_root / f"{table}.jsonl"
-            target.parent.mkdir(parents=True, exist_ok=True)
-            lines: list[str] = []
-            for row in rows:
-                record = {key: row[key] for key in row.keys()}
-                if table == "usage_events" and redact_raw_json:
-                    record["raw_json"] = None
-                elif table == "usage_events" and row["raw_json"] is not None:
-                    raw_json_rows += 1
-                lines.append(json.dumps(record, sort_keys=True, separators=(",", ":")))
-            serialized = ("\n".join(lines) + ("\n" if lines else "")).encode("utf-8")
-            _write_if_changed(target, serialized)
-
-        if state_root.exists():
-            for old_file in sorted(state_root.rglob("*"), reverse=True):
-                if old_file.is_file():
-                    old_file.unlink()
-                elif old_file.is_dir():
-                    old_file.rmdir()
-        state_root.parent.mkdir(parents=True, exist_ok=True)
-        staged_root.rename(state_root)
-
-        return StateExportResult(
-            archive_path=state_root,
-            exported_at_ms=exported_at_ms,
-            schema_version=db.SCHEMA_VERSION,
-            machine_id=machine_id,
-            machine_name=machine_name if isinstance(machine_name, str) else None,
-            run_count=counts["runs"],
-            source_session_count=counts["source_sessions"],
-            usage_event_count=counts["usage_events"],
-            run_event_count=counts["run_events"],
-            raw_json_count=raw_json_rows,
-        )
-    finally:
-        conn.close()
+    return StateExportResult(
+        archive_path=state_root,
+        exported_at_ms=exported_at_ms,
+        schema_version=db.SCHEMA_VERSION,
+        machine_id=machine_id,
+        machine_name=machine_name,
+        run_count=counts["runs"],
+        source_session_count=counts["source_sessions"],
+        usage_event_count=counts["usage_events"],
+        run_event_count=counts["run_events"],
+        raw_json_count=raw_json_rows,
+    )
 
 
 def _load_text_state_into_db(
     state_root: Path, temp_db_path: Path
 ) -> ImportedStateContext:
+    manifest = _load_state_manifest(state_root)
     conn = sqlite3.connect(temp_db_path)
     conn.row_factory = sqlite3.Row
     try:
         db.migrate(conn)
-        for table in (
-            "machines",
-            "areas",
-            "area_session_assignments",
-            "machine_active_areas",
-            "runs",
-            "source_sessions",
-            "source_session_metadata",
-            "usage_events",
-            "run_events",
-        ):
-            path = state_root / f"{table}.jsonl"
-            if not path.exists():
-                continue
-            rows = []
-            for line in path.read_text(encoding="utf-8").splitlines():
-                text = line.strip()
-                if not text:
-                    continue
-                rows.append(json.loads(text))
+        _validate_state_manifest(state_root, manifest)
+        for table in _STATE_TABLES:
+            rows = _load_state_table_records(state_root, manifest, table)
             if not rows:
                 continue
-            columns = sorted(rows[0].keys())
+            valid_columns = _table_columns(conn, table)
+            columns = [column for column in valid_columns if column in rows[0]]
             col_sql = ", ".join(columns)
             val_sql = ", ".join("?" for _ in columns)
             for row in rows:
@@ -1032,10 +1146,179 @@ def _load_text_state_into_db(
                 machine["name"] if isinstance(machine["name"], str) else None
             ),
             schema_version=db.SCHEMA_VERSION,
-            source_format="toktrail.text-state.v1",
+            source_format=_STATE_FORMAT,
         )
     finally:
         conn.close()
+
+
+def _fetch_export_rows(conn: sqlite3.Connection, table: str) -> list[sqlite3.Row]:
+    order_by = {
+        "machines": "machine_id",
+        "areas": "sync_id",
+        "area_session_assignments": "sync_id",
+        "machine_active_areas": "machine_id",
+        "runs": "sync_id",
+        "source_sessions": "sync_id",
+        "source_session_metadata": "origin_machine_id, harness, source_session_id",
+        "usage_events": "harness, global_dedup_key",
+        "run_events": "tracking_session_id, usage_event_id",
+    }[table]
+    return conn.execute(f"SELECT * FROM {table} ORDER BY {order_by}").fetchall()
+
+
+def _state_record_relpath(
+    table: str,
+    record: dict[str, object],
+    *,
+    run_sync_by_id: dict[int, str],
+    usage_key_by_id: dict[int, str],
+) -> str:
+    if table == "machines":
+        return f"machines/{_safe_segment(str(record['machine_id']))}.json"
+    if table == "areas":
+        return f"areas/{_safe_segment(str(record['sync_id']))}.json"
+    if table == "area_session_assignments":
+        return f"area-session-assignments/{_safe_segment(str(record['sync_id']))}.json"
+    if table == "machine_active_areas":
+        return f"machine-active-areas/{_safe_segment(str(record['machine_id']))}.json"
+    if table == "runs":
+        return f"runs/{_safe_segment(str(record['sync_id']))}.json"
+    if table == "source_sessions":
+        return f"source-sessions/{_safe_segment(str(record['sync_id']))}.json"
+    if table == "source_session_metadata":
+        origin = _safe_segment(str(record["origin_machine_id"]))
+        harness = _safe_segment(str(record["harness"]))
+        session_hash = _hash_key(str(record["source_session_id"]))
+        return f"source-session-metadata/{origin}/{harness}/{session_hash}.json"
+    if table == "usage_events":
+        harness = _safe_segment(str(record["harness"]))
+        dedup = str(
+            record.get("global_dedup_key") or record.get("fingerprint_hash") or ""
+        )
+        key_hash = _hash_key(dedup)
+        return f"usage-events/{harness}/{key_hash}.json"
+    if table == "run_events":
+        run_id = int(str(record["tracking_session_id"]))
+        usage_id = int(str(record["usage_event_id"]))
+        run_sync_id = _safe_segment(run_sync_by_id.get(run_id, f"run-{run_id}"))
+        usage_hash = _hash_key(usage_key_by_id.get(usage_id, f"usage-{usage_id}"))
+        return f"run-events/{run_sync_id}/{usage_hash}.json"
+    msg = f"Unsupported state table: {table}"
+    raise ValueError(msg)
+
+
+def _safe_segment(value: str) -> str:
+    return value.replace("/", "_").replace("\\", "_")
+
+
+def _hash_key(value: str) -> str:
+    return sha256(value.encode("utf-8")).hexdigest()
+
+
+def _load_state_manifest(state_root: Path) -> dict[str, object]:
+    manifest_path = state_root / "manifest.json"
+    if not manifest_path.exists():
+        msg = f"State manifest missing: {manifest_path}"
+        raise ValueError(msg)
+    payload: object = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        msg = f"State manifest is not an object: {manifest_path}"
+        raise ValueError(msg)
+    return payload
+
+
+def _validate_state_manifest(state_root: Path, manifest: dict[str, object]) -> None:
+    if manifest.get("format") != _STATE_FORMAT:
+        msg = f"Unsupported state format: {manifest.get('format')!r}"
+        raise ValueError(msg)
+    schema_version = _optional_manifest_int(manifest, "schema_version")
+    if schema_version != db.SCHEMA_VERSION:
+        msg = (
+            "State schema version mismatch: "
+            f"{schema_version!r} (expected {db.SCHEMA_VERSION})"
+        )
+        raise ValueError(msg)
+    tables = manifest.get("tables")
+    if not isinstance(tables, dict):
+        msg = "State manifest missing tables object."
+        raise ValueError(msg)
+    for table in _STATE_TABLES:
+        table_meta = tables.get(table)
+        if not isinstance(table_meta, dict):
+            msg = f"State manifest missing table metadata: {table}"
+            raise ValueError(msg)
+        entries = table_meta.get("entries")
+        if not isinstance(entries, list):
+            msg = f"State manifest table entries must be a list: {table}"
+            raise ValueError(msg)
+        for entry in entries:
+            if not isinstance(entry, dict):
+                msg = f"Invalid manifest entry for table {table}"
+                raise ValueError(msg)
+            relpath = entry.get("path")
+            checksum = entry.get("sha256")
+            if not isinstance(relpath, str) or not relpath:
+                msg = f"Invalid manifest path entry for table {table}"
+                raise ValueError(msg)
+            if not isinstance(checksum, str) or not checksum:
+                msg = f"Invalid manifest checksum entry for table {table}"
+                raise ValueError(msg)
+            target = state_root / relpath
+            if not target.exists() or not target.is_file():
+                msg = f"State file missing: {target}"
+                raise ValueError(msg)
+            if _sha256_file(target) != checksum:
+                msg = f"State checksum mismatch: {target}"
+                raise ValueError(msg)
+
+
+def _load_state_table_records(
+    state_root: Path,
+    manifest: dict[str, object],
+    table: str,
+) -> list[dict[str, object]]:
+    tables = manifest.get("tables")
+    if not isinstance(tables, dict):
+        return []
+    table_meta = tables.get(table)
+    if not isinstance(table_meta, dict):
+        return []
+    entries = table_meta.get("entries")
+    if not isinstance(entries, list):
+        return []
+    rows: list[dict[str, object]] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        relpath = entry.get("path")
+        if not isinstance(relpath, str) or not relpath:
+            continue
+        payload: object = json.loads((state_root / relpath).read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            msg = f"State record is not an object: {state_root / relpath}"
+            raise ValueError(msg)
+        rows.append(payload)
+    return rows
+
+
+def _table_columns(conn: sqlite3.Connection, table: str) -> tuple[str, ...]:
+    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    return tuple(str(row[1]) for row in rows)
+
+
+def _cleanup_stale_staging_dirs(parent: Path) -> None:
+    if not parent.exists():
+        return
+    for path in parent.glob(f"{_STAGING_PREFIX}*"):
+        if not path.is_dir():
+            continue
+        for nested in sorted(path.rglob("*"), reverse=True):
+            if nested.is_file():
+                nested.unlink()
+            elif nested.is_dir():
+                nested.rmdir()
+        path.rmdir()
 
 
 def _write_if_changed(path: Path, content: bytes) -> None:
@@ -1060,6 +1343,7 @@ def _state_files_fingerprint(state_root: Path, files: list[Path]) -> str:
 
 def _state_export_result_dict(result: StateExportResult) -> dict[str, object]:
     return {
+        "state_path": str(result.archive_path),
         "archive_path": str(result.archive_path),
         "exported_at_ms": result.exported_at_ms,
         "schema_version": result.schema_version,
@@ -1075,6 +1359,7 @@ def _state_export_result_dict(result: StateExportResult) -> dict[str, object]:
 
 def _state_import_result_dict(result: StateImportResult) -> dict[str, object]:
     return {
+        "state_path": str(result.archive_path),
         "archive_path": str(result.archive_path),
         "dry_run": result.dry_run,
         "runs_inserted": result.runs_inserted,

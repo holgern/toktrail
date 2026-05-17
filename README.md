@@ -381,17 +381,14 @@ idempotently into local state.
 
 ```bash
 toktrail sync git init --repo ~/toktrail-state --remote git@github.com:me/toktrail-state.git
-cd ~/toktrail-state
-git pull
-git push
+toktrail sync git sync --repo ~/toktrail-state
 ```
 
 On another machine:
 
 ```bash
 toktrail sync git init --repo ~/toktrail-state --remote git@github.com:me/toktrail-state.git
-cd ~/toktrail-state
-git pull
+toktrail sync git pull --repo ~/toktrail-state
 ```
 
 `toktrail sync git init` installs local Git hooks by default so plain `git pull`
@@ -399,9 +396,13 @@ imports state files into the local toktrail DB. Hooks are clone-local, so run
 `toktrail sync git init` (or `toktrail sync git hooks install`) once per clone.
 
 By default Git sync exports with raw JSON redaction and stores text files under
-`state/` (for example `state/usage_events.jsonl`, `state/runs.jsonl`, and
-`state/source_sessions.jsonl`). Do not commit live sqlite files
+`state/` (for example `state/usage-events/*`, `state/runs/*`,
+`state/source-sessions/*`, and `state/manifest.json`). Do not commit live sqlite files
 (`toktrail.db`, `toktrail.db-wal`, `toktrail.db-shm`) into the sync repo.
+
+Recommended workflow is `toktrail sync git sync`. `git pull` can trigger local
+imports via managed hooks, but plain `git push` does not export local toktrail
+state on its own.
 
 ### Git-backed prices and subscriptions
 
