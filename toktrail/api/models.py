@@ -1,22 +1,117 @@
-"""Compatibility facade for API models during staged refactor."""
-
 from __future__ import annotations
 
-from toktrail.api.model_parts import legacy_models as _legacy_models
-
-for _name, _value in vars(_legacy_models).items():
-    if not _name.startswith("__"):
-        globals()[_name] = _value
-
-
-def __getattr__(name: str):  # type: ignore[no-untyped-def]
-    return getattr(_legacy_models, name)
-
-
-__all__ = list(
-    getattr(
-        _legacy_models,
-        "__all__",
-        [name for name in globals() if not name.startswith("_")],
-    )
+from toktrail.api.model_parts.areas import ActiveArea, Area, AreaSessionAssignment
+from toktrail.api.model_parts.cache_analysis import (
+    CacheCallRow,
+    CacheClusterRow,
+    SessionCacheAnalysisReport,
 )
+from toktrail.api.model_parts.reports import (
+    ActivitySummaryRow,
+    AreaSummaryRow,
+    CostTotals,
+    HarnessSummaryRow,
+    Machine,
+    MachineSummaryRow,
+    ModelSummaryRow,
+    ProviderSummaryRow,
+    RunReport,
+    StatsReport,
+    UnconfiguredModelRow,
+    UsageAreasReport,
+    UsageRunsReport,
+    UsageSeriesBucket,
+    UsageSeriesInstance,
+    UsageSeriesReport,
+)
+from toktrail.api.model_parts.runs import (
+    FinalizedManualRun,
+    PreparedManualRun,
+    Run,
+    RunScope,
+)
+from toktrail.api.model_parts.statusline import (
+    StatuslineBurn,
+    StatuslineCache,
+    StatuslineContext,
+    StatuslineQuota,
+    StatuslineReport,
+)
+from toktrail.api.model_parts.subscriptions import (
+    SubscriptionBillingPeriod,
+    SubscriptionUsagePeriod,
+    SubscriptionUsageReport,
+    SubscriptionUsageRow,
+)
+from toktrail.api.model_parts.sync import (
+    StateExportResult,
+    StateImportConflict,
+    StateImportResult,
+)
+from toktrail.api.model_parts.tokens import TokenBreakdown
+from toktrail.api.model_parts.usage import (
+    HarnessDefinition,
+    HarnessEnvironment,
+    ImportUsageResult,
+    ScanUsageResult,
+    SessionTotals,
+    SourceSessionDiff,
+    SourceSessionSnapshot,
+    SourceSessionSummary,
+    UsageEvent,
+    UsageSessionRow,
+    UsageSessionsReport,
+)
+
+__all__ = [
+    "ActiveArea",
+    "Area",
+    "AreaSessionAssignment",
+    "AreaSummaryRow",
+    "ActivitySummaryRow",
+    "CacheCallRow",
+    "CacheClusterRow",
+    "CostTotals",
+    "FinalizedManualRun",
+    "HarnessDefinition",
+    "HarnessEnvironment",
+    "HarnessSummaryRow",
+    "ImportUsageResult",
+    "Machine",
+    "MachineSummaryRow",
+    "ModelSummaryRow",
+    "PreparedManualRun",
+    "ProviderSummaryRow",
+    "RunScope",
+    "Run",
+    "RunReport",
+    "ScanUsageResult",
+    "SessionTotals",
+    "SourceSessionDiff",
+    "SourceSessionSnapshot",
+    "SourceSessionSummary",
+    "StatuslineBurn",
+    "StatuslineCache",
+    "StatuslineContext",
+    "StatuslineQuota",
+    "StatuslineReport",
+    "StateExportResult",
+    "StateImportConflict",
+    "StateImportResult",
+    "SessionCacheAnalysisReport",
+    "SubscriptionBillingPeriod",
+    "SubscriptionUsagePeriod",
+    "SubscriptionUsageReport",
+    "SubscriptionUsageRow",
+    "TokenBreakdown",
+    "UnconfiguredModelRow",
+    "UsageEvent",
+    "UsageSeriesBucket",
+    "UsageSeriesInstance",
+    "UsageSeriesReport",
+    "UsageAreasReport",
+    "UsageSessionRow",
+    "UsageSessionsReport",
+    "UsageRunsReport",
+    "StatsReport",
+]

@@ -1,13 +1,13 @@
-"""Compatibility app module for staged CLI extraction."""
+"""Concrete CLI app module extracted from legacy_cli."""
 
 from __future__ import annotations
 
-from toktrail.cli_parts import legacy_cli as _legacy
-from toktrail.cli_parts.legacy_cli import app, cli_main
+from toktrail.cli_parts import main_cli as _main
 
 
 def __getattr__(name: str):  # type: ignore[no-untyped-def]
-    return getattr(_legacy, name)
+    return getattr(_main, name)
 
-
-__all__ = ["app", "cli_main"]
+__all__ = list(
+    getattr(_main, "__all__", [name for name in globals() if not name.startswith("_")])
+)

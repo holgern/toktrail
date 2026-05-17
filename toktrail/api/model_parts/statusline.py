@@ -1,15 +1,17 @@
-"""Compatibility re-export module for staged refactor."""
-
 from __future__ import annotations
 
-from importlib import import_module
-from typing import Any
+from toktrail.api.model_parts.core_models import (
+    StatuslineBurn,
+    StatuslineCache,
+    StatuslineContext,
+    StatuslineQuota,
+    StatuslineReport,
+)
 
-_legacy = import_module("toktrail.api.model_parts.legacy_models")
-
-
-def __getattr__(name: str) -> Any:
-    return getattr(_legacy, name)
-
-
-__all__: list[str] = []
+__all__ = [
+    "StatuslineBurn",
+    "StatuslineCache",
+    "StatuslineContext",
+    "StatuslineQuota",
+    "StatuslineReport",
+]
