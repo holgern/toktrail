@@ -20,7 +20,6 @@ from toktrail.db import (
     summarize_usage,
     upsert_source_session_metadata,
 )
-from toktrail.git_sync_parts import core as git_sync_core
 from toktrail.git_sync import (
     ensure_git_repo,
     export_repo_archive,
@@ -32,6 +31,7 @@ from toktrail.git_sync import (
     list_archives,
     uninstall_git_hooks,
 )
+from toktrail.git_sync_parts import core as git_sync_core
 from toktrail.models import TokenBreakdown, UsageEvent
 from toktrail.reporting import UsageReportFilter
 
@@ -866,9 +866,11 @@ def test_git_sync_state_fingerprint_uses_posix_relative_paths(
 
     monkeypatch.setattr(git_sync_core, "_sha256_file", lambda path: "file-digest")
 
-    expected = __import__("hashlib").sha256(
-        b"usage-events/opencode/event.json\0file-digest\n"
-    ).hexdigest()
+    expected = (
+        __import__("hashlib")
+        .sha256(b"usage-events/opencode/event.json\0file-digest\n")
+        .hexdigest()
+    )
     assert git_sync_core._state_files_fingerprint(state_root, [state_file]) == expected
 
 
