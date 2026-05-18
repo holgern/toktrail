@@ -435,7 +435,9 @@ def test_scan_codex_file_resume_ignores_partial_final_line_until_complete(
 
     partial = scan_codex_file(session_file, import_state=state)
     assert partial.events == []
-    assert partial.file_states[0].last_file_offset == first.file_states[0].last_file_offset
+    assert (
+        partial.file_states[0].last_file_offset == first.file_states[0].last_file_offset
+    )
 
     resumed_state = ImportScanState.from_file_states(
         source_state=None,

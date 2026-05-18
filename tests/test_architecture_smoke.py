@@ -11,7 +11,7 @@ def test_facade_modules_import() -> None:
 
     assert callable(cli_main)
     assert callable(load_resolved_toktrail_config)
-    assert SCHEMA_VERSION == 14
+    assert SCHEMA_VERSION == 15
     assert callable(connect)
     assert callable(export_state_archive)
 
