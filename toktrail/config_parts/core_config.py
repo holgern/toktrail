@@ -296,7 +296,7 @@ min_refresh_interval_secs = 5
 # branch = "main"
 # state_dir = "state"
 # auto_import = true
-# auto_export = true  # alias: auto_push
+# auto_export is deprecated/no-op; use explicit `toktrail sync git ...` commands.
 # redact_raw_json = true
 # remote_active = "close-at-export"
 # on_conflict = "fail"

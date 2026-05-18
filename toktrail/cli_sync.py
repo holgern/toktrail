@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import shlex
@@ -9,7 +8,6 @@ from typing import Annotated, cast
 
 import typer
 
-from toktrail import db as db_module
 from toktrail.api.imports import import_configured_usage
 from toktrail.api.sync import (
     default_archive_name,
@@ -213,60 +211,6 @@ def _refresh_for_export(
     return [result.as_dict() for result in results]
 
 
-def _refresh_changed(refresh_payload: list[dict[str, object]]) -> bool:
-    for row in refresh_payload:
-        if cast(int, row.get("rows_imported", 0)) > 0:
-            return True
-        if cast(int, row.get("rows_linked", 0)) > 0:
-            return True
-    return False
-
-
-def _export_state_fingerprint(db_path: Path) -> str:
-    conn = db_module.connect(db_path.expanduser())
-    try:
-        db_module.migrate(conn)
-        row = conn.execute(
-            """
-            SELECT
-              (SELECT COUNT(*) FROM usage_events) AS usage_count,
-              (SELECT COALESCE(MAX(id), 0) FROM usage_events) AS usage_max_id,
-              (SELECT COUNT(*) FROM runs) AS run_count,
-              (SELECT COALESCE(MAX(updated_at_ms), 0) FROM runs) AS run_updated_max,
-              (SELECT COUNT(*) FROM source_sessions) AS source_session_count,
-              (
-                SELECT COALESCE(MAX(updated_at_ms), 0) FROM source_sessions
-              ) AS source_session_updated_max,
-              (SELECT COUNT(*) FROM run_events) AS run_event_count,
-              (SELECT COUNT(*) FROM sync_imports WHERE dry_run = 0) AS sync_import_count
-            """
-        ).fetchone()
-    finally:
-        conn.close()
-    if row is None:
-        return ""
-    payload = {
-        "usage_count": int(row[0]),
-        "usage_max_id": int(row[1]),
-        "run_count": int(row[2]),
-        "run_updated_max": int(row[3]),
-        "source_session_count": int(row[4]),
-        "source_session_updated_max": int(row[5]),
-        "run_event_count": int(row[6]),
-        "sync_import_count": int(row[7]),
-    }
-    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
-
-
-def _repo_metadata_key(repo_path: Path) -> str:
-    repo_hash = hashlib.sha256(
-        str(repo_path.expanduser().resolve()).encode("utf-8")
-    ).hexdigest()
-    repo_id = repo_hash[:16]
-    return f"git_sync.last_export.{repo_id}"
-
-
 def _resolve_hook_command() -> tuple[str, ...]:
     configured = os.environ.get("TOKTRAIL_GIT_HOOK_COMMAND")
     if configured is None:
@@ -276,72 +220,6 @@ def _resolve_hook_command() -> tuple[str, ...]:
         msg = "TOKTRAIL_GIT_HOOK_COMMAND must not be empty."
         raise ValueError(msg)
     return pieces
-
-
-def maybe_auto_export_to_git_repo(
-    ctx: typer.Context,
-    *,
-    reason: str,
-    only_if_changed: bool = True,
-    quiet: bool = True,
-) -> bool:
-    if os.environ.get("TOKTRAIL_GIT_HOOK") == "1":
-        return False
-    if os.environ.get("TOKTRAIL_DISABLE_GIT_SYNC") == "1":
-        return False
-
-    loaded = _load_resolved_sync_config(ctx)
-    runtime = loaded.runtime.sync_git
-    if not runtime.repo:
-        return False
-    if not runtime.auto_push:
-        return False
-
-    repo_path = Path(runtime.repo).expanduser()
-    db_path = _resolve_state_db(ctx)
-    metadata_key = _repo_metadata_key(repo_path)
-    fingerprint = _export_state_fingerprint(db_path)
-
-    conn = db_module.connect(db_path.expanduser())
-    try:
-        db_module.migrate(conn)
-        previous = db_module.get_state_metadata(conn, metadata_key)
-    finally:
-        conn.close()
-
-    if only_if_changed and previous == fingerprint:
-        return False
-
-    try:
-        result = export_repo_archive(
-            db_path,
-            repo_path,
-            archive_dir=runtime.state_dir or DEFAULT_STATE_DIR,
-            config_path=loaded.config_path,
-            include_config=False,
-            redact_raw_json=runtime.redact_raw_json,
-            commit_message=f"toktrail auto-export: {reason}",
-            remote=runtime.remote or DEFAULT_REMOTE,
-            branch=runtime.branch or DEFAULT_BRANCH,
-            push=False,
-            allow_dirty=False,
-            tracked_config_paths=_tracked_config_paths(loaded),
-        )
-    except (OSError, ValueError) as exc:
-        typer.echo(f"warning: auto git export skipped ({reason}): {exc}", err=True)
-        return False
-
-    conn = db_module.connect(db_path.expanduser())
-    try:
-        db_module.migrate(conn)
-        db_module.set_state_metadata(conn, metadata_key, fingerprint)
-        conn.commit()
-    finally:
-        conn.close()
-
-    if not quiet and result.committed:
-        typer.echo(f"Auto-exported to git sync repo: {result.archive_path}")
-    return result.committed
 
 
 @sync_app.command("export")
@@ -409,9 +287,6 @@ def sync_import(
         )
     except (OSError, ValueError) as exc:
         _exit_with_error(str(exc))
-
-    if not dry_run:
-        maybe_auto_export_to_git_repo(ctx, reason="sync import")
 
     if json_output:
         typer.echo(json.dumps(result.as_dict(), indent=2))
@@ -727,13 +602,6 @@ def sync_git_export_local(
         )
     except (OSError, ValueError) as exc:
         _exit_with_error(str(exc))
-
-    if _refresh_changed(refresh_payload):
-        maybe_auto_export_to_git_repo(
-            ctx,
-            reason="sync git export-local refresh",
-            only_if_changed=False,
-        )
 
     if json_output:
         payload = result.as_dict()

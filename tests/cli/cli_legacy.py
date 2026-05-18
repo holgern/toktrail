@@ -1680,6 +1680,59 @@ opencode = "{_toml_path_value(source_db)}"
     assert "refresh" not in payload
 
 
+def test_cli_usage_today_does_not_export_git_state(tmp_path, monkeypatch) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    source_db = tmp_path / "opencode.db"
+    config_path = tmp_path / "toktrail.toml"
+    repo = tmp_path / "toktrail-state"
+    create_source_db(source_db)
+    config_path.write_text(
+        f"""
+config_version = 1
+
+[imports]
+harnesses = ["opencode"]
+missing_source = "warn"
+include_raw_json = false
+
+[imports.sources]
+opencode = "{_toml_path_value(source_db)}"
+
+[sync.git]
+repo = "{_toml_path_value(repo)}"
+auto_push = true
+""".strip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "toktrail.periods.current_time_in_zone",
+        lambda tz: datetime.now(tz=tz),
+    )
+
+    def fail_export(*args, **kwargs):
+        raise AssertionError("usage today must not export git state")
+
+    monkeypatch.setattr("toktrail.cli_sync.export_repo_archive", fail_export)
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "--config",
+            str(config_path),
+            "usage",
+            "today",
+            "--utc",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+
+
 def test_cli_usage_no_refresh_uses_existing_state_only(tmp_path, monkeypatch) -> None:
     runner = CliRunner()
     state_db = tmp_path / "toktrail.db"
@@ -6008,6 +6061,79 @@ def test_cli_sync_export_and_import_dry_run_json_shape(tmp_path) -> None:
     assert "conflicts" in payload
 
 
+def test_cli_sync_import_does_not_auto_export_git_state(tmp_path, monkeypatch) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    import_db = tmp_path / "toktrail-import.db"
+    source_db = tmp_path / "opencode.db"
+    archive_path = tmp_path / "state.tar.gz"
+    config_path = tmp_path / "config.toml"
+    repo = tmp_path / "toktrail-state"
+    create_source_db(source_db)
+    config_path.write_text(
+        f"""
+config_version = 1
+
+[sync.git]
+repo = "{_toml_path_value(repo)}"
+auto_push = true
+""".strip(),
+        encoding="utf-8",
+    )
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    refresh_result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "refresh",
+            "--no-run",
+            "--harness",
+            "opencode",
+            "--source",
+            str(source_db),
+        ],
+    )
+    assert refresh_result.exit_code == 0, refresh_result.output
+
+    export_result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "sync",
+            "export",
+            "--out",
+            str(archive_path),
+            "--no-refresh",
+        ],
+    )
+    assert export_result.exit_code == 0, export_result.output
+
+    def fail_export(*args, **kwargs):
+        raise AssertionError("sync import must not export git state")
+
+    monkeypatch.setattr("toktrail.cli_sync.export_repo_archive", fail_export)
+
+    import_result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(import_db),
+            "--config",
+            str(config_path),
+            "sync",
+            "import",
+            str(archive_path),
+            "--json",
+        ],
+    )
+    assert import_result.exit_code == 0, import_result.output
+    payload = json.loads(import_result.output)
+    assert payload["usage_events_inserted"] > 0
+
+
 @pytest.mark.skipif(not HAS_GIT, reason="git executable is required")
 def test_cli_sync_git_init_status(tmp_path: Path) -> None:
     runner = CliRunner()
@@ -6349,7 +6475,7 @@ def test_cli_sync_git_export_local_no_refresh_does_not_push(tmp_path: Path) -> N
 
 
 @pytest.mark.skipif(not HAS_GIT, reason="git executable is required")
-def test_cli_refresh_auto_export_avoids_archive_spam(tmp_path: Path) -> None:
+def test_cli_refresh_does_not_auto_export_git_state(tmp_path: Path) -> None:
     runner = CliRunner()
     state_db = tmp_path / "toktrail.db"
     source_db = tmp_path / "opencode.db"
@@ -6417,16 +6543,7 @@ auto_push = true
     )
     assert second.exit_code == 0, second.output
 
-    # The auto-export creates a git commit (text state, not tar.gz).
-    # First refresh should produce exactly 1 export commit; second should not.
-    import subprocess
-
-    commit_count = int(
-        subprocess.check_output(
-            ["git", "rev-list", "--count", "HEAD"], cwd=str(repo)
-        ).strip()
-    )
-    assert commit_count == 1
+    assert not (repo / "state" / "manifest.json").exists()
 
 
 @pytest.mark.skipif(not HAS_GIT, reason="git executable is required")

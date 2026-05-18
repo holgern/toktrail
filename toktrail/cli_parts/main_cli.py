@@ -76,7 +76,7 @@ from toktrail.cli_parts.types import (
     WatchDelta,
     WatchTotals,
 )
-from toktrail.cli_sync import maybe_auto_export_to_git_repo, sync_app
+from toktrail.cli_sync import sync_app
 from toktrail.config import (
     DEFAULT_TEMPLATE_NAME,
     ContextWindowConfig,
@@ -1219,7 +1219,6 @@ def start(
         _exit_with_error(str(exc))
     finally:
         conn.close()
-    maybe_auto_export_to_git_repo(ctx, reason="run start")
     if run is None:
         _exit_with_error(f"Run not found after creation: {session_id}")
     if json_output:
@@ -1266,7 +1265,6 @@ def stop(
         end_tracking_session(conn, selected_session_id)
     finally:
         conn.close()
-    maybe_auto_export_to_git_repo(ctx, reason="run stop")
     typer.echo(f"Stopped run {selected_session_id}: {session.name or '(unnamed)'}")
     excluded_total = sum(result.rows_scope_excluded for result in refresh_results)
     if excluded_total > 0:
@@ -1553,7 +1551,6 @@ def archive_command(
         _exit_with_error(str(exc))
     finally:
         conn.close()
-    maybe_auto_export_to_git_repo(ctx, reason="run archive")
     if run is None:
         _exit_with_error(f"Run not found: {run_id}")
     if json_output:
@@ -1576,7 +1573,6 @@ def unarchive_command(
         _exit_with_error(str(exc))
     finally:
         conn.close()
-    maybe_auto_export_to_git_repo(ctx, reason="run unarchive")
     if run is None:
         _exit_with_error(f"Run not found: {run_id}")
     if json_output:
@@ -5117,9 +5113,6 @@ def refresh_usage(
             typer.echo(json.dumps([output], indent=2))
             return
 
-        if not dry_run and result.rows_imported > 0:
-            maybe_auto_export_to_git_repo(ctx, reason="refresh explicit")
-
         _print_refresh_result(result)
         if dry_run:
             typer.echo("\n[dry-run: changes were not persisted]")
@@ -5144,8 +5137,6 @@ def refresh_usage(
         if json_output:
             typer.echo(json.dumps([result.as_dict() for result in results], indent=2))
             return
-        if _refresh_results_changed(results):
-            maybe_auto_export_to_git_repo(ctx, reason="refresh configured")
         _print_configured_refresh_results(results)
 
     else:
@@ -6798,8 +6789,6 @@ def _refresh_for_statusline(
         )
     except (OSError, ValueError, ToktrailError) as exc:
         _exit_with_error(str(exc))
-    if _refresh_results_changed(results):
-        maybe_auto_export_to_git_repo(ctx, reason="statusline refresh")
     if details:
         _print_configured_refresh_results(results)
     return results
@@ -7179,9 +7168,6 @@ def _refresh_before_report(
     except (OSError, ValueError, ToktrailError) as exc:
         _exit_with_error(str(exc))
 
-    if _refresh_results_changed(results):
-        maybe_auto_export_to_git_repo(ctx, reason="report refresh")
-
     if details and not json_output:
         _print_configured_refresh_results(results)
     return results
@@ -7319,13 +7305,6 @@ def _print_configured_refresh_results(results: tuple[ImportUsageResult, ...]) ->
             "elapsed_ms",
         },
     )
-
-
-def _refresh_results_changed(results: tuple[ImportUsageResult, ...]) -> bool:
-    for result in results:
-        if result.rows_imported > 0 or result.rows_linked > 0:
-            return True
-    return False
 
 
 def _resolve_config_path(ctx: typer.Context) -> Path:
