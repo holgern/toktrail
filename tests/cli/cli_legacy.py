@@ -21,6 +21,7 @@ from tests.helpers import (
 )
 from toktrail.api.sessions import init_state, start_run
 from toktrail.cli import app
+from toktrail.cli_parts import main_cli as cli_module
 from toktrail.db import (
     archive_tracking_session,
     assign_area_to_source_session,
@@ -1800,7 +1801,12 @@ opencode = "{_toml_path_value(source_db)}"
 
     assert result.exit_code == 0, result.output
     assert "Refreshed usage" in result.output
+    assert "files" in result.output
     assert "inserted" in result.output
+    assert "fingerprint ms" in result.output
+    assert "scan ms" in result.output
+    assert "db ms" in result.output
+    assert "total ms" in result.output
     assert "source path" not in result.output.lower()
 
 
@@ -1844,7 +1850,75 @@ opencode = "{_toml_path_value(source_db)}"
     payload = json.loads(result.output)
     assert "refresh" in payload
     assert "report" in payload
+    assert "elapsed_ms" in payload["refresh"][0]
+    assert "fingerprint_ms" in payload["refresh"][0]
+    assert "scan_ms" in payload["refresh"][0]
+    assert "db_write_ms" in payload["refresh"][0]
     assert payload["report"]["totals"]["total"] == 1500
+
+
+def test_cli_usage_auto_refresh_skips_recent_report_refresh(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    source_db = tmp_path / "opencode.db"
+    config_path = tmp_path / "toktrail.toml"
+    create_source_db(source_db)
+    config_path.write_text(
+        f"""
+config_version = 1
+
+[imports]
+harnesses = ["opencode"]
+missing_source = "warn"
+include_raw_json = false
+
+[imports.sources]
+opencode = "{_toml_path_value(source_db)}"
+
+[reports]
+refresh = "auto"
+min_refresh_interval_secs = 60
+""".strip(),
+        encoding="utf-8",
+    )
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    calls: list[str] = []
+    original = cli_module.import_configured_usage_api
+
+    def counted_import(*args, **kwargs):  # type: ignore[no-untyped-def]
+        calls.append(str(kwargs.get("refresh_mode")))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(cli_module, "import_configured_usage_api", counted_import)
+
+    first = runner.invoke(
+        app,
+        ["--db", str(state_db), "--config", str(config_path), "usage", "today"],
+    )
+    second = runner.invoke(
+        app,
+        ["--db", str(state_db), "--config", str(config_path), "usage", "today"],
+    )
+    third = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "--config",
+            str(config_path),
+            "usage",
+            "today",
+            "--refresh",
+        ],
+    )
+
+    assert first.exit_code == 0, first.output
+    assert second.exit_code == 0, second.output
+    assert third.exit_code == 0, third.output
+    assert calls == ["quick", "full"]
 
 
 def test_cli_usage_supports_explicit_since_until_boundaries(tmp_path) -> None:

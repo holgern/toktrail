@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from copy import deepcopy
 from pathlib import Path
@@ -16,6 +17,7 @@ from tests.test_amp_parser import create_amp_source
 from tests.test_droid_parser import write_droid_settings
 from tests.test_goose_parser import create_goose_db, insert_session
 from tests.test_harnessbridge_parser import write_harnessbridge_rows
+from toktrail.api import imports as imports_module
 from toktrail.api.imports import import_configured_usage, import_usage
 from toktrail.api.models import RunScope
 from toktrail.api.reports import session_report
@@ -496,6 +498,122 @@ amp = "{_toml_path_value(amp_source)}"
         ("droid", "ok", 1),
         ("amp", "ok", 1),
     ]
+
+
+def test_quick_refresh_directory_skips_recursive_fingerprint_for_codex(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state_db = tmp_path / "toktrail.db"
+    source_dir = tmp_path / "codex"
+    source_file = source_dir / "2026" / "01" / "01" / "session.jsonl"
+    config_path = tmp_path / "toktrail.toml"
+    create_codex_session_file(source_file)
+    config_path.write_text(
+        f"""
+config_version = 1
+
+[imports]
+harnesses = ["codex"]
+missing_source = "error"
+include_raw_json = false
+
+[imports.sources]
+codex = "{_toml_path_value(source_dir)}"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    init_state(state_db)
+    start_run(state_db, name="codex")
+    first = import_configured_usage(state_db, config_path=config_path)
+    assert first[0].rows_imported == 1
+
+    def _boom(
+        path: Path,
+    ) -> tuple[int | None, int | None, int | None, int | None, int | None]:
+        raise AssertionError(f"unexpected recursive fingerprint for {path}")
+
+    monkeypatch.setattr(imports_module, "_directory_fingerprint", _boom)
+
+    second = import_configured_usage(
+        state_db,
+        config_path=config_path,
+        refresh_mode="quick",
+    )
+
+    assert second[0].rows_imported == 0
+
+
+def test_quick_refresh_directory_skips_unchanged_old_codex_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state_db = tmp_path / "toktrail.db"
+    source_dir = tmp_path / "codex"
+    old_file = source_dir / "2026" / "01" / "01" / "old.jsonl"
+    current_file = source_dir / "2026" / "01" / "02" / "current.jsonl"
+    config_path = tmp_path / "toktrail.toml"
+    create_codex_session_file(old_file)
+    create_codex_session_file(current_file)
+    config_path.write_text(
+        f"""
+config_version = 1
+
+[imports]
+harnesses = ["codex"]
+missing_source = "error"
+include_raw_json = false
+
+[imports.sources]
+codex = "{_toml_path_value(source_dir)}"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    init_state(state_db)
+    start_run(state_db, name="codex")
+    first = import_configured_usage(state_db, config_path=config_path)
+    assert first[0].rows_imported == 2
+
+    appended_row = {
+        "timestamp": "2099-01-01T00:00:02Z",
+        "type": "event_msg",
+        "payload": {
+            "type": "token_count",
+            "info": {
+                "total_token_usage": {
+                    "input_tokens": 240,
+                    "cached_input_tokens": 40,
+                    "output_tokens": 60,
+                    "reasoning_output_tokens": 10,
+                },
+                "last_token_usage": {
+                    "input_tokens": 120,
+                    "cached_input_tokens": 20,
+                    "output_tokens": 30,
+                    "reasoning_output_tokens": 5,
+                },
+            },
+        },
+    }
+    with current_file.open("a", encoding="utf-8") as handle:
+        handle.write(f"{json.dumps(appended_row)}\n")
+
+    original_open = Path.open
+
+    def guarded_open(self: Path, *args: object, **kwargs: object):
+        if self == old_file:
+            raise AssertionError("unchanged historical codex file was reopened")
+        return original_open(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", guarded_open)
+
+    second = import_configured_usage(
+        state_db,
+        config_path=config_path,
+        refresh_mode="quick",
+    )
+
+    assert second[0].rows_imported == 1
 
 
 def test_later_session_import_links_existing_unscoped_events_without_duplicates(

@@ -224,6 +224,74 @@ def test_git_sync_export_replaces_existing_state_dir_on_windows_like_rename(
     assert (repo / "state" / "manifest.json").is_file()
 
 
+def test_git_sync_export_updates_only_changed_files_and_removes_stale_files(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    db_a = tmp_path / "a.db"
+    db_b = tmp_path / "b.db"
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("config_version = 1\n", encoding="utf-8")
+
+    ensure_git_repo(repo, remote_url=None, branch="main")
+    _configure_git_identity(repo)
+    _seed_db(db_a, event=_event("1", created_ms=1_777_801_200_000))
+
+    export_repo_archive(
+        db_a,
+        repo,
+        archive_dir="state",
+        config_path=config_path,
+        include_config=False,
+        redact_raw_json=True,
+        commit_message=None,
+        remote="origin",
+        branch="main",
+        push=False,
+        allow_dirty=False,
+    )
+    exported_files = sorted((repo / "state" / "usage-events").rglob("*.json"))
+    assert len(exported_files) == 1
+    first_event_path = exported_files[0]
+    first_event_mtime_ns = first_event_path.stat().st_mtime_ns
+
+    export_repo_archive(
+        db_a,
+        repo,
+        archive_dir="state",
+        config_path=config_path,
+        include_config=False,
+        redact_raw_json=True,
+        commit_message=None,
+        remote="origin",
+        branch="main",
+        push=False,
+        allow_dirty=False,
+    )
+    assert first_event_path.stat().st_mtime_ns == first_event_mtime_ns
+
+    _seed_db(db_b, event=_event("2", created_ms=1_777_801_300_000))
+    export_repo_archive(
+        db_b,
+        repo,
+        archive_dir="state",
+        config_path=config_path,
+        include_config=False,
+        redact_raw_json=True,
+        commit_message=None,
+        remote="origin",
+        branch="main",
+        push=False,
+        allow_dirty=False,
+    )
+
+    updated_files = sorted((repo / "state" / "usage-events").rglob("*.json"))
+    assert len(updated_files) == 1
+    assert not first_event_path.exists()
+    updated_payload = json.loads(updated_files[0].read_text(encoding="utf-8"))
+    assert updated_payload["source_row_id"] == "row-2"
+
+
 def test_git_sync_export_records_machine_name(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

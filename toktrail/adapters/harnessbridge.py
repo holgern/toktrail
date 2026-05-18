@@ -10,9 +10,13 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from toktrail.adapters.base import (
+    ImportScanState,
+    ImportSourceFileState,
     ScanResult,
     SourceSessionMetadata,
     SourceSessionSummary,
+    build_import_source_file_state,
+    decide_file_scan,
 )
 from toktrail.adapters.summary import summarize_events_by_source_session
 from toktrail.config import CostingConfig, normalize_identity
@@ -46,7 +50,7 @@ def scan_harnessbridge_path(
     source_session_id: str | None = None,
     include_raw_json: bool = True,
     since_ms: int | None = None,
-    import_state: object | None = None,
+    import_state: ImportScanState | None = None,
 ) -> HarnessbridgeScanResult:
     resolved_path = source_path.expanduser()
     if not resolved_path.exists():
@@ -74,6 +78,7 @@ def scan_harnessbridge_path(
     rows_skipped = 0
     events: list[UsageEvent] = []
     metadata_by_key: dict[tuple[str, str], SourceSessionMetadata] = {}
+    file_states = []
     for file_path in file_paths:
         scan = scan_harnessbridge_file(
             file_path,
@@ -81,10 +86,12 @@ def scan_harnessbridge_path(
             include_raw_json=include_raw_json,
             since_ms=since_ms,
             import_state=import_state,
+            source_root=resolved_path,
         )
         rows_seen += scan.rows_seen
         rows_skipped += scan.rows_skipped
         events.extend(scan.events)
+        file_states.extend(scan.file_states)
         for metadata in scan.session_metadata:
             key = (metadata.harness, metadata.source_session_id)
             metadata_by_key[key] = _merge_session_metadata(
@@ -98,6 +105,8 @@ def scan_harnessbridge_path(
         rows_seen=rows_seen,
         rows_skipped=rows_skipped,
         events=events,
+        file_states=tuple(file_states),
+        discovered_file_paths=tuple(str(path) for path in file_paths),
         session_metadata=tuple(metadata_by_key.values()),
     )
 
@@ -108,10 +117,17 @@ def scan_harnessbridge_file(
     source_session_id: str | None = None,
     include_raw_json: bool = True,
     since_ms: int | None = None,
-    import_state: object | None = None,
+    import_state: ImportScanState | None = None,
+    source_root: Path | None = None,
 ) -> HarnessbridgeScanResult:
     resolved_path = file_path.expanduser()
-    if not resolved_path.exists() or not resolved_path.is_file():
+    decision = decide_file_scan(
+        resolved_path,
+        parser_version=HARNESSBRIDGE_PARSER_VERSION,
+        import_state=import_state,
+        allow_resume=True,
+    )
+    if decision is None:
         return HarnessbridgeScanResult(
             source_path=resolved_path,
             files_seen=0,
@@ -119,33 +135,68 @@ def scan_harnessbridge_file(
             rows_skipped=0,
             events=[],
         )
+    if decision.mode == "skip":
+        return HarnessbridgeScanResult(
+            source_path=resolved_path,
+            files_seen=1,
+            rows_seen=0,
+            rows_skipped=0,
+            events=[],
+            discovered_file_paths=(str(resolved_path),),
+        )
 
     fallback_timestamp = _file_modified_timestamp_ms(resolved_path)
-    header = _SessionHeader()
+    header, line_number_offset = _harnessbridge_resume_state(decision.prior_state)
     rows_seen = 0
     rows_skipped = 0
     events: list[UsageEvent] = []
     metadata_by_key: dict[tuple[str, str], SourceSessionMetadata] = {}
+    start_offset = (
+        decision.prior_state.last_file_offset
+        if decision.mode == "resume" and decision.prior_state is not None
+        else 0
+    )
+    last_committed_offset = start_offset
+    last_committed_line_number = line_number_offset
 
     try:
-        with resolved_path.open("r", encoding="utf-8", errors="replace") as handle:
-            for line_number, line in enumerate(handle, start=1):
+        with resolved_path.open("rb") as handle:
+            if start_offset > 0:
+                handle.seek(start_offset)
+            line_number = line_number_offset
+            while True:
+                raw_line = handle.readline()
+                if raw_line == b"":
+                    break
+                line_number += 1
+                line_end = handle.tell()
+                line = raw_line.decode("utf-8", errors="replace")
                 trimmed = line.strip()
                 if not trimmed:
+                    last_committed_offset = line_end
+                    last_committed_line_number = line_number
                     continue
 
                 rows_seen += 1
                 row = _json_loads(trimmed)
                 if row is None:
                     rows_skipped += 1
+                    if not raw_line.endswith(b"\n"):
+                        break
+                    last_committed_offset = line_end
+                    last_committed_line_number = line_number
                     continue
 
                 row_type = _as_str(row.get("type"))
                 if row_type == "session":
                     header = _merge_session_header(row, header)
+                    last_committed_offset = line_end
+                    last_committed_line_number = line_number
                     continue
                 if row_type != "usage":
                     rows_skipped += 1
+                    last_committed_offset = line_end
+                    last_committed_line_number = line_number
                     continue
 
                 event = _parse_usage_row(
@@ -159,15 +210,21 @@ def scan_harnessbridge_file(
                 )
                 if event is None:
                     rows_skipped += 1
+                    last_committed_offset = line_end
+                    last_committed_line_number = line_number
                     continue
                 if (
                     source_session_id is not None
                     and event.source_session_id != source_session_id
                 ):
                     rows_skipped += 1
+                    last_committed_offset = line_end
+                    last_committed_line_number = line_number
                     continue
                 if since_ms is not None and event.created_ms < since_ms:
                     rows_skipped += 1
+                    last_committed_offset = line_end
+                    last_committed_line_number = line_number
                     continue
                 events.append(event)
                 key = (event.harness, event.source_session_id)
@@ -179,6 +236,8 @@ def scan_harnessbridge_file(
                         event=event,
                     ),
                 )
+                last_committed_offset = line_end
+                last_committed_line_number = line_number
     except OSError:
         return HarnessbridgeScanResult(
             source_path=resolved_path,
@@ -214,6 +273,29 @@ def scan_harnessbridge_file(
         rows_seen=rows_seen,
         rows_skipped=rows_skipped,
         events=events,
+        file_states=(
+            build_import_source_file_state(
+                harness=HARNESSBRIDGE_SOURCE,
+                source_path=source_root or resolved_path,
+                file_path=resolved_path,
+                signature=decision.signature,
+                last_imported_created_ms=max(
+                    (event.created_ms for event in events),
+                    default=(
+                        decision.prior_state.last_imported_created_ms
+                        if decision.prior_state is not None
+                        else None
+                    ),
+                ),
+                last_file_offset=last_committed_offset,
+                parser_version=HARNESSBRIDGE_PARSER_VERSION,
+                parser_state_json=_harnessbridge_file_state_json(
+                    header=header,
+                    last_line_number=last_committed_line_number,
+                ),
+            ),
+        ),
+        discovered_file_paths=(str(resolved_path),),
         session_metadata=tuple(metadata_by_key.values()),
     )
 
@@ -418,6 +500,60 @@ def _build_session_metadata_from_event(
         session_title=header.session_title,
         started_ms=header.started_ms,
         last_seen_ms=event.created_ms,
+    )
+
+
+def _harnessbridge_resume_state(
+    file_state: ImportSourceFileState | None,
+) -> tuple[_SessionHeader, int]:
+    if file_state is None or file_state.parser_state_json is None:
+        return _SessionHeader(), 0
+    try:
+        payload = json.loads(file_state.parser_state_json)
+    except json.JSONDecodeError:
+        return _SessionHeader(), 0
+    if not isinstance(payload, dict):
+        return _SessionHeader(), 0
+    return (
+        _SessionHeader(
+            session_id=_as_str(payload.get("session_id")),
+            harness=_normalized_identity(payload.get("harness")),
+            accounting=_accounting_mode(payload.get("accounting")),
+            started_ms=_timestamp_ms_from_value(payload.get("started_ms")),
+            provider_id=_normalized_identity(payload.get("provider_id")),
+            model_id=_as_str(payload.get("model_id")),
+            cwd=_as_str(payload.get("cwd")),
+            source_dir=_as_str(payload.get("source_dir")),
+            git_root=_as_str(payload.get("git_root")),
+            git_remote=_as_str(payload.get("git_remote")),
+            session_title=_as_str(payload.get("session_title")),
+        ),
+        _as_non_negative_int(payload.get("last_line_number"), 0),
+    )
+
+
+def _harnessbridge_file_state_json(
+    *,
+    header: _SessionHeader,
+    last_line_number: int,
+) -> str:
+    return json.dumps(
+        {
+            "session_id": header.session_id,
+            "harness": header.harness,
+            "accounting": header.accounting,
+            "started_ms": header.started_ms,
+            "provider_id": header.provider_id,
+            "model_id": header.model_id,
+            "cwd": header.cwd,
+            "source_dir": header.source_dir,
+            "git_root": header.git_root,
+            "git_remote": header.git_remote,
+            "session_title": header.session_title,
+            "last_line_number": last_line_number,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
     )
 
 

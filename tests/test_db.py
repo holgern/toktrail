@@ -32,6 +32,7 @@ from toktrail.db import (
     get_tracking_session,
     has_imported_sync_archive,
     insert_usage_events,
+    list_import_source_file_states,
     list_tracking_sessions,
     migrate,
     move_area_path,
@@ -47,6 +48,7 @@ from toktrail.db import (
     summarize_usage_sessions,
     unarchive_tracking_session,
     unassign_area_from_source_session,
+    upsert_import_source_file_state,
     upsert_source_session_metadata,
 )
 from toktrail.models import RunScope, TokenBreakdown, UsageEvent
@@ -167,9 +169,10 @@ def test_migrate_creates_tables_and_is_idempotent(tmp_path: Path) -> None:
         "run_events",
         "state_metadata",
         "import_sources",
+        "import_source_files",
         "sync_imports",
     } <= table_names
-    assert user_version == 14
+    assert user_version == 15
 
 
 def test_migrate_v3_to_v4_idempotent_with_existing_column(tmp_path: Path) -> None:
@@ -185,7 +188,47 @@ def test_migrate_v3_to_v4_idempotent_with_existing_column(tmp_path: Path) -> Non
     # Re-running migrate must not crash on duplicate column.
     migrate(conn)
 
-    assert int(conn.execute("PRAGMA user_version").fetchone()[0]) == 14
+    assert int(conn.execute("PRAGMA user_version").fetchone()[0]) == 15
+
+
+def test_import_source_file_state_round_trip(tmp_path: Path) -> None:
+    conn = connect(tmp_path / "toktrail.db")
+    try:
+        migrate(conn)
+        upsert_import_source_file_state(
+            conn,
+            harness="codex",
+            source_path="/tmp/codex",
+            file_path="/tmp/codex/2026/05/18/session.jsonl",
+            size=123,
+            mtime_ns=456,
+            inode=789,
+            last_imported_created_ms=111,
+            last_file_offset=99,
+            parser_version=3,
+            parser_state_json='{"cursor":"ok"}',
+        )
+        conn.commit()
+        rows = list_import_source_file_states(
+            conn,
+            harness="codex",
+            source_path="/tmp/codex",
+        )
+    finally:
+        conn.close()
+
+    assert len(rows) == 1
+    state = rows[0]
+    assert state.harness == "codex"
+    assert state.source_path == "/tmp/codex"
+    assert state.file_path == "/tmp/codex/2026/05/18/session.jsonl"
+    assert state.size == 123
+    assert state.mtime_ns == 456
+    assert state.inode == 789
+    assert state.last_imported_created_ms == 111
+    assert state.last_file_offset == 99
+    assert state.parser_version == 3
+    assert state.parser_state_json == '{"cursor":"ok"}'
 
 
 def test_insert_usage_events_sets_origin_machine_id(tmp_path: Path) -> None:

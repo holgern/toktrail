@@ -8,7 +8,13 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 
-from toktrail.adapters.base import ScanResult, SourceSessionSummary
+from toktrail.adapters.base import (
+    ImportScanState,
+    ScanResult,
+    SourceSessionSummary,
+    build_import_source_file_state,
+    decide_file_scan,
+)
 from toktrail.adapters.summary import summarize_events_by_source_session
 from toktrail.config import CostingConfig, normalize_identity
 from toktrail.models import TokenBreakdown, UsageEvent
@@ -27,7 +33,7 @@ def scan_droid_path(
     source_session_id: str | None = None,
     include_raw_json: bool = True,
     since_ms: int | None = None,
-    import_state: object | None = None,
+    import_state: ImportScanState | None = None,
 ) -> DroidScanResult:
     resolved_path = source_path.expanduser()
     if not resolved_path.exists():
@@ -48,10 +54,18 @@ def scan_droid_path(
     rows_seen = 0
     rows_skipped = 0
     events: list[UsageEvent] = []
+    file_states = []
     for file_path in file_paths:
-        scan = scan_droid_file(file_path, include_raw_json=include_raw_json)
+        scan = scan_droid_file(
+            file_path,
+            include_raw_json=include_raw_json,
+            since_ms=since_ms,
+            import_state=import_state,
+            source_root=resolved_path if resolved_path.is_dir() else None,
+        )
         rows_seen += scan.rows_seen
         rows_skipped += scan.rows_skipped
+        file_states.extend(scan.file_states)
         if source_session_id is None:
             events.extend(scan.events)
             continue
@@ -70,6 +84,8 @@ def scan_droid_path(
         rows_seen=rows_seen,
         rows_skipped=rows_skipped,
         events=events,
+        file_states=tuple(file_states),
+        discovered_file_paths=tuple(str(path) for path in file_paths),
     )
 
 
@@ -78,16 +94,32 @@ def scan_droid_file(
     *,
     include_raw_json: bool = True,
     since_ms: int | None = None,
-    import_state: object | None = None,
+    import_state: ImportScanState | None = None,
+    source_root: Path | None = None,
 ) -> DroidScanResult:
     resolved_path = file_path.expanduser()
-    if not resolved_path.exists() or not resolved_path.is_file():
+    decision = decide_file_scan(
+        resolved_path,
+        parser_version=DROID_PARSER_VERSION,
+        import_state=import_state,
+        allow_resume=False,
+    )
+    if decision is None:
         return DroidScanResult(
             source_path=resolved_path,
             files_seen=0,
             rows_seen=0,
             rows_skipped=0,
             events=[],
+        )
+    if decision.mode == "skip":
+        return DroidScanResult(
+            source_path=resolved_path,
+            files_seen=1,
+            rows_seen=0,
+            rows_skipped=0,
+            events=[],
+            discovered_file_paths=(str(resolved_path),),
         )
 
     try:
@@ -106,12 +138,38 @@ def scan_droid_file(
         data_json,
         include_raw_json=include_raw_json,
     )
+    events = [] if event is None else [event]
+    if since_ms is not None:
+        kept = [entry for entry in events if entry.created_ms >= since_ms]
+        skipped = len(events) - len(kept)
+        events = kept
+    else:
+        skipped = 0
     return DroidScanResult(
         source_path=resolved_path,
         files_seen=1,
         rows_seen=1,
-        rows_skipped=0 if event is not None else 1,
-        events=[] if event is None else [event],
+        rows_skipped=(0 if event is not None else 1) + skipped,
+        events=events,
+        file_states=(
+            build_import_source_file_state(
+                harness=DROID_HARNESS,
+                source_path=source_root or resolved_path,
+                file_path=resolved_path,
+                signature=decision.signature,
+                last_imported_created_ms=max(
+                    (entry.created_ms for entry in events),
+                    default=(
+                        decision.prior_state.last_imported_created_ms
+                        if decision.prior_state is not None
+                        else None
+                    ),
+                ),
+                last_file_offset=decision.signature.size,
+                parser_version=DROID_PARSER_VERSION,
+            ),
+        ),
+        discovered_file_paths=(str(resolved_path),),
     )
 
 

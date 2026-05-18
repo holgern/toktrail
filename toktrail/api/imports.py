@@ -6,7 +6,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from toktrail import db as db_module
-from toktrail.adapters.base import ScanResult
+from toktrail.adapters.base import ImportScanState, ScanResult
 from toktrail.api._common import _get_harness, _open_state_db, _validate_source_path
 from toktrail.api.models import ImportUsageResult
 from toktrail.api.paths import resolve_source_path
@@ -29,13 +29,18 @@ def import_usage(
     since_ms: int | None = None,
     use_active_session: bool = True,
     include_raw_json: bool = False,
+    refresh_mode: str = "full",
 ) -> ImportUsageResult:
+    started = time.perf_counter()
     if since_start and since_ms is not None:
         msg = "since_start=True and since_ms cannot be used together."
         raise InvalidAPIUsageError(msg)
 
     definition = _get_harness(harness)
     conn, _ = _open_state_db(db_path)
+    fingerprint_ms = 0
+    scan_ms = 0
+    db_write_ms = 0
     try:
         resolved = _validate_source_path(
             definition.name,
@@ -75,6 +80,19 @@ def import_usage(
             source_path=str(resolved),
             source_session_id=source_session_id,
         )
+        file_states = (
+            db_module.list_import_source_file_states(
+                conn,
+                harness=definition.name,
+                source_path=str(resolved),
+            )
+            if resolved.is_dir()
+            else ()
+        )
+        import_state = ImportScanState.from_file_states(
+            source_state=source_state,
+            file_states=file_states,
+        )
         scan_since_ms = effective_since_ms
         if (
             source_state is not None
@@ -86,10 +104,28 @@ def import_usage(
                 else source_state.last_imported_created_ms
             )
 
-        pre_scan_fingerprint = _source_fingerprint(resolved)
+        use_recursive_fingerprint = not (refresh_mode == "quick" and resolved.is_dir())
+        if use_recursive_fingerprint:
+            fingerprint_started = time.perf_counter()
+            pre_scan_fingerprint = _source_fingerprint(resolved)
+            fingerprint_ms = int((time.perf_counter() - fingerprint_started) * 1000)
+        else:
+            pre_scan_fingerprint = (
+                source_state.fingerprint_size if source_state is not None else None,
+                source_state.fingerprint_mtime_ns if source_state is not None else None,
+                source_state.fingerprint_inode if source_state is not None else None,
+                source_state.sqlite_page_count if source_state is not None else None,
+                (
+                    source_state.sqlite_schema_version
+                    if source_state is not None
+                    else None
+                ),
+            )
         scan: ScanResult
         if (
-            source_state is not None
+            use_recursive_fingerprint
+            and selected_session_id is None
+            and source_state is not None
             and source_state.fingerprint_size == pre_scan_fingerprint[0]
             and source_state.fingerprint_mtime_ns == pre_scan_fingerprint[1]
             and source_state.fingerprint_inode == pre_scan_fingerprint[2]
@@ -109,18 +145,21 @@ def import_usage(
                 files_seen=0,
             )
         else:
+            scan_started = time.perf_counter()
             scan = definition.scan(
                 resolved,
                 source_session_id=source_session_id,
                 include_raw_json=include_raw_json,
                 since_ms=scan_since_ms,
-                import_state=source_state,
+                import_state=import_state,
             )
+            scan_ms = int((time.perf_counter() - scan_started) * 1000)
         filtered_events = [
             event
             for event in scan.events
             if effective_since_ms is None or event.created_ms >= effective_since_ms
         ]
+        db_write_started = time.perf_counter()
         try:
             insert_result = db_module.insert_usage_events(
                 conn,
@@ -172,6 +211,29 @@ def import_usage(
             sqlite_schema_version=fingerprint[4],
             last_imported_created_ms=latest_imported_ms,
         )
+        for file_state in scan.file_states:
+            db_module.upsert_import_source_file_state(
+                conn,
+                harness=file_state.harness,
+                source_path=file_state.source_path,
+                file_path=file_state.file_path,
+                size=file_state.size,
+                mtime_ns=file_state.mtime_ns,
+                inode=file_state.inode,
+                last_imported_created_ms=file_state.last_imported_created_ms,
+                last_file_offset=file_state.last_file_offset,
+                parser_version=file_state.parser_version,
+                parser_state_json=file_state.parser_state_json,
+            )
+        if resolved.is_dir():
+            db_module.delete_import_source_file_states(
+                conn,
+                harness=definition.name,
+                source_path=str(resolved),
+                keep_file_paths=scan.discovered_file_paths,
+            )
+        conn.commit()
+        db_write_ms = int((time.perf_counter() - db_write_started) * 1000)
     finally:
         conn.close()
 
@@ -180,6 +242,7 @@ def import_usage(
     rows_skipped = scan.rows_skipped + rows_filtered + insert_result.rows_skipped
     first_event_ms = min((event.created_ms for event in filtered_events), default=None)
     last_event_ms = max((event.created_ms for event in filtered_events), default=None)
+    elapsed_ms = int((time.perf_counter() - started) * 1000)
 
     return ImportUsageResult(
         run_id=selected_session_id,
@@ -198,6 +261,10 @@ def import_usage(
         since_ms=effective_since_ms,
         first_event_ms=first_event_ms,
         last_event_ms=last_event_ms,
+        elapsed_ms=elapsed_ms,
+        fingerprint_ms=fingerprint_ms,
+        scan_ms=scan_ms,
+        db_write_ms=db_write_ms,
     )
 
 
@@ -315,6 +382,7 @@ def import_configured_usage(  # noqa: C901
                         ),
                         since_start=since_start,
                         since_ms=since_ms,
+                        refresh_mode=refresh_mode,
                     )
                     results.append(result)
                     continue
@@ -338,6 +406,10 @@ def import_configured_usage(  # noqa: C901
                             if import_config.missing_source == "skip"
                             else f"Missing source path for {harness_name}: {resolved}"
                         ),
+                        elapsed_ms=0,
+                        fingerprint_ms=0,
+                        scan_ms=0,
+                        db_write_ms=0,
                     )
                 )
                 continue
@@ -355,6 +427,7 @@ def import_configured_usage(  # noqa: C901
                     ),
                     since_start=since_start,
                     since_ms=since_ms,
+                    refresh_mode=refresh_mode,
                 )
             )
     conn, _ = _open_state_db(db_path)

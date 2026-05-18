@@ -10,9 +10,13 @@ from decimal import Decimal
 from pathlib import Path
 
 from toktrail.adapters.base import (
+    ImportScanState,
+    ImportSourceFileState,
     ScanResult,
     SourceSessionMetadata,
     SourceSessionSummary,
+    build_import_source_file_state,
+    decide_file_scan,
 )
 from toktrail.adapters.summary import summarize_events_by_source_session
 from toktrail.config import CostingConfig
@@ -120,7 +124,7 @@ def scan_codex_path(
     source_session_id: str | None = None,
     include_raw_json: bool = True,
     since_ms: int | None = None,
-    import_state: object | None = None,
+    import_state: ImportScanState | None = None,
 ) -> CodexScanResult:
     resolved_path = source_path.expanduser()
     if not resolved_path.exists():
@@ -148,15 +152,18 @@ def scan_codex_path(
     rows_skipped = 0
     events: list[UsageEvent] = []
     metadata_by_key: dict[tuple[str, str], SourceSessionMetadata] = {}
+    file_states = []
     for file_path in file_paths:
         scan = scan_codex_file(
             file_path,
             include_raw_json=include_raw_json,
             since_ms=since_ms,
             import_state=import_state,
+            source_root=resolved_path,
         )
         rows_seen += scan.rows_seen
         rows_skipped += scan.rows_skipped
+        file_states.extend(scan.file_states)
         for metadata in scan.session_metadata:
             key = (metadata.harness, metadata.source_session_id)
             metadata_by_key[key] = _merge_session_metadata(
@@ -180,6 +187,8 @@ def scan_codex_path(
         rows_seen=rows_seen,
         rows_skipped=rows_skipped,
         events=events,
+        file_states=tuple(file_states),
+        discovered_file_paths=tuple(str(path) for path in file_paths),
         session_metadata=tuple(
             metadata
             for metadata in metadata_by_key.values()
@@ -195,10 +204,17 @@ def scan_codex_file(
     source_session_id: str | None = None,
     include_raw_json: bool = True,
     since_ms: int | None = None,
-    import_state: object | None = None,
+    import_state: ImportScanState | None = None,
+    source_root: Path | None = None,
 ) -> CodexScanResult:
     resolved_path = file_path.expanduser()
-    if not resolved_path.exists() or not resolved_path.is_file():
+    decision = decide_file_scan(
+        resolved_path,
+        parser_version=CODEX_PARSER_VERSION,
+        import_state=import_state,
+        allow_resume=True,
+    )
+    if decision is None:
         return CodexScanResult(
             source_path=resolved_path,
             files_seen=0,
@@ -206,54 +222,42 @@ def scan_codex_file(
             rows_skipped=0,
             events=[],
         )
+    if decision.mode == "skip":
+        return CodexScanResult(
+            source_path=resolved_path,
+            files_seen=1,
+            rows_seen=0,
+            rows_skipped=0,
+            events=[],
+            discovered_file_paths=(str(resolved_path),),
+        )
 
     fallback_timestamp = _file_modified_timestamp_ms(resolved_path)
     session_id = _session_id_from_path(resolved_path)
-    state = _CodexParseState()
-    rows_seen = 0
-    rows_skipped = 0
-    events: list[UsageEvent] = []
+    state = _codex_state_from_file_state(decision.prior_state)
+    line_number_offset = _codex_last_line_number(decision.prior_state)
+    start_offset = (
+        decision.prior_state.last_file_offset
+        if decision.mode == "resume" and decision.prior_state is not None
+        else 0
+    )
 
     try:
         with resolved_path.open("rb") as handle:
-            for line_number, raw_line in enumerate(handle, start=1):
-                try:
-                    line = raw_line.decode("utf-8")
-                except UnicodeDecodeError:
-                    rows_seen += 1
-                    rows_skipped += 1
-                    break
-
-                trimmed = line.strip()
-                if not trimmed:
-                    continue
-
-                rows_seen += 1
-                event, skipped = _parse_codex_line(
+            rows_seen, rows_skipped, events, safe_offset, last_line_number = (
+                _scan_codex_stream(
+                    handle,
                     file_path=resolved_path,
-                    line_number=line_number,
                     session_id=session_id,
-                    line_json=trimmed,
+                    source_session_id=source_session_id,
                     fallback_timestamp=fallback_timestamp,
                     state=state,
                     include_raw_json=include_raw_json,
+                    since_ms=since_ms,
+                    start_offset=start_offset,
+                    line_number_offset=line_number_offset,
                 )
-                if event is None:
-                    if skipped:
-                        rows_skipped += 1
-                    continue
-                if (
-                    source_session_id is not None
-                    and event.source_session_id != source_session_id
-                ):
-                    rows_skipped += 1
-                    continue
-                if since_ms is not None and event.created_ms < since_ms:
-                    rows_skipped += 1
-                    continue
-                events.append(event)
-                if state.last_seen_ms is None or event.created_ms > state.last_seen_ms:
-                    state.last_seen_ms = event.created_ms
+            )
     except OSError:
         return CodexScanResult(
             source_path=resolved_path,
@@ -277,6 +281,29 @@ def scan_codex_file(
         rows_seen=rows_seen,
         rows_skipped=rows_skipped,
         events=events,
+        file_states=(
+            build_import_source_file_state(
+                harness=CODEX_HARNESS,
+                source_path=source_root or resolved_path,
+                file_path=resolved_path,
+                signature=decision.signature,
+                last_imported_created_ms=max(
+                    (event.created_ms for event in events),
+                    default=(
+                        decision.prior_state.last_imported_created_ms
+                        if decision.prior_state is not None
+                        else None
+                    ),
+                ),
+                last_file_offset=safe_offset,
+                parser_version=CODEX_PARSER_VERSION,
+                parser_state_json=_codex_file_state_json(
+                    state=state,
+                    last_line_number=last_line_number,
+                ),
+            ),
+        ),
+        discovered_file_paths=(str(resolved_path),),
         session_metadata=(metadata,),
     )
 
@@ -287,6 +314,94 @@ def parse_codex_file(path: Path) -> list[UsageEvent]:
 
 def parse_codex_path(path: Path) -> list[UsageEvent]:
     return scan_codex_path(path).events
+
+
+def _scan_codex_stream(
+    handle,
+    *,
+    file_path: Path,
+    session_id: str,
+    source_session_id: str | None,
+    fallback_timestamp: int,
+    state: _CodexParseState,
+    include_raw_json: bool,
+    since_ms: int | None,
+    start_offset: int,
+    line_number_offset: int,
+) -> tuple[int, int, list[UsageEvent], int, int]:
+    rows_seen = 0
+    rows_skipped = 0
+    events: list[UsageEvent] = []
+    last_committed_offset = start_offset
+    last_committed_line_number = line_number_offset
+    if start_offset > 0:
+        handle.seek(start_offset)
+    line_number = line_number_offset
+    while True:
+        raw_line = handle.readline()
+        if raw_line == b"":
+            break
+        line_number += 1
+        line_end = handle.tell()
+        try:
+            line = raw_line.decode("utf-8")
+        except UnicodeDecodeError:
+            rows_seen += 1
+            rows_skipped += 1
+            if raw_line.endswith(b"\n"):
+                last_committed_offset = line_end
+                last_committed_line_number = line_number
+            break
+
+        trimmed = line.strip()
+        if not trimmed:
+            last_committed_offset = line_end
+            last_committed_line_number = line_number
+            continue
+
+        rows_seen += 1
+        event, skipped = _parse_codex_line(
+            file_path=file_path,
+            line_number=line_number,
+            session_id=session_id,
+            line_json=trimmed,
+            fallback_timestamp=fallback_timestamp,
+            state=state,
+            include_raw_json=include_raw_json,
+        )
+        if event is None:
+            if skipped:
+                rows_skipped += 1
+                if not raw_line.endswith(b"\n"):
+                    break
+            last_committed_offset = line_end
+            last_committed_line_number = line_number
+            continue
+        if (
+            source_session_id is not None
+            and event.source_session_id != source_session_id
+        ):
+            rows_skipped += 1
+            last_committed_offset = line_end
+            last_committed_line_number = line_number
+            continue
+        if since_ms is not None and event.created_ms < since_ms:
+            rows_skipped += 1
+            last_committed_offset = line_end
+            last_committed_line_number = line_number
+            continue
+        events.append(event)
+        if state.last_seen_ms is None or event.created_ms > state.last_seen_ms:
+            state.last_seen_ms = event.created_ms
+        last_committed_offset = line_end
+        last_committed_line_number = line_number
+    return (
+        rows_seen,
+        rows_skipped,
+        events,
+        last_committed_offset,
+        last_committed_line_number,
+    )
 
 
 def list_codex_sessions(
@@ -694,6 +809,88 @@ def _build_codex_session_metadata(
         session_title=state.session_title,
         started_ms=started_ms,
         last_seen_ms=last_seen_ms,
+    )
+
+
+def _codex_state_from_file_state(
+    file_state: ImportSourceFileState | None,
+) -> _CodexParseState:
+    if file_state is None or file_state.parser_state_json is None:
+        return _CodexParseState()
+    try:
+        payload = json.loads(file_state.parser_state_json)
+    except json.JSONDecodeError:
+        return _CodexParseState()
+    if not isinstance(payload, dict):
+        return _CodexParseState()
+    previous_payload = payload.get("previous_totals")
+    previous_totals = None
+    if isinstance(previous_payload, dict):
+        previous_totals = _CodexTotals(
+            input=_as_non_negative_int(previous_payload.get("input")),
+            output=_as_non_negative_int(previous_payload.get("output")),
+            cached=_as_non_negative_int(previous_payload.get("cached")),
+            reasoning=_as_non_negative_int(previous_payload.get("reasoning")),
+        )
+    return _CodexParseState(
+        current_model=_as_str(payload.get("current_model")),
+        previous_totals=previous_totals,
+        session_is_headless=bool(payload.get("session_is_headless")),
+        session_provider=_as_str(payload.get("session_provider")),
+        session_agent=_as_str(payload.get("session_agent")),
+        cwd=_as_str(payload.get("cwd")),
+        source_dir=_as_str(payload.get("source_dir")),
+        git_root=_as_str(payload.get("git_root")),
+        git_remote=_as_str(payload.get("git_remote")),
+        session_title=_as_str(payload.get("session_title")),
+        started_ms=_value_as_int(payload.get("started_ms")),
+        last_seen_ms=_value_as_int(payload.get("last_seen_ms")),
+    )
+
+
+def _codex_last_line_number(file_state: ImportSourceFileState | None) -> int:
+    if file_state is None or file_state.parser_state_json is None:
+        return 0
+    try:
+        payload = json.loads(file_state.parser_state_json)
+    except json.JSONDecodeError:
+        return 0
+    if not isinstance(payload, dict):
+        return 0
+    return _value_as_int(payload.get("last_line_number")) or 0
+
+
+def _codex_file_state_json(
+    *,
+    state: _CodexParseState,
+    last_line_number: int,
+) -> str:
+    previous_totals = None
+    if state.previous_totals is not None:
+        previous_totals = {
+            "input": state.previous_totals.input,
+            "output": state.previous_totals.output,
+            "cached": state.previous_totals.cached,
+            "reasoning": state.previous_totals.reasoning,
+        }
+    return json.dumps(
+        {
+            "current_model": state.current_model,
+            "previous_totals": previous_totals,
+            "session_is_headless": state.session_is_headless,
+            "session_provider": state.session_provider,
+            "session_agent": state.session_agent,
+            "cwd": state.cwd,
+            "source_dir": state.source_dir,
+            "git_root": state.git_root,
+            "git_remote": state.git_remote,
+            "session_title": state.session_title,
+            "started_ms": state.started_ms,
+            "last_seen_ms": state.last_seen_ms,
+            "last_line_number": last_line_number,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
     )
 
 

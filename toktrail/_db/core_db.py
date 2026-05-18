@@ -5,7 +5,7 @@ import json
 import socket
 import sqlite3
 import uuid
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field, replace
 from decimal import Decimal
 from hashlib import sha256
@@ -14,6 +14,7 @@ from time import time
 from typing import Any, cast
 
 from toktrail.adapters.base import (
+    ImportSourceFileState,
     ImportSourceState,
 )
 from toktrail.adapters.base import (
@@ -74,7 +75,7 @@ from toktrail.reporting import (
     UsageSessionsReport,
 )
 
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
 _PERIOD_SORT: dict[str, int] = {
     "5h": 0,
     "daily": 1,
@@ -324,6 +325,9 @@ def migrate(conn: sqlite3.Connection) -> None:
     if current_version == 13:
         _migrate_v13_to_v14(conn)
         current_version = 14
+    if current_version == 14:
+        _migrate_v14_to_v15(conn)
+        current_version = 15
 
     _ensure_machine_id(conn)
     conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
@@ -747,6 +751,24 @@ def _create_schema(conn: sqlite3.Connection) -> None:
 
         CREATE INDEX IF NOT EXISTS idx_import_sources_lookup
         ON import_sources(harness, source_path, source_session_key);
+
+        CREATE TABLE IF NOT EXISTS import_source_files (
+            harness TEXT NOT NULL,
+            source_path TEXT NOT NULL,
+            file_path TEXT NOT NULL,
+            size INTEGER,
+            mtime_ns INTEGER,
+            inode INTEGER,
+            last_imported_created_ms INTEGER,
+            last_file_offset INTEGER,
+            parser_version INTEGER,
+            parser_state_json TEXT,
+            updated_at_ms INTEGER NOT NULL,
+            PRIMARY KEY (harness, source_path, file_path)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_import_source_files_updated
+        ON import_source_files(harness, source_path, updated_at_ms);
 
 
         CREATE TABLE IF NOT EXISTS skipped_sources (
@@ -1249,6 +1271,37 @@ def _migrate_v13_to_v14(conn: sqlite3.Connection) -> None:
         ON source_session_metadata(source_dir)
         """
     )
+
+
+def _create_import_source_files_table(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS import_source_files (
+            harness TEXT NOT NULL,
+            source_path TEXT NOT NULL,
+            file_path TEXT NOT NULL,
+            size INTEGER,
+            mtime_ns INTEGER,
+            inode INTEGER,
+            last_imported_created_ms INTEGER,
+            last_file_offset INTEGER,
+            parser_version INTEGER,
+            parser_state_json TEXT,
+            updated_at_ms INTEGER NOT NULL,
+            PRIMARY KEY (harness, source_path, file_path)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_import_source_files_updated
+        ON import_source_files(harness, source_path, updated_at_ms)
+        """
+    )
+
+
+def _migrate_v14_to_v15(conn: sqlite3.Connection) -> None:
+    _create_import_source_files_table(conn)
 
 
 def _create_machine_active_areas_table(conn: sqlite3.Connection) -> None:
@@ -3122,6 +3175,138 @@ def get_import_source_state(
         last_seen_rowid=_optional_int(row["last_seen_rowid"]),
         last_file_offset=_optional_int(row["last_file_offset"]),
         updated_at_ms=_optional_int(row["updated_at_ms"]),
+    )
+
+
+def list_import_source_file_states(
+    conn: sqlite3.Connection,
+    *,
+    harness: str,
+    source_path: str,
+) -> tuple[ImportSourceFileState, ...]:
+    rows = conn.execute(
+        """
+        SELECT
+            harness,
+            source_path,
+            file_path,
+            size,
+            mtime_ns,
+            inode,
+            last_imported_created_ms,
+            last_file_offset,
+            parser_version,
+            parser_state_json,
+            updated_at_ms
+        FROM import_source_files
+        WHERE harness = ? AND source_path = ?
+        ORDER BY file_path
+        """,
+        (harness, source_path),
+    ).fetchall()
+    return tuple(
+        ImportSourceFileState(
+            harness=str(row["harness"]),
+            source_path=str(row["source_path"]),
+            file_path=str(row["file_path"]),
+            size=_optional_int(row["size"]),
+            mtime_ns=_optional_int(row["mtime_ns"]),
+            inode=_optional_int(row["inode"]),
+            last_imported_created_ms=_optional_int(row["last_imported_created_ms"]),
+            last_file_offset=_optional_int(row["last_file_offset"]),
+            parser_version=_optional_int(row["parser_version"]),
+            parser_state_json=(
+                str(row["parser_state_json"])
+                if row["parser_state_json"] is not None
+                else None
+            ),
+            updated_at_ms=_optional_int(row["updated_at_ms"]),
+        )
+        for row in rows
+    )
+
+
+def upsert_import_source_file_state(
+    conn: sqlite3.Connection,
+    *,
+    harness: str,
+    source_path: str,
+    file_path: str,
+    size: int | None = None,
+    mtime_ns: int | None = None,
+    inode: int | None = None,
+    last_imported_created_ms: int | None = None,
+    last_file_offset: int | None = None,
+    parser_version: int | None = None,
+    parser_state_json: str | None = None,
+) -> None:
+    now_ms = _now_ms()
+    conn.execute(
+        """
+        INSERT INTO import_source_files (
+            harness,
+            source_path,
+            file_path,
+            size,
+            mtime_ns,
+            inode,
+            last_imported_created_ms,
+            last_file_offset,
+            parser_version,
+            parser_state_json,
+            updated_at_ms
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(harness, source_path, file_path) DO UPDATE SET
+            size = excluded.size,
+            mtime_ns = excluded.mtime_ns,
+            inode = excluded.inode,
+            last_imported_created_ms = excluded.last_imported_created_ms,
+            last_file_offset = excluded.last_file_offset,
+            parser_version = excluded.parser_version,
+            parser_state_json = excluded.parser_state_json,
+            updated_at_ms = excluded.updated_at_ms
+        """,
+        (
+            harness,
+            source_path,
+            file_path,
+            size,
+            mtime_ns,
+            inode,
+            last_imported_created_ms,
+            last_file_offset,
+            parser_version,
+            parser_state_json,
+            now_ms,
+        ),
+    )
+
+
+def delete_import_source_file_states(
+    conn: sqlite3.Connection,
+    *,
+    harness: str,
+    source_path: str,
+    keep_file_paths: Sequence[str],
+) -> None:
+    keep = tuple(sorted(set(keep_file_paths)))
+    if keep:
+        placeholders = ", ".join("?" for _ in keep)
+        conn.execute(
+            f"""
+            DELETE FROM import_source_files
+            WHERE harness = ? AND source_path = ? AND file_path NOT IN ({placeholders})
+            """,
+            (harness, source_path, *keep),
+        )
+        return
+    conn.execute(
+        """
+        DELETE FROM import_source_files
+        WHERE harness = ? AND source_path = ?
+        """,
+        (harness, source_path),
     )
 
 

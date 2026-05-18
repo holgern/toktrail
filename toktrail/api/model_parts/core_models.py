@@ -386,6 +386,10 @@ class ImportUsageResult:
     rows_scope_excluded: int = 0
     status: str = "ok"
     error_message: str | None = None
+    elapsed_ms: int | None = None
+    fingerprint_ms: int | None = None
+    scan_ms: int | None = None
+    db_write_ms: int | None = None
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -407,6 +411,10 @@ class ImportUsageResult:
             "since_ms": self.since_ms,
             "first_event_ms": self.first_event_ms,
             "last_event_ms": self.last_event_ms,
+            "elapsed_ms": self.elapsed_ms,
+            "fingerprint_ms": self.fingerprint_ms,
+            "scan_ms": self.scan_ms,
+            "db_write_ms": self.db_write_ms,
         }
 
 

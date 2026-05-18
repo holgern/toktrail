@@ -350,6 +350,8 @@ def test_load_toktrail_config_exposes_statusline_defaults(tmp_path) -> None:
 
     config = load_toktrail_config(config_path)
 
+    assert config.reports.refresh == "auto"
+    assert config.reports.min_refresh_interval_secs == 5
     assert config.statusline.default_harness == "auto"
     assert config.statusline.basis == "virtual"
     assert config.statusline.refresh == "auto"
@@ -392,6 +394,10 @@ output_cache_secs = 4
 min_refresh_interval_secs = 8
 stale_after_secs = 75
 
+[reports]
+refresh = "always"
+min_refresh_interval_secs = 11
+
 [statusline.thresholds]
 quota_warning_percent = 70
 quota_danger_percent = 95
@@ -410,6 +416,8 @@ tokens = 272000
 
     config = load_runtime_config(config_path)
 
+    assert config.reports.refresh == "always"
+    assert config.reports.min_refresh_interval_secs == 11
     assert config.statusline.default_harness == "codex"
     assert config.statusline.basis == "source"
     assert config.statusline.refresh == "always"

@@ -11,7 +11,13 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 
-from toktrail.adapters.base import ScanResult, SourceSessionSummary
+from toktrail.adapters.base import (
+    ImportScanState,
+    ScanResult,
+    SourceSessionSummary,
+    build_import_source_file_state,
+    decide_file_scan,
+)
 from toktrail.adapters.summary import summarize_events_by_source_session
 from toktrail.config import CostingConfig
 from toktrail.models import TokenBreakdown, UsageEvent
@@ -42,7 +48,7 @@ def scan_claude_path(
     source_session_id: str | None = None,
     include_raw_json: bool = True,
     since_ms: int | None = None,
-    import_state: object | None = None,
+    import_state: ImportScanState | None = None,
 ) -> ClaudeScanResult:
     resolved_path = source_path.expanduser()
     if not resolved_path.exists():
@@ -66,15 +72,20 @@ def scan_claude_path(
     rows_skipped = 0
     events: list[UsageEvent] = []
     parent_cache: ParentSubagentTypeCache = {}
+    file_states = []
 
     for file_path in file_paths:
         scan = scan_claude_file(
             file_path,
             include_raw_json=include_raw_json,
             parent_cache=parent_cache,
+            since_ms=since_ms,
+            import_state=import_state,
+            source_root=resolved_path if resolved_path.is_dir() else None,
         )
         rows_seen += scan.rows_seen
         rows_skipped += scan.rows_skipped
+        file_states.extend(scan.file_states)
         if source_session_id is None:
             events.extend(scan.events)
             continue
@@ -93,6 +104,8 @@ def scan_claude_path(
         rows_seen=rows_seen,
         rows_skipped=rows_skipped,
         events=events,
+        file_states=tuple(file_states),
+        discovered_file_paths=tuple(str(path) for path in file_paths),
     )
 
 
@@ -103,10 +116,11 @@ def scan_claude_file(
     include_raw_json: bool = True,
     parent_cache: ParentSubagentTypeCache | None = None,
     since_ms: int | None = None,
-    import_state: object | None = None,
+    import_state: ImportScanState | None = None,
+    source_root: Path | None = None,
 ) -> ClaudeScanResult:
     resolved_path = file_path.expanduser()
-    if not resolved_path.exists() or not resolved_path.is_file():
+    if resolved_path.name.endswith(".meta.json"):
         return ClaudeScanResult(
             source_path=resolved_path,
             files_seen=0,
@@ -115,13 +129,28 @@ def scan_claude_file(
             events=[],
         )
 
-    if resolved_path.name.endswith(".meta.json"):
+    decision = decide_file_scan(
+        resolved_path,
+        parser_version=CLAUDE_PARSER_VERSION,
+        import_state=import_state,
+        allow_resume=False,
+    )
+    if decision is None:
         return ClaudeScanResult(
             source_path=resolved_path,
             files_seen=0,
             rows_seen=0,
             rows_skipped=0,
             events=[],
+        )
+    if decision.mode == "skip":
+        return ClaudeScanResult(
+            source_path=resolved_path,
+            files_seen=1,
+            rows_seen=0,
+            rows_skipped=0,
+            events=[],
+            discovered_file_paths=(str(resolved_path),),
         )
 
     try:
@@ -136,24 +165,29 @@ def scan_claude_file(
         )
 
     if resolved_path.suffix == ".json" and not resolved_path.name.endswith(".jsonl"):
-        events, rows_seen, rows_skipped = _parse_single_json_file(
+        parsed_events, rows_seen, rows_skipped = _parse_single_json_file(
             resolved_path,
             raw_text,
             include_raw_json=include_raw_json,
             parent_cache=parent_cache or {},
         )
     else:
-        events, rows_seen, rows_skipped = _parse_jsonl_file(
+        parsed_events, rows_seen, rows_skipped = _parse_jsonl_file(
             resolved_path,
             raw_text,
             include_raw_json=include_raw_json,
             parent_cache=parent_cache or {},
         )
 
+    events = parsed_events
     if source_session_id is not None:
         kept = [
             event for event in events if event.source_session_id == source_session_id
         ]
+        rows_skipped += len(events) - len(kept)
+        events = kept
+    if since_ms is not None:
+        kept = [event for event in events if event.created_ms >= since_ms]
         rows_skipped += len(events) - len(kept)
         events = kept
 
@@ -163,6 +197,25 @@ def scan_claude_file(
         rows_seen=rows_seen,
         rows_skipped=rows_skipped,
         events=events,
+        file_states=(
+            build_import_source_file_state(
+                harness=CLAUDE_HARNESS,
+                source_path=source_root or resolved_path,
+                file_path=resolved_path,
+                signature=decision.signature,
+                last_imported_created_ms=max(
+                    (event.created_ms for event in parsed_events),
+                    default=(
+                        decision.prior_state.last_imported_created_ms
+                        if decision.prior_state is not None
+                        else None
+                    ),
+                ),
+                last_file_offset=decision.signature.size,
+                parser_version=CLAUDE_PARSER_VERSION,
+            ),
+        ),
+        discovered_file_paths=(str(resolved_path),),
     )
 
 

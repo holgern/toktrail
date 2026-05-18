@@ -9,9 +9,13 @@ from decimal import Decimal
 from pathlib import Path
 
 from toktrail.adapters.base import (
+    ImportScanState,
+    ImportSourceFileState,
     ScanResult,
     SourceSessionMetadata,
     SourceSessionSummary,
+    build_import_source_file_state,
+    decide_file_scan,
 )
 from toktrail.adapters.summary import summarize_events_by_source_session
 from toktrail.config import CostingConfig
@@ -30,7 +34,7 @@ def scan_pi_path(
     source_session_id: str | None = None,
     include_raw_json: bool = True,
     since_ms: int | None = None,
-    import_state: object | None = None,
+    import_state: ImportScanState | None = None,
 ) -> PiScanResult:
     resolved_path = source_path.expanduser()
     if not resolved_path.exists():
@@ -52,10 +56,18 @@ def scan_pi_path(
     rows_skipped = 0
     events: list[UsageEvent] = []
     metadata_by_key: dict[tuple[str, str], SourceSessionMetadata] = {}
+    file_states = []
     for file_path in file_paths:
-        scan = scan_pi_file(file_path, include_raw_json=include_raw_json)
+        scan = scan_pi_file(
+            file_path,
+            include_raw_json=include_raw_json,
+            since_ms=since_ms,
+            import_state=import_state,
+            source_root=resolved_path if resolved_path.is_dir() else None,
+        )
         rows_seen += scan.rows_seen
         rows_skipped += scan.rows_skipped
+        file_states.extend(scan.file_states)
         for metadata in scan.session_metadata:
             key = (metadata.harness, metadata.source_session_id)
             metadata_by_key[key] = _merge_session_metadata(
@@ -80,6 +92,8 @@ def scan_pi_path(
         rows_seen=rows_seen,
         rows_skipped=rows_skipped,
         events=events,
+        file_states=tuple(file_states),
+        discovered_file_paths=tuple(str(path) for path in file_paths),
         session_metadata=tuple(
             metadata
             for metadata in metadata_by_key.values()
@@ -94,10 +108,17 @@ def scan_pi_file(
     *,
     include_raw_json: bool = True,
     since_ms: int | None = None,
-    import_state: object | None = None,
+    import_state: ImportScanState | None = None,
+    source_root: Path | None = None,
 ) -> PiScanResult:
     resolved_path = file_path.expanduser()
-    if not resolved_path.exists() or not resolved_path.is_file():
+    decision = decide_file_scan(
+        resolved_path,
+        parser_version=PI_PARSER_VERSION,
+        import_state=import_state,
+        allow_resume=True,
+    )
+    if decision is None:
         return PiScanResult(
             source_path=resolved_path,
             files_seen=0,
@@ -105,19 +126,47 @@ def scan_pi_file(
             rows_skipped=0,
             events=[],
         )
+    if decision.mode == "skip":
+        return PiScanResult(
+            source_path=resolved_path,
+            files_seen=1,
+            rows_seen=0,
+            rows_skipped=0,
+            events=[],
+            discovered_file_paths=(str(resolved_path),),
+        )
 
     fallback_timestamp = _file_modified_timestamp_ms(resolved_path)
     rows_seen = 0
     rows_skipped = 0
     events: list[UsageEvent] = []
-    session_id: str | None = None
-    session_header: dict[str, object] | None = None
+    session_id, session_header, line_number_offset = _pi_resume_state(
+        decision.prior_state
+    )
+    start_offset = (
+        decision.prior_state.last_file_offset
+        if decision.mode == "resume" and decision.prior_state is not None
+        else 0
+    )
+    last_committed_offset = start_offset
+    last_committed_line_number = line_number_offset
 
     try:
-        with resolved_path.open("r", encoding="utf-8", errors="replace") as handle:
-            for line_number, line in enumerate(handle, start=1):
+        with resolved_path.open("rb") as handle:
+            if start_offset > 0:
+                handle.seek(start_offset)
+            line_number = line_number_offset
+            while True:
+                raw_line = handle.readline()
+                if raw_line == b"":
+                    break
+                line_number += 1
+                line_end = handle.tell()
+                line = raw_line.decode("utf-8", errors="replace")
                 trimmed = line.strip()
                 if not trimmed:
+                    last_committed_offset = line_end
+                    last_committed_line_number = line_number
                     continue
 
                 if session_id is None:
@@ -130,6 +179,7 @@ def scan_pi_file(
                             rows_seen=rows_seen,
                             rows_skipped=rows_seen,
                             events=[],
+                            discovered_file_paths=(str(resolved_path),),
                         )
                     header_id = _as_str(header.get("id"))
                     if header_id is None:
@@ -139,9 +189,12 @@ def scan_pi_file(
                             rows_seen=rows_seen,
                             rows_skipped=rows_seen,
                             events=[],
+                            discovered_file_paths=(str(resolved_path),),
                         )
                     session_id = header_id
                     session_header = header
+                    last_committed_offset = line_end
+                    last_committed_line_number = line_number
                     continue
 
                 rows_seen += 1
@@ -155,8 +208,19 @@ def scan_pi_file(
                 )
                 if event is None:
                     rows_skipped += 1
+                    if not raw_line.endswith(b"\n"):
+                        break
+                    last_committed_offset = line_end
+                    last_committed_line_number = line_number
+                    continue
+                if since_ms is not None and event.created_ms < since_ms:
+                    rows_skipped += 1
+                    last_committed_offset = line_end
+                    last_committed_line_number = line_number
                     continue
                 events.append(event)
+                last_committed_offset = line_end
+                last_committed_line_number = line_number
     except OSError:
         return PiScanResult(
             source_path=resolved_path,
@@ -184,6 +248,30 @@ def scan_pi_file(
         rows_seen=rows_seen,
         rows_skipped=rows_skipped,
         events=events,
+        file_states=(
+            build_import_source_file_state(
+                harness=PI_HARNESS,
+                source_path=source_root or resolved_path,
+                file_path=resolved_path,
+                signature=decision.signature,
+                last_imported_created_ms=max(
+                    (event.created_ms for event in events),
+                    default=(
+                        decision.prior_state.last_imported_created_ms
+                        if decision.prior_state is not None
+                        else None
+                    ),
+                ),
+                last_file_offset=last_committed_offset,
+                parser_version=PI_PARSER_VERSION,
+                parser_state_json=_pi_file_state_json(
+                    session_id=session_id,
+                    header=session_header,
+                    last_line_number=last_committed_line_number,
+                ),
+            ),
+        ),
+        discovered_file_paths=(str(resolved_path),),
         session_metadata=session_metadata,
     )
 
@@ -342,6 +430,43 @@ def _build_pi_session_metadata(
         source_dir=source_dir,
         started_ms=started_ms,
         last_seen_ms=last_seen_ms,
+    )
+
+
+def _pi_resume_state(
+    file_state: ImportSourceFileState | None,
+) -> tuple[str | None, dict[str, object] | None, int]:
+    if file_state is None or file_state.parser_state_json is None:
+        return None, None, 0
+    try:
+        payload = json.loads(file_state.parser_state_json)
+    except json.JSONDecodeError:
+        return None, None, 0
+    if not isinstance(payload, dict):
+        return None, None, 0
+    header = payload.get("header")
+    session_header = header if isinstance(header, dict) else None
+    return (
+        _as_str(payload.get("session_id")),
+        session_header,
+        _as_non_negative_int(payload.get("last_line_number")),
+    )
+
+
+def _pi_file_state_json(
+    *,
+    session_id: str | None,
+    header: dict[str, object] | None,
+    last_line_number: int,
+) -> str:
+    return json.dumps(
+        {
+            "session_id": session_id,
+            "header": header,
+            "last_line_number": last_line_number,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
     )
 
 

@@ -8,7 +8,14 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
-from toktrail.adapters.base import ScanResult, SourceSessionSummary
+from toktrail.adapters.base import (
+    ImportScanState,
+    ImportSourceFileState,
+    ScanResult,
+    SourceSessionSummary,
+    build_import_source_file_state,
+    decide_file_scan,
+)
 from toktrail.adapters.summary import summarize_events_by_source_session
 from toktrail.config import CostingConfig
 from toktrail.models import TokenBreakdown, UsageEvent, normalize_thinking_level
@@ -26,10 +33,17 @@ def scan_copilot_file(
     source_session_id: str | None = None,
     include_raw_json: bool = True,
     since_ms: int | None = None,
-    import_state: object | None = None,
+    import_state: ImportScanState | None = None,
+    source_root: Path | None = None,
 ) -> CopilotScanResult:
     resolved_path = path.expanduser()
-    if not resolved_path.exists():
+    decision = decide_file_scan(
+        resolved_path,
+        parser_version=COPILOT_PARSER_VERSION,
+        import_state=import_state,
+        allow_resume=True,
+    )
+    if decision is None:
         return CopilotScanResult(
             source_path=resolved_path,
             files_seen=0,
@@ -37,17 +51,44 @@ def scan_copilot_file(
             rows_skipped=0,
             events=[],
         )
+    if decision.mode == "skip":
+        return CopilotScanResult(
+            source_path=resolved_path,
+            files_seen=1,
+            rows_seen=0,
+            rows_skipped=0,
+            events=[],
+            discovered_file_paths=(str(resolved_path),),
+        )
 
     fallback_timestamp = _file_modified_timestamp_ms(resolved_path)
     rows_seen = 0
     rows_skipped = 0
     events: list[UsageEvent] = []
+    start_offset = (
+        decision.prior_state.last_file_offset
+        if decision.mode == "resume" and decision.prior_state is not None
+        else 0
+    )
+    last_committed_offset = start_offset
+    last_committed_line_number = _copilot_last_line_number(decision.prior_state)
 
     try:
-        with resolved_path.open("r", encoding="utf-8", errors="replace") as file:
-            for line_number, line in enumerate(file, start=1):
+        with resolved_path.open("rb") as file:
+            if start_offset > 0:
+                file.seek(start_offset)
+            line_number = last_committed_line_number
+            while True:
+                raw_line = file.readline()
+                if raw_line == b"":
+                    break
+                line_number += 1
+                line_end = file.tell()
+                line = raw_line.decode("utf-8", errors="replace")
                 trimmed = line.strip()
                 if not trimmed:
+                    last_committed_offset = line_end
+                    last_committed_line_number = line_number
                     continue
 
                 rows_seen += 1
@@ -59,14 +100,27 @@ def scan_copilot_file(
                 )
                 if event is None:
                     rows_skipped += 1
+                    if not raw_line.endswith(b"\n"):
+                        break
+                    last_committed_offset = line_end
+                    last_committed_line_number = line_number
                     continue
                 if (
                     source_session_id is not None
                     and event.source_session_id != source_session_id
                 ):
                     rows_skipped += 1
+                    last_committed_offset = line_end
+                    last_committed_line_number = line_number
+                    continue
+                if since_ms is not None and event.created_ms < since_ms:
+                    rows_skipped += 1
+                    last_committed_offset = line_end
+                    last_committed_line_number = line_number
                     continue
                 events.append(event)
+                last_committed_offset = line_end
+                last_committed_line_number = line_number
     except OSError:
         return CopilotScanResult(
             source_path=resolved_path,
@@ -82,6 +136,26 @@ def scan_copilot_file(
         rows_seen=rows_seen,
         rows_skipped=rows_skipped,
         events=events,
+        file_states=(
+            build_import_source_file_state(
+                harness=COPILOT_HARNESS,
+                source_path=source_root or resolved_path,
+                file_path=resolved_path,
+                signature=decision.signature,
+                last_imported_created_ms=max(
+                    (event.created_ms for event in events),
+                    default=(
+                        decision.prior_state.last_imported_created_ms
+                        if decision.prior_state is not None
+                        else None
+                    ),
+                ),
+                last_file_offset=last_committed_offset,
+                parser_version=COPILOT_PARSER_VERSION,
+                parser_state_json=_copilot_file_state_json(last_committed_line_number),
+            ),
+        ),
+        discovered_file_paths=(str(resolved_path),),
     )
 
 
@@ -91,7 +165,7 @@ def scan_copilot_path(
     source_session_id: str | None = None,
     include_raw_json: bool = True,
     since_ms: int | None = None,
-    import_state: object | None = None,
+    import_state: ImportScanState | None = None,
 ) -> CopilotScanResult:
     resolved_path = path.expanduser()
     if not resolved_path.exists():
@@ -108,21 +182,28 @@ def scan_copilot_path(
             resolved_path,
             source_session_id=source_session_id,
             include_raw_json=include_raw_json,
+            since_ms=since_ms,
+            import_state=import_state,
         )
 
     file_paths = sorted(resolved_path.rglob("*.jsonl"))
     rows_seen = 0
     rows_skipped = 0
     events: list[UsageEvent] = []
+    file_states = []
     for file_path in file_paths:
         scan = scan_copilot_file(
             file_path,
             source_session_id=source_session_id,
             include_raw_json=include_raw_json,
+            since_ms=since_ms,
+            import_state=import_state,
+            source_root=resolved_path,
         )
         rows_seen += scan.rows_seen
         rows_skipped += scan.rows_skipped
         events.extend(scan.events)
+        file_states.extend(scan.file_states)
 
     return CopilotScanResult(
         source_path=resolved_path,
@@ -130,6 +211,8 @@ def scan_copilot_path(
         rows_seen=rows_seen,
         rows_skipped=rows_skipped,
         events=events,
+        file_states=tuple(file_states),
+        discovered_file_paths=tuple(str(path) for path in file_paths),
     )
 
 
@@ -376,3 +459,23 @@ def _copilot_source_paths_by_session(source_path: Path) -> dict[str, list[Path]]
         for event in scan.events:
             grouped.setdefault(event.source_session_id, []).append(file_path)
     return grouped
+
+
+def _copilot_last_line_number(file_state: ImportSourceFileState | None) -> int:
+    if file_state is None or file_state.parser_state_json is None:
+        return 0
+    try:
+        payload = json.loads(file_state.parser_state_json)
+    except json.JSONDecodeError:
+        return 0
+    if not isinstance(payload, dict):
+        return 0
+    return _value_as_int(payload.get("last_line_number")) or 0
+
+
+def _copilot_file_state_json(last_line_number: int) -> str:
+    return json.dumps(
+        {"last_line_number": last_line_number},
+        sort_keys=True,
+        separators=(",", ":"),
+    )

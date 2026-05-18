@@ -1007,6 +1007,7 @@ def _export_text_state(
         src.row_factory = sqlite3.Row
         dest = sqlite3.connect(snapshot_path)
         dest.row_factory = sqlite3.Row
+        staged_root: Path | None = None
         try:
             db.migrate(src)
             machine_config = load_machine_config().config
@@ -1097,8 +1098,10 @@ def _export_text_state(
                     + b"\n"
                 ),
             )
-            _replace_directory(staged_root, state_root)
+            _sync_state_directory(staged_root, state_root)
         finally:
+            if staged_root is not None:
+                shutil.rmtree(staged_root, ignore_errors=True)
             dest.close()
             src.close()
 
@@ -1116,20 +1119,72 @@ def _export_text_state(
     )
 
 
-def _replace_directory(staged_root: Path, target_root: Path) -> None:
-    """Replace a directory tree with a staged tree on all supported platforms.
-
-    `Path.rename(src, dst)` can replace an existing empty directory on POSIX, but
-    Windows raises FileExistsError when `dst` already exists. Remove the old tree
-    first so repeated git-sync exports work on both platforms.
-    """
-
+def _sync_state_directory(staged_root: Path, target_root: Path) -> None:
     target_root.parent.mkdir(parents=True, exist_ok=True)
     if target_root.is_symlink() or target_root.is_file():
         target_root.unlink()
-    elif target_root.exists():
-        shutil.rmtree(target_root)
-    staged_root.rename(target_root)
+    target_root.mkdir(parents=True, exist_ok=True)
+
+    old_paths = _manifest_relative_paths(target_root)
+    new_paths = {
+        str(path.relative_to(staged_root))
+        for path in staged_root.rglob("*")
+        if path.is_file()
+    }
+    for relpath in sorted(new_paths):
+        _copy_file_if_changed(staged_root / relpath, target_root / relpath)
+    for relpath in sorted(old_paths - new_paths, reverse=True):
+        stale_path = target_root / relpath
+        if stale_path.exists():
+            stale_path.unlink()
+            _prune_empty_parents(stale_path.parent, stop_at=target_root)
+
+
+def _manifest_relative_paths(state_root: Path) -> set[str]:
+    if not state_root.exists() or not (state_root / "manifest.json").is_file():
+        return set()
+    try:
+        manifest = _load_state_manifest(state_root)
+    except ValueError:
+        return set()
+    paths = {"manifest.json"}
+    tables = manifest.get("tables")
+    if not isinstance(tables, dict):
+        return paths
+    for table_data in tables.values():
+        if not isinstance(table_data, dict):
+            continue
+        entries = table_data.get("entries")
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            relpath = entry.get("path")
+            if isinstance(relpath, str) and relpath:
+                paths.add(relpath)
+    return paths
+
+
+def _copy_file_if_changed(source: Path, target: Path) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if (
+        target.exists()
+        and target.is_file()
+        and _sha256_file(source) == _sha256_file(target)
+    ):
+        return
+    shutil.copy2(source, target)
+
+
+def _prune_empty_parents(path: Path, *, stop_at: Path) -> None:
+    current = path
+    while current != stop_at and current.exists():
+        try:
+            current.rmdir()
+        except OSError:
+            return
+        current = current.parent
 
 
 def _load_text_state_into_db(

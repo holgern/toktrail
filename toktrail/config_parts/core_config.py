@@ -169,6 +169,7 @@ _STATUSLINE_CACHE_FIELDS = {
     "min_refresh_interval_secs",
     "stale_after_secs",
 }
+_REPORTS_FIELDS = {"refresh", "min_refresh_interval_secs"}
 _STATUSLINE_THRESHOLDS_FIELDS = {
     "quota_warning_percent",
     "quota_danger_percent",
@@ -213,6 +214,7 @@ _ROOT_FIELDS = {
     "actual_cost",
     "pricing",
     "subscriptions",
+    "reports",
     "statusline",
     "areas",
     "context_window",
@@ -223,6 +225,7 @@ _RUNTIME_CONFIG_ROOT_FIELDS = {
     "sync",
     "costing",
     "actual_cost",
+    "reports",
     "statusline",
     "areas",
     "context_window",
@@ -282,6 +285,10 @@ droid = "~/.factory/sessions"
 amp = "~/.local/share/amp/threads"
 claude = "~/.claude/projects"
 vibe = "~/.vibe/logs/session"
+
+[reports]
+refresh = "auto"
+min_refresh_interval_secs = 5
 
 [sync.git]
 # repo = "~/.local/share/toktrail/git-sync"
@@ -417,6 +424,10 @@ droid = "~/.factory/sessions"
 amp = "~/.local/share/amp/threads"
 claude = "~/.claude/projects"
 vibe = "~/.vibe/logs/session"
+
+[reports]
+refresh = "auto"
+min_refresh_interval_secs = 5
 
 [costing]
 default_actual_mode = "source"
@@ -960,6 +971,12 @@ class StatuslineCacheConfig:
 
 
 @dataclass(frozen=True)
+class ReportsConfig:
+    refresh: StatuslineRefreshMode = "auto"
+    min_refresh_interval_secs: int = 5
+
+
+@dataclass(frozen=True)
 class StatuslineThresholdsConfig:
     quota_warning_percent: int = 80
     quota_danger_percent: int = 100
@@ -1014,6 +1031,7 @@ class ContextWindowConfig:
 class ToktrailConfig:
     costing: CostingConfig
     imports: ImportConfig
+    reports: ReportsConfig = field(default_factory=ReportsConfig)
     statusline: StatuslineConfig = field(default_factory=StatuslineConfig)
     areas: AreasConfig = field(default_factory=AreasConfig)
     context_windows: tuple[ContextWindowConfig, ...] = ()
@@ -1029,6 +1047,7 @@ class RuntimeConfig:
     missing_price: MissingPriceMode = "warn"
     price_profile: str | None = None
     actual_rules: tuple[ActualCostRule, ...] = ()
+    reports: ReportsConfig = field(default_factory=ReportsConfig)
     statusline: StatuslineConfig = field(default_factory=StatuslineConfig)
     areas: AreasConfig = field(default_factory=AreasConfig)
     context_windows: tuple[ContextWindowConfig, ...] = ()
@@ -1226,6 +1245,7 @@ def default_runtime_config() -> RuntimeConfig:
         missing_price=costing.missing_price,
         price_profile=costing.price_profile,
         actual_rules=costing.actual_rules,
+        reports=ReportsConfig(),
         statusline=StatuslineConfig(),
         areas=AreasConfig(),
         context_windows=(),
@@ -1846,6 +1866,7 @@ def parse_runtime_config(data: object) -> RuntimeConfig:
         missing_price=cast(MissingPriceMode, missing_price),
         price_profile=price_profile,
         actual_rules=actual_rules,
+        reports=_parse_reports_config(data.get("reports"), default_config.reports),
         statusline=_parse_statusline_config(
             data.get("statusline"),
             default_config.statusline,
@@ -1951,6 +1972,7 @@ def merge_configs(
             subscriptions=subscriptions.subscriptions,
         ),
         imports=runtime.imports,
+        reports=runtime.reports,
         statusline=runtime.statusline,
         areas=runtime.areas,
         context_windows=runtime.context_windows,
@@ -2429,6 +2451,37 @@ def _parse_statusline_config(
             table.get("thresholds"),
             default_config.thresholds,
         ),
+    )
+
+
+def _parse_reports_config(
+    value: object,
+    default_config: ReportsConfig,
+) -> ReportsConfig:
+    table = _parse_optional_table(value, context="reports")
+    _validate_allowed_keys(table, _REPORTS_FIELDS, context="reports")
+    refresh = cast(
+        StatuslineRefreshMode,
+        _parse_choice(
+            table.get("refresh", default_config.refresh),
+            valid={"never", "auto", "always"},
+            context="reports.refresh",
+        ),
+    )
+    min_refresh_interval_secs = (
+        _parse_non_negative_int(
+            table.get(
+                "min_refresh_interval_secs",
+                default_config.min_refresh_interval_secs,
+            ),
+            context="reports.min_refresh_interval_secs",
+            required=True,
+        )
+        or 0
+    )
+    return ReportsConfig(
+        refresh=refresh,
+        min_refresh_interval_secs=min_refresh_interval_secs,
     )
 
 

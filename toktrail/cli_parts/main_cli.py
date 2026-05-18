@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Literal, NoReturn, cast
 
 import typer
+from click.core import ParameterSource
 
 if TYPE_CHECKING:
     from toktrail.reporting import UsageSeriesBucket
@@ -109,6 +110,7 @@ from toktrail.db import (
     get_active_tracking_session,
     get_area_by_path,
     get_local_machine_id,
+    get_state_metadata,
     get_tracking_session,
     insert_usage_events,
     list_areas,
@@ -7150,8 +7152,16 @@ def _refresh_before_report(
     include_raw_json: bool | None = None,
     since_start: bool = False,
 ) -> tuple[ImportUsageResult, ...]:
-    if not enabled:
+    refresh_mode = _resolve_report_refresh_mode(ctx, enabled=enabled)
+    if refresh_mode == "never":
         return ()
+    if refresh_mode == "auto" and not details:
+        loaded_config = _load_resolved_toktrail_config_or_exit(ctx)
+        if _should_skip_report_auto_refresh(
+            state_db_path=_resolve_state_db(ctx),
+            min_refresh_interval_secs=loaded_config.config.reports.min_refresh_interval_secs,
+        ):
+            return ()
 
     harnesses = [harness] if harness is not None else None
     try:
@@ -7163,7 +7173,7 @@ def _refresh_before_report(
             use_active_session=use_active_session,
             include_raw_json=include_raw_json,
             config_path=_resolve_config_path(ctx),
-            refresh_mode="quick",
+            refresh_mode="full" if refresh_mode == "always" else "quick",
             since_start=since_start,
         )
     except (OSError, ValueError, ToktrailError) as exc:
@@ -7175,6 +7185,34 @@ def _refresh_before_report(
     if details and not json_output:
         _print_configured_refresh_results(results)
     return results
+
+
+def _resolve_report_refresh_mode(ctx: typer.Context, *, enabled: bool) -> str:
+    source = ctx.get_parameter_source("refresh")
+    if source is not None and source is not ParameterSource.DEFAULT:
+        return "always" if enabled else "never"
+    loaded_config = _load_resolved_toktrail_config_or_exit(ctx)
+    return loaded_config.config.reports.refresh
+
+
+def _should_skip_report_auto_refresh(
+    *,
+    state_db_path: Path,
+    min_refresh_interval_secs: int,
+) -> bool:
+    conn = connect(state_db_path.expanduser())
+    try:
+        migrate(conn)
+        completed = get_state_metadata(conn, "last_refresh_completed_ms")
+    finally:
+        conn.close()
+    if completed is None:
+        return False
+    try:
+        completed_ms = int(completed)
+    except ValueError:
+        return False
+    return int(time.time() * 1000) - completed_ms < min_refresh_interval_secs * 1000
 
 
 def _wrap_refresh_json_payload(
@@ -7228,26 +7266,58 @@ def _print_configured_refresh_results(results: tuple[ImportUsageResult, ...]) ->
         rows.append(
             {
                 "harness": result.harness,
+                "files": _format_int(result.files_seen or 0),
                 "inserted": _format_int(result.rows_imported),
                 "linked": _format_int(result.rows_linked),
                 "scope_excluded": _format_int(result.rows_scope_excluded),
                 "skipped": _format_int(result.rows_skipped),
+                "fingerprint_ms": _format_int(result.fingerprint_ms or 0),
+                "scan_ms": _format_int(result.scan_ms or 0),
+                "db_write_ms": _format_int(result.db_write_ms or 0),
+                "elapsed_ms": _format_int(result.elapsed_ms or 0),
                 "status": result.status,
             }
         )
     _print_table(
         rows,
-        ["harness", "inserted", "linked", "scope_excluded", "skipped", "status"],
+        [
+            "harness",
+            "files",
+            "inserted",
+            "linked",
+            "scope_excluded",
+            "skipped",
+            "fingerprint_ms",
+            "scan_ms",
+            "db_write_ms",
+            "elapsed_ms",
+            "status",
+        ],
         {
             "harness": "harness",
+            "files": "files",
             "inserted": "inserted",
             "linked": "linked",
             "scope_excluded": "scope excl",
             "skipped": "skipped",
+            "fingerprint_ms": "fingerprint ms",
+            "scan_ms": "scan ms",
+            "db_write_ms": "db ms",
+            "elapsed_ms": "total ms",
             "status": "status",
         },
         rich_output=False,
-        numeric_columns={"inserted", "linked", "scope_excluded", "skipped"},
+        numeric_columns={
+            "files",
+            "inserted",
+            "linked",
+            "scope_excluded",
+            "skipped",
+            "fingerprint_ms",
+            "scan_ms",
+            "db_write_ms",
+            "elapsed_ms",
+        },
     )
 
 

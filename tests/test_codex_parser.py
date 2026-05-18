@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from toktrail.adapters.base import ImportScanState
 from toktrail.adapters.codex import (
     _CodexTotals,
     list_codex_sessions,
@@ -380,7 +381,74 @@ def test_scan_codex_path_supports_source_session_filter(tmp_path) -> None:
 
     assert len(scan.events) == 1
     assert scan.events[0].source_session_id == "second"
-    assert scan.rows_skipped == 1
+
+
+def test_scan_codex_file_resume_ignores_partial_final_line_until_complete(
+    tmp_path: Path,
+) -> None:
+    session_file = write_codex_rows(
+        tmp_path / "resume.jsonl",
+        [
+            {"type": "session_meta", "payload": {"model_provider": "openai"}},
+            {"type": "turn_context", "payload": {"model": "gpt-5.2-codex"}},
+            _token_count_row(
+                total={
+                    "input_tokens": 120,
+                    "cached_input_tokens": 20,
+                    "output_tokens": 30,
+                    "reasoning_output_tokens": 5,
+                },
+                last={
+                    "input_tokens": 120,
+                    "cached_input_tokens": 20,
+                    "output_tokens": 30,
+                    "reasoning_output_tokens": 5,
+                },
+            ),
+        ],
+    )
+
+    first = scan_codex_file(session_file)
+    state = ImportScanState.from_file_states(
+        source_state=None,
+        file_states=first.file_states,
+    )
+    full_row = _token_count_row(
+        total={
+            "input_tokens": 240,
+            "cached_input_tokens": 40,
+            "output_tokens": 60,
+            "reasoning_output_tokens": 10,
+        },
+        last={
+            "input_tokens": 120,
+            "cached_input_tokens": 20,
+            "output_tokens": 30,
+            "reasoning_output_tokens": 5,
+        },
+        timestamp="2026-01-01T00:00:02Z",
+    )
+    full_line = json.dumps(full_row)
+
+    with session_file.open("a", encoding="utf-8") as handle:
+        handle.write(full_line[:-2])
+
+    partial = scan_codex_file(session_file, import_state=state)
+    assert partial.events == []
+    assert partial.file_states[0].last_file_offset == first.file_states[0].last_file_offset
+
+    resumed_state = ImportScanState.from_file_states(
+        source_state=None,
+        file_states=partial.file_states,
+    )
+    with session_file.open("a", encoding="utf-8") as handle:
+        handle.write(full_line[-2:] + "\n")
+
+    resumed = scan_codex_file(session_file, import_state=resumed_state)
+
+    assert len(resumed.events) == 1
+    assert resumed.events[0].source_row_id.endswith(":4")
+    assert partial.rows_skipped == 1
 
 
 def test_parse_codex_stores_no_raw_when_disabled(tmp_path) -> None:
