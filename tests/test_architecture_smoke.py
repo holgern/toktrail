@@ -29,11 +29,12 @@ def test_compatibility_facades_keep_expected_exports() -> None:
     import toktrail.cli as cli
     import toktrail.config as config
     import toktrail.db as db
+    from toktrail._db.core_db import SCHEMA_VERSION as CORE_SCHEMA_VERSION
 
     assert callable(cli.cli_main)
     assert callable(config.load_resolved_toktrail_config)
     assert callable(db.connect)
-    assert db.SCHEMA_VERSION == 14
+    assert db.SCHEMA_VERSION == CORE_SCHEMA_VERSION
     assert hasattr(models, "TokenBreakdown")
     assert hasattr(models, "UsageEvent")
 
@@ -44,7 +45,6 @@ def test_legacy_compatibility_facades_stay_small() -> None:
         root / "toktrail" / "api" / "model_parts" / "legacy_models.py",
         root / "toktrail" / "config_parts" / "legacy_config.py",
         root / "toktrail" / "_db" / "legacy_db.py",
-        root / "toktrail" / "cli_parts" / "legacy_cli.py",
     )
     max_lines = 120
     for path in legacy_paths:

@@ -1,4 +1,4 @@
-"""Concrete CLI app module extracted from legacy_cli."""
+"""CLI app facade for the current Typer entrypoint."""
 
 from __future__ import annotations
 
