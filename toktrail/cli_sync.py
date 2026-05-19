@@ -19,6 +19,8 @@ from toktrail.git_sync import (
     DEFAULT_BRANCH,
     DEFAULT_REMOTE,
     DEFAULT_STATE_DIR,
+    analyze_git_sync_cleanup,
+    cleanup_git_sync_worktree,
     ensure_git_repo,
     export_repo_archive,
     git_hooks_status,
@@ -27,6 +29,8 @@ from toktrail.git_sync import (
     git_sync_status,
     import_repo_archives,
     install_git_hooks,
+    reset_git_sync_history,
+    rewrite_git_sync_history,
     uninstall_git_hooks,
 )
 from toktrail.paths import (
@@ -170,6 +174,122 @@ def _parse_sync_remote_active_mode(value: str) -> SyncRemoteActiveMode:
         return "keep"
     msg = "--remote-active must be one of: fail, close-at-export, keep."
     raise ValueError(msg)
+
+
+def _format_bytes(value: int) -> str:
+    size = float(value)
+    units = ("B", "KiB", "MiB", "GiB", "TiB")
+    unit = units[0]
+    for candidate in units:
+        unit = candidate
+        if size < 1024 or candidate == units[-1]:
+            break
+        size /= 1024
+    if unit == "B":
+        return f"{int(size)} {unit}"
+    return f"{size:.1f} {unit}"
+
+
+def _print_cleanup_analysis(repo: Path, analysis: object) -> None:
+    payload = analysis.as_dict() if hasattr(analysis, "as_dict") else {}
+    sizes = payload.get("sizes", {}) if isinstance(payload, dict) else {}
+    git_sizes = sizes.get("git", {}) if isinstance(sizes, dict) else {}
+    state_size = sizes.get("state") if isinstance(sizes, dict) else None
+    obsolete = sizes.get("obsolete", []) if isinstance(sizes, dict) else []
+    recommendation = (
+        payload.get("recommendation", "none") if isinstance(payload, dict) else "none"
+    )
+
+    typer.echo("Git sync cleanup analysis")
+    typer.echo(f"  repo: {payload.get('repo_path', repo)}")
+    typer.echo(f"  branch: {payload.get('branch') or 'unknown'}")
+    typer.echo(f"  dirty: {'yes' if payload.get('dirty') else 'no'}")
+    typer.echo("  working tree:")
+    if isinstance(state_size, dict):
+        typer.echo(
+            "    state files: "
+            f"{int(state_size.get('file_count', 0)):,} files, "
+            f"{_format_bytes(int(state_size.get('apparent_bytes', 0)))} apparent, "
+            f"{_format_bytes(int(state_size.get('physical_bytes', 0)))} physical"
+        )
+    else:
+        typer.echo("    state files: none")
+    if isinstance(obsolete, list) and obsolete:
+        for item in obsolete:
+            if not isinstance(item, dict):
+                continue
+            physical_bytes = int(item.get("physical_bytes", 0))
+            typer.echo(
+                f"    obsolete {item.get('path')}: {_format_bytes(physical_bytes)}"
+            )
+    else:
+        typer.echo("    obsolete paths: none")
+    live_sqlite_paths = (
+        payload.get("live_sqlite_paths", []) if isinstance(payload, dict) else []
+    )
+    if isinstance(live_sqlite_paths, list) and live_sqlite_paths:
+        typer.echo("    live sqlite files:")
+        for relpath in live_sqlite_paths:
+            typer.echo(f"      - {relpath}")
+    else:
+        typer.echo("    live sqlite files: none")
+    typer.echo("  git objects:")
+    if isinstance(git_sizes, dict):
+        typer.echo(f"    size-pack: {git_sizes.get('size-pack', 'unknown')}")
+        if "count" in git_sizes:
+            typer.echo(f"    count: {git_sizes['count']}")
+    typer.echo(f"  recommendation: {recommendation}")
+    if payload.get("filter_repo_available") is False:
+        typer.echo("  note: git-filter-repo not found; rewrite-history is unavailable.")
+    if recommendation in {"working-tree", "reset-history"}:
+        typer.echo("")
+        typer.echo("Next:")
+        typer.echo(f"  toktrail sync git cleanup --repo {repo}")
+        if recommendation == "working-tree":
+            typer.echo(
+                f"  toktrail sync git cleanup --repo {repo} --working-tree --commit"
+            )
+        else:
+            typer.echo(
+                f"  toktrail sync git cleanup --repo {repo} --reset-history --force"
+            )
+            typer.echo(
+                f"  toktrail sync git cleanup --repo {repo} --rewrite-history --force"
+            )
+
+
+def _print_cleanup_result(result: object) -> None:
+    payload = result.as_dict() if hasattr(result, "as_dict") else {}
+    typer.echo("Git sync cleanup")
+    typer.echo(f"  repo: {payload.get('repo_path')}")
+    typer.echo(f"  mode: {payload.get('mode')}")
+    typer.echo(f"  dry-run: {'yes' if payload.get('dry_run') else 'no'}")
+    removed_paths = payload.get("removed_paths", [])
+    if isinstance(removed_paths, list) and removed_paths:
+        typer.echo(f"  removed paths: {len(removed_paths)}")
+        for relpath in removed_paths:
+            typer.echo(f"    - {relpath}")
+    else:
+        typer.echo("  removed paths: none")
+    backup_bundle = payload.get("backup_bundle")
+    if backup_bundle:
+        typer.echo(f"  backup bundle: {backup_bundle}")
+    typer.echo(f"  committed: {'yes' if payload.get('committed') else 'no'}")
+    typer.echo(f"  commit: {payload.get('commit_hash') or 'none'}")
+    typer.echo(f"  pushed: {'yes' if payload.get('pushed') else 'no'}")
+    before_git = payload.get("before_git_size", {})
+    after_git = payload.get("after_git_size", {})
+    if isinstance(before_git, dict) and isinstance(after_git, dict):
+        before_size_pack = before_git.get("size-pack", "unknown")
+        after_size_pack = after_git.get("size-pack", "unknown")
+        typer.echo(f"  git size-pack: {before_size_pack} -> {after_size_pack}")
+    if payload.get("pushed") and payload.get("mode") in {
+        "reset-history",
+        "rewrite-history",
+    }:
+        typer.echo(
+            "  warning: other clones must reclone or hard-reset before continuing."
+        )
 
 
 def _print_refresh_summary(results: tuple[object, ...]) -> None:
@@ -446,6 +566,95 @@ def sync_git_status(
         typer.echo("  warning: live sqlite files found in repo:")
         for relpath in status.state_db_paths:
             typer.echo(f"    - {relpath}")
+
+
+@sync_git_app.command("cleanup")
+def sync_git_cleanup(
+    ctx: typer.Context,
+    repo: RepoOption = None,
+    working_tree: Annotated[bool, typer.Option("--working-tree")] = False,
+    reset_history: Annotated[bool, typer.Option("--reset-history")] = False,
+    rewrite_history: Annotated[bool, typer.Option("--rewrite-history")] = False,
+    commit: Annotated[bool, typer.Option("--commit")] = False,
+    push: Annotated[bool, typer.Option("--push")] = False,
+    force: Annotated[bool, typer.Option("--force")] = False,
+    allow_dirty: Annotated[bool, typer.Option("--allow-dirty")] = False,
+    json_output: JsonOption = False,
+) -> None:
+    selected_modes = [working_tree, reset_history, rewrite_history]
+    if sum(1 for item in selected_modes if item) > 1:
+        _exit_with_error(
+            "Cleanup modes are mutually exclusive. Choose at most one of "
+            "--working-tree, --reset-history, or --rewrite-history."
+        )
+    if commit and not working_tree:
+        _exit_with_error("--commit only applies to --working-tree.")
+    if push and not (reset_history or rewrite_history):
+        _exit_with_error("--push only applies to --reset-history or --rewrite-history.")
+    if (reset_history or rewrite_history) and not force:
+        _exit_with_error("--force is required for destructive cleanup modes.")
+
+    loaded = _load_resolved_sync_config(ctx)
+    runtime = loaded.runtime
+    repo_path = _resolve_git_repo(repo, loaded)
+    try:
+        if working_tree:
+            result = cleanup_git_sync_worktree(
+                repo_path,
+                state_dir=runtime.sync_git.state_dir or DEFAULT_STATE_DIR,
+                commit=commit,
+                dry_run=False,
+                allow_dirty=allow_dirty,
+            )
+            if json_output:
+                typer.echo(json.dumps(result.as_dict(), indent=2))
+                return
+            _print_cleanup_result(result)
+            return
+        if reset_history:
+            result = reset_git_sync_history(
+                _resolve_state_db(ctx),
+                repo_path,
+                config_path=loaded.config_path,
+                tracked_config_paths=_tracked_config_paths(loaded),
+                redact_raw_json=runtime.sync_git.redact_raw_json,
+                state_dir=runtime.sync_git.state_dir or DEFAULT_STATE_DIR,
+                branch=runtime.sync_git.branch or DEFAULT_BRANCH,
+                remote=runtime.sync_git.remote or DEFAULT_REMOTE,
+                push=push,
+                force=force,
+                allow_dirty=allow_dirty,
+            )
+            if json_output:
+                typer.echo(json.dumps(result.as_dict(), indent=2))
+                return
+            _print_cleanup_result(result)
+            return
+        if rewrite_history:
+            result = rewrite_git_sync_history(
+                repo_path,
+                branch=runtime.sync_git.branch or DEFAULT_BRANCH,
+                remote=runtime.sync_git.remote or DEFAULT_REMOTE,
+                push=push,
+                force=force,
+                allow_dirty=allow_dirty,
+            )
+            if json_output:
+                typer.echo(json.dumps(result.as_dict(), indent=2))
+                return
+            _print_cleanup_result(result)
+            return
+        analysis = analyze_git_sync_cleanup(
+            repo_path,
+            state_dir=runtime.sync_git.state_dir or DEFAULT_STATE_DIR,
+        )
+    except (OSError, ValueError) as exc:
+        _exit_with_error(str(exc))
+
+    if json_output:
+        typer.echo(json.dumps(analysis.as_dict(), indent=2))
+        return
+    _print_cleanup_analysis(repo_path, analysis)
 
 
 @sync_git_hooks_app.command("install")

@@ -23,6 +23,8 @@ from toktrail.sync import (
 )
 
 GIT_SYNC_FORMAT = "toktrail.git-sync.v2"
+_LEGACY_GIT_SYNC_FORMAT = "toktrail.git-sync.v1"
+_SUPPORTED_GIT_SYNC_FORMATS = frozenset({GIT_SYNC_FORMAT, _LEGACY_GIT_SYNC_FORMAT})
 DEFAULT_STATE_DIR = "state"
 DEFAULT_ARCHIVE_DIR = DEFAULT_STATE_DIR
 DEFAULT_REMOTE = "origin"
@@ -32,6 +34,31 @@ _STAGING_PREFIX = ".state.staging."
 _STATE_DB_FILE_NAMES = frozenset({"toktrail.db", "toktrail.db-wal", "toktrail.db-shm"})
 _HOOK_MARKER = "# toktrail-managed-hook v1"
 _MANAGED_HOOKS = ("post-merge", "post-checkout", "post-rewrite")
+_OBSOLETE_FIXED_PATHS = (
+    "archives",
+    "toktrail.db",
+    "toktrail.db-wal",
+    "toktrail.db-shm",
+)
+_OBSOLETE_GLOBS = ("*.tar.gz", "*.sqlite", "*.sqlite3", ".state.staging.*")
+_LIVE_SQLITE_GLOBS = ("*.sqlite", "*.sqlite3")
+_DEFAULT_REWRITE_PATHS = (
+    "archives",
+    "toktrail.db",
+    "toktrail.db-wal",
+    "toktrail.db-shm",
+)
+_DEFAULT_REWRITE_PATH_GLOBS = ("*.tar.gz", "*.sqlite", "*.sqlite3", ".state.staging.*")
+_BASE_ALLOWED_RESET_PATHS = (
+    "README.md",
+    ".gitignore",
+    ".gitattributes",
+    "meta",
+    "state",
+)
+_CLEANUP_COMMIT_MESSAGE = "toktrail sync: cleanup obsolete repo files"
+_RESET_HISTORY_COMMIT_MESSAGE = "toktrail sync: reset compact state history"
+_RESET_EXPORT_COMMIT_MESSAGE = "toktrail sync: current text state before cleanup"
 _STATE_TABLES: tuple[str, ...] = (
     "machines",
     "areas",
@@ -145,6 +172,83 @@ class GitSyncResult:
         return {
             "pull": self.pull.as_dict(),
             "push": None if self.push is None else self.push.as_dict(),
+        }
+
+
+@dataclass(frozen=True)
+class GitSyncCleanupSize:
+    path: str
+    apparent_bytes: int
+    physical_bytes: int
+    file_count: int
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "path": self.path,
+            "apparent_bytes": self.apparent_bytes,
+            "physical_bytes": self.physical_bytes,
+            "file_count": self.file_count,
+        }
+
+
+@dataclass(frozen=True)
+class GitSyncCleanupAnalysis:
+    repo_path: Path
+    branch: str | None
+    dirty: bool
+    state_dir: str
+    state_size: GitSyncCleanupSize | None
+    obsolete_sizes: tuple[GitSyncCleanupSize, ...]
+    live_sqlite_paths: tuple[str, ...]
+    git_count_objects: dict[str, str]
+    filter_repo_available: bool
+    recommended_action: str
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "repo_path": str(self.repo_path),
+            "mode": "analysis",
+            "branch": self.branch,
+            "dirty": self.dirty,
+            "state_dir": self.state_dir,
+            "sizes": {
+                "git": dict(self.git_count_objects),
+                "state": None if self.state_size is None else self.state_size.as_dict(),
+                "obsolete": [item.as_dict() for item in self.obsolete_sizes],
+            },
+            "live_sqlite_paths": list(self.live_sqlite_paths),
+            "filter_repo_available": self.filter_repo_available,
+            "recommendation": self.recommended_action,
+        }
+
+
+@dataclass(frozen=True)
+class GitSyncCleanupResult:
+    repo_path: Path
+    mode: str
+    dry_run: bool
+    removed_paths: tuple[str, ...]
+    backup_bundle: Path | None
+    committed: bool
+    commit_hash: str | None
+    pushed: bool
+    before_git_size: dict[str, str]
+    after_git_size: dict[str, str]
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "repo_path": str(self.repo_path),
+            "mode": self.mode,
+            "dry_run": self.dry_run,
+            "removed_paths": list(self.removed_paths),
+            "backup_bundle": None
+            if self.backup_bundle is None
+            else str(self.backup_bundle),
+            "committed": self.committed,
+            "commit_hash": self.commit_hash,
+            "pushed": self.pushed,
+            "before_git_size": dict(self.before_git_size),
+            "after_git_size": dict(self.after_git_size),
         }
 
 
@@ -439,6 +543,285 @@ def git_sync_status(
     )
 
 
+def analyze_git_sync_cleanup(
+    repo_path: Path,
+    *,
+    state_dir: str = DEFAULT_STATE_DIR,
+) -> GitSyncCleanupAnalysis:
+    resolved_repo = _require_repo(repo_path)
+    state_root = resolved_repo / state_dir
+    state_size = (
+        _path_size(state_root, repo_path=resolved_repo) if state_root.exists() else None
+    )
+    obsolete_paths = _find_cleanup_candidates(resolved_repo)
+    obsolete_sizes = tuple(
+        _path_size(path, repo_path=resolved_repo)
+        for path in obsolete_paths
+        if path.exists()
+    )
+    live_sqlite_paths = tuple(
+        _repo_relpath(path, resolved_repo)
+        for path in _find_live_sqlite_files(resolved_repo)
+    )
+    recommendation = _cleanup_recommendation(obsolete_paths, live_sqlite_paths)
+    return GitSyncCleanupAnalysis(
+        repo_path=resolved_repo,
+        branch=_current_branch(resolved_repo),
+        dirty=_repo_is_dirty(resolved_repo),
+        state_dir=state_dir,
+        state_size=state_size,
+        obsolete_sizes=obsolete_sizes,
+        live_sqlite_paths=live_sqlite_paths,
+        git_count_objects=_git_count_objects(resolved_repo),
+        filter_repo_available=_filter_repo_available(),
+        recommended_action=recommendation,
+    )
+
+
+def cleanup_git_sync_worktree(
+    repo_path: Path,
+    *,
+    state_dir: str = DEFAULT_STATE_DIR,
+    commit: bool = False,
+    dry_run: bool = True,
+    allow_dirty: bool = False,
+) -> GitSyncCleanupResult:
+    resolved_repo = _require_repo(repo_path)
+    _require_git_sync_repo_format(resolved_repo)
+    before_git_size = _git_count_objects(resolved_repo)
+    cleanup_paths = _find_cleanup_candidates(resolved_repo)
+    removed_paths = tuple(_repo_relpath(path, resolved_repo) for path in cleanup_paths)
+    allowed_relpaths, allowed_prefixes = _cleanup_allowed_dirty_paths(
+        resolved_repo,
+        cleanup_paths,
+    )
+    if not allow_dirty and _has_uncommitted_disallowed_changes(
+        resolved_repo,
+        allowed_prefixes=(
+            "README.md",
+            ".gitignore",
+            ".gitattributes",
+            "meta/",
+            *allowed_prefixes,
+        ),
+        allowed_relpaths=allowed_relpaths,
+    ):
+        msg = (
+            "Git sync repo has uncommitted changes outside cleanup targets. Commit or "
+            "stash them, or rerun with --allow-dirty."
+        )
+        raise ValueError(msg)
+
+    if dry_run:
+        return GitSyncCleanupResult(
+            repo_path=resolved_repo,
+            mode="working-tree",
+            dry_run=True,
+            removed_paths=removed_paths,
+            backup_bundle=None,
+            committed=False,
+            commit_hash=None,
+            pushed=False,
+            before_git_size=before_git_size,
+            after_git_size=before_git_size,
+        )
+
+    _write_repo_layout(resolved_repo)
+    _remove_cleanup_paths(resolved_repo, cleanup_paths)
+    _run_git(
+        resolved_repo,
+        "add",
+        "-A",
+        ".gitignore",
+        ".gitattributes",
+        "README.md",
+        "meta/format.json",
+    )
+
+    committed = False
+    commit_hash: str | None = None
+    if commit and _repo_has_staged_changes(resolved_repo):
+        _run_git(resolved_repo, "commit", "-m", _CLEANUP_COMMIT_MESSAGE)
+        commit_hash = _run_git_output(resolved_repo, "rev-parse", "HEAD").strip()
+        committed = True
+        _run_git(resolved_repo, "gc")
+
+    after_git_size = _git_count_objects(resolved_repo)
+    return GitSyncCleanupResult(
+        repo_path=resolved_repo,
+        mode="working-tree",
+        dry_run=False,
+        removed_paths=removed_paths,
+        backup_bundle=None,
+        committed=committed,
+        commit_hash=commit_hash,
+        pushed=False,
+        before_git_size=before_git_size,
+        after_git_size=after_git_size,
+    )
+
+
+def reset_git_sync_history(
+    db_path: Path,
+    repo_path: Path,
+    *,
+    config_path: Path,
+    tracked_config_paths: tuple[Path, ...],
+    redact_raw_json: bool,
+    state_dir: str = DEFAULT_STATE_DIR,
+    branch: str = DEFAULT_BRANCH,
+    remote: str = DEFAULT_REMOTE,
+    push: bool = False,
+    force: bool = False,
+    allow_dirty: bool = False,
+) -> GitSyncCleanupResult:
+    if not force:
+        msg = "History reset is destructive. Rerun with --force to continue."
+        raise ValueError(msg)
+
+    resolved_repo = _require_repo(repo_path)
+    _require_git_sync_repo_format(resolved_repo)
+    _ensure_branch(resolved_repo, branch)
+    if not allow_dirty and _repo_is_dirty(resolved_repo):
+        msg = (
+            "Git sync repo has uncommitted changes. Commit or stash them, or rerun "
+            "with --allow-dirty."
+        )
+        raise ValueError(msg)
+
+    before_git_size = _git_count_objects(resolved_repo)
+    import_repo_archives(db_path, resolved_repo, dry_run=False, archive_dir=state_dir)
+    export_repo_archive(
+        db_path,
+        resolved_repo,
+        archive_dir=state_dir,
+        config_path=config_path,
+        include_config=False,
+        redact_raw_json=redact_raw_json,
+        commit_message=_RESET_EXPORT_COMMIT_MESSAGE,
+        remote=remote,
+        branch=branch,
+        push=False,
+        allow_dirty=allow_dirty,
+        tracked_config_paths=tracked_config_paths,
+    )
+
+    cleanup_paths = _find_cleanup_candidates(resolved_repo)
+    removed_paths = tuple(_repo_relpath(path, resolved_repo) for path in cleanup_paths)
+    backup_bundle = _create_backup_bundle(resolved_repo)
+    orphan_branch = _unique_branch_name(resolved_repo, "toktrail-cleanup-reset")
+    _run_git(resolved_repo, "checkout", "--orphan", orphan_branch)
+    _clear_git_index(resolved_repo)
+    _remove_cleanup_paths(resolved_repo, cleanup_paths)
+    _remove_non_reset_paths(
+        resolved_repo,
+        allowed_roots=_allowed_reset_paths(
+            resolved_repo,
+            tracked_config_paths=tracked_config_paths,
+        ),
+    )
+    _write_repo_layout(resolved_repo)
+    _stage_reset_paths(
+        resolved_repo,
+        allowed_roots=_allowed_reset_paths(
+            resolved_repo,
+            tracked_config_paths=tracked_config_paths,
+        ),
+    )
+    if not _repo_has_staged_changes(resolved_repo):
+        msg = "Reset history produced no staged sync state to commit."
+        raise ValueError(msg)
+    _run_git(resolved_repo, "commit", "-m", _RESET_HISTORY_COMMIT_MESSAGE)
+    _run_git(resolved_repo, "branch", "-M", branch)
+    commit_hash = _run_git_output(resolved_repo, "rev-parse", "HEAD").strip()
+    _run_git(resolved_repo, "reflog", "expire", "--expire=now", "--all")
+    _run_git(resolved_repo, "gc", "--prune=now", "--aggressive")
+    pushed = False
+    if push and _remote_branch_exists(resolved_repo, remote, branch):
+        _run_git(resolved_repo, "fetch", remote, branch)
+        _run_git_force_with_lease(resolved_repo, remote=remote, branch=branch)
+        pushed = True
+    after_git_size = _git_count_objects(resolved_repo)
+    return GitSyncCleanupResult(
+        repo_path=resolved_repo,
+        mode="reset-history",
+        dry_run=False,
+        removed_paths=removed_paths,
+        backup_bundle=backup_bundle,
+        committed=True,
+        commit_hash=commit_hash,
+        pushed=pushed,
+        before_git_size=before_git_size,
+        after_git_size=after_git_size,
+    )
+
+
+def rewrite_git_sync_history(
+    repo_path: Path,
+    *,
+    branch: str = DEFAULT_BRANCH,
+    remote: str = DEFAULT_REMOTE,
+    push: bool = False,
+    force: bool = False,
+    allow_dirty: bool = False,
+    paths: tuple[str, ...] = _DEFAULT_REWRITE_PATHS,
+    path_globs: tuple[str, ...] = _DEFAULT_REWRITE_PATH_GLOBS,
+) -> GitSyncCleanupResult:
+    if not force:
+        msg = "History rewrite is destructive. Rerun with --force to continue."
+        raise ValueError(msg)
+    if not _filter_repo_available():
+        msg = (
+            "git-filter-repo is required for --rewrite-history. "
+            "Install git-filter-repo or use --reset-history instead."
+        )
+        raise ValueError(msg)
+
+    resolved_repo = _require_repo(repo_path)
+    _require_git_sync_repo_format(resolved_repo)
+    _ensure_branch(resolved_repo, branch)
+    if not allow_dirty and _repo_is_dirty(resolved_repo):
+        msg = (
+            "Git sync repo has uncommitted changes. Commit or stash them, or rerun "
+            "with --allow-dirty."
+        )
+        raise ValueError(msg)
+
+    before_git_size = _git_count_objects(resolved_repo)
+    cleanup_paths = _find_cleanup_candidates(resolved_repo)
+    removed_paths = tuple(_repo_relpath(path, resolved_repo) for path in cleanup_paths)
+    backup_bundle = _create_backup_bundle(resolved_repo)
+    command = ["filter-repo", "--force", "--invert-paths"]
+    for item in paths:
+        command.extend(("--path", item))
+    for item in path_globs:
+        command.extend(("--path-glob", item))
+    _run_git(resolved_repo, *command)
+    _write_repo_layout(resolved_repo)
+    _run_git(resolved_repo, "reflog", "expire", "--expire=now", "--all")
+    _run_git(resolved_repo, "gc", "--prune=now", "--aggressive")
+
+    pushed = False
+    if push and _remote_branch_exists(resolved_repo, remote, branch):
+        _run_git(resolved_repo, "fetch", remote, branch)
+        _run_git_force_with_lease(resolved_repo, remote=remote, branch=branch)
+        pushed = True
+    commit_hash = _run_git_output(resolved_repo, "rev-parse", "HEAD").strip()
+    after_git_size = _git_count_objects(resolved_repo)
+    return GitSyncCleanupResult(
+        repo_path=resolved_repo,
+        mode="rewrite-history",
+        dry_run=False,
+        removed_paths=removed_paths,
+        backup_bundle=backup_bundle,
+        committed=True,
+        commit_hash=commit_hash,
+        pushed=pushed,
+        before_git_size=before_git_size,
+        after_git_size=after_git_size,
+    )
+
+
 def install_git_hooks(
     repo_path: Path,
     *,
@@ -653,6 +1036,20 @@ def _repo_relpath(path: Path, repo_path: Path) -> str:
     return path.resolve().relative_to(repo_path.resolve()).as_posix()
 
 
+def _require_git_sync_repo_format(repo_path: Path) -> None:
+    format_path = repo_path / "meta" / "format.json"
+    if not format_path.is_file():
+        msg = f"Not a toktrail git sync repository: {repo_path}"
+        raise ValueError(msg)
+    payload = json.loads(format_path.read_text(encoding="utf-8"))
+    if (
+        not isinstance(payload, dict)
+        or payload.get("format") not in _SUPPORTED_GIT_SYNC_FORMATS
+    ):
+        msg = f"Not a toktrail git sync repository: {repo_path}"
+        raise ValueError(msg)
+
+
 def _set_remote_url(repo_path: Path, remote: str, remote_url: str) -> None:
     remotes = _run_git_output(repo_path, "remote").splitlines()
     if remote in remotes:
@@ -755,6 +1152,268 @@ def _remote_url(repo_path: Path, remote: str) -> str | None:
 def _repo_is_dirty(repo_path: Path) -> bool:
     status = _run_git_output(repo_path, "status", "--porcelain")
     return bool(status.strip())
+
+
+def _path_size(path: Path, *, repo_path: Path) -> GitSyncCleanupSize:
+    resolved = path.resolve()
+    apparent = 0
+    physical = 0
+    count = 0
+    if resolved.is_file():
+        stat_result = resolved.stat()
+        apparent = stat_result.st_size
+        blocks = getattr(stat_result, "st_blocks", 0)
+        physical = blocks * 512 if blocks else stat_result.st_size
+        count = 1
+    else:
+        for item in resolved.rglob("*"):
+            if not item.is_file():
+                continue
+            stat_result = item.stat()
+            apparent += stat_result.st_size
+            blocks = getattr(stat_result, "st_blocks", 0)
+            physical += blocks * 512 if blocks else stat_result.st_size
+            count += 1
+    return GitSyncCleanupSize(
+        path=_repo_relpath(resolved, repo_path),
+        apparent_bytes=apparent,
+        physical_bytes=physical,
+        file_count=count,
+    )
+
+
+def _find_cleanup_candidates(repo_path: Path) -> list[Path]:
+    matches: list[Path] = []
+    for relpath in _OBSOLETE_FIXED_PATHS:
+        target = (repo_path / relpath).resolve()
+        if target.exists() and _path_is_within_repo(target, repo_path=repo_path):
+            matches.append(target)
+    for pattern in _OBSOLETE_GLOBS:
+        for target in repo_path.rglob(pattern):
+            resolved = target.resolve()
+            if not _path_is_within_repo(resolved, repo_path=repo_path):
+                continue
+            if ".git" in resolved.parts:
+                continue
+            matches.append(resolved)
+    return _dedupe_cleanup_paths(matches, repo_path=repo_path)
+
+
+def _find_live_sqlite_files(repo_path: Path) -> list[Path]:
+    matches = _find_state_db_files(repo_path)
+    for pattern in _LIVE_SQLITE_GLOBS:
+        for target in repo_path.rglob(pattern):
+            resolved = target.resolve()
+            if not resolved.is_file():
+                continue
+            if not _path_is_within_repo(resolved, repo_path=repo_path):
+                continue
+            if ".git" in resolved.parts:
+                continue
+            matches.append(resolved)
+    unique: dict[str, Path] = {}
+    for path in matches:
+        unique[_repo_relpath(path, repo_path)] = path
+    return [unique[key] for key in sorted(unique)]
+
+
+def _cleanup_recommendation(
+    cleanup_paths: list[Path],
+    live_sqlite_paths: tuple[str, ...],
+) -> str:
+    if any(
+        path.name == "archives" or path.name.endswith(".tar.gz")
+        for path in cleanup_paths
+    ):
+        return "reset-history"
+    if live_sqlite_paths or cleanup_paths:
+        return "working-tree"
+    return "none"
+
+
+def _cleanup_allowed_dirty_paths(
+    repo_path: Path,
+    paths: list[Path],
+) -> tuple[set[str], tuple[str, ...]]:
+    allowed_relpaths: set[str] = set()
+    allowed_prefixes: list[str] = []
+    for path in paths:
+        relpath = _repo_relpath(path, repo_path)
+        allowed_relpaths.add(relpath)
+        if path.is_dir():
+            allowed_prefixes.append(f"{relpath.rstrip('/')}/")
+    return allowed_relpaths, tuple(allowed_prefixes)
+
+
+def _path_is_within_repo(path: Path, *, repo_path: Path) -> bool:
+    resolved_repo = repo_path.resolve()
+    resolved_path = path.resolve()
+    return resolved_path == resolved_repo or resolved_repo in resolved_path.parents
+
+
+def _dedupe_cleanup_paths(paths: list[Path], *, repo_path: Path) -> list[Path]:
+    unique: dict[str, Path] = {}
+    for path in paths:
+        relpath = _repo_relpath(path, repo_path)
+        unique[relpath] = path
+    ordered = [
+        unique[key] for key in sorted(unique, key=lambda item: (item.count("/"), item))
+    ]
+    deduped: list[Path] = []
+    for path in ordered:
+        if any(path == parent or parent in path.parents for parent in deduped):
+            continue
+        deduped.append(path)
+    return deduped
+
+
+def _remove_cleanup_paths(repo_path: Path, paths: list[Path]) -> None:
+    for path in paths:
+        relpath = _repo_relpath(path, repo_path)
+        if path.is_dir():
+            subprocess.run(
+                ["git", "rm", "-r", "-f", "--ignore-unmatch", relpath],
+                cwd=repo_path,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        else:
+            subprocess.run(
+                ["git", "rm", "-f", "--ignore-unmatch", relpath],
+                cwd=repo_path,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        if not path.exists():
+            continue
+        if path.is_dir():
+            shutil.rmtree(path)
+        else:
+            path.unlink()
+
+
+def _allowed_reset_paths(
+    repo_path: Path,
+    *,
+    tracked_config_paths: tuple[Path, ...],
+) -> tuple[str, ...]:
+    allowed = list(_BASE_ALLOWED_RESET_PATHS)
+    tracked_relpaths, tracked_prefixes = _repo_relative_tracked_paths(
+        repo_path,
+        tracked_config_paths,
+    )
+    include_config = bool(tracked_relpaths or tracked_prefixes) or _has_tracked_prefix(
+        repo_path,
+        "config/",
+    )
+    if include_config:
+        allowed.append("config")
+    return tuple(allowed)
+
+
+def _remove_non_reset_paths(repo_path: Path, *, allowed_roots: tuple[str, ...]) -> None:
+    allowed = set(allowed_roots)
+    for child in sorted(repo_path.iterdir(), key=lambda item: item.name):
+        if child.name == ".git":
+            continue
+        if child.name in allowed:
+            continue
+        if child.is_dir():
+            shutil.rmtree(child)
+        else:
+            child.unlink()
+
+
+def _stage_reset_paths(repo_path: Path, *, allowed_roots: tuple[str, ...]) -> None:
+    stageable = [relpath for relpath in allowed_roots if (repo_path / relpath).exists()]
+    if stageable:
+        _run_git(repo_path, "add", "-A", *stageable)
+
+
+def _path_is_tracked(repo_path: Path, relpath: str) -> bool:
+    result = subprocess.run(
+        ["git", "ls-files", "--error-unmatch", relpath],
+        cwd=repo_path,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    return result.returncode == 0
+
+
+def _has_tracked_prefix(repo_path: Path, prefix: str) -> bool:
+    output = _run_git_output(repo_path, "ls-files", prefix)
+    return bool(output.strip())
+
+
+def _clear_git_index(repo_path: Path) -> None:
+    result = subprocess.run(
+        ["git", "rm", "-r", "--cached", "."],
+        cwd=repo_path,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode not in {0, 128}:
+        stderr = (result.stderr or "").strip()
+        msg = f"git rm -r --cached . failed: {stderr or result.stdout.strip()}"
+        raise ValueError(msg)
+
+
+def _create_backup_bundle(repo_path: Path) -> Path:
+    timestamp = datetime.now(tz=timezone.utc).strftime("%Y%m%d-%H%M%S")
+    candidate = repo_path.parent / f"{repo_path.name}-backup-{timestamp}.bundle"
+    index = 1
+    while candidate.exists():
+        candidate = (
+            repo_path.parent / f"{repo_path.name}-backup-{timestamp}-{index}.bundle"
+        )
+        index += 1
+    _run_git(repo_path, "bundle", "create", str(candidate), "--all")
+    return candidate
+
+
+def _unique_branch_name(repo_path: Path, prefix: str) -> str:
+    candidate = prefix
+    counter = 1
+    while _local_branch_exists(repo_path, candidate):
+        counter += 1
+        candidate = f"{prefix}-{counter}"
+    return candidate
+
+
+def _remote_branch_exists(repo_path: Path, remote: str, branch: str) -> bool:
+    if _remote_url(repo_path, remote) is None:
+        return False
+    result = subprocess.run(
+        ["git", "ls-remote", "--exit-code", "--heads", remote, branch],
+        cwd=repo_path,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    return result.returncode == 0
+
+
+def _run_git_force_with_lease(repo_path: Path, *, remote: str, branch: str) -> None:
+    _run_git(repo_path, "push", "--force-with-lease", remote, branch)
+
+
+def _filter_repo_available() -> bool:
+    return shutil.which("git-filter-repo") is not None
+
+
+def _git_count_objects(repo_path: Path) -> dict[str, str]:
+    output = _run_git_output(repo_path, "count-objects", "-vH")
+    values: dict[str, str] = {}
+    for line in output.splitlines():
+        if ":" not in line:
+            continue
+        key, _, value = line.partition(":")
+        values[key.strip()] = value.strip()
+    return values
 
 
 def _repo_relative_tracked_paths(

@@ -149,6 +149,62 @@ def _configure_git_identity(repo_path: Path) -> None:
     _run_git(repo_path, "config", "user.email", "toktrail-tests@example.com")
 
 
+def _init_git_sync_repo_via_cli(tmp_path: Path) -> tuple[CliRunner, Path, Path]:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    source_db = tmp_path / "opencode.db"
+    repo = tmp_path / "toktrail-state"
+    create_source_db(source_db)
+
+    init_result = runner.invoke(app, ["--db", str(state_db), "init"])
+    assert init_result.exit_code == 0, init_result.output
+    refresh_result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "refresh",
+            "--no-run",
+            "--harness",
+            "opencode",
+            "--source",
+            str(source_db),
+        ],
+    )
+    assert refresh_result.exit_code == 0, refresh_result.output
+    repo_result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "sync",
+            "git",
+            "init",
+            "--repo",
+            str(repo),
+            "--no-hooks",
+            "--no-import-existing",
+        ],
+    )
+    assert repo_result.exit_code == 0, repo_result.output
+    _configure_git_identity(repo)
+    export_result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "sync",
+            "git",
+            "export-local",
+            "--repo",
+            str(repo),
+            "--no-refresh",
+        ],
+    )
+    assert export_result.exit_code == 0, export_result.output
+    return runner, state_db, repo
+
+
 def _rich_is_available() -> bool:
     try:
         import rich  # noqa: F401
@@ -6198,6 +6254,142 @@ repo = "{_toml_path_value(repo)}"
     assert "Git sync status" in status_result.output
     assert "pending imports:" in status_result.output
     assert (repo / "meta" / "format.json").exists()
+
+
+@pytest.mark.skipif(not HAS_GIT, reason="git executable is required")
+def test_cli_sync_git_cleanup_analysis_json_shape(tmp_path: Path) -> None:
+    runner, _, repo = _init_git_sync_repo_via_cli(tmp_path)
+    archive_file = repo / "archives" / "old.tar.gz"
+    archive_file.parent.mkdir(parents=True, exist_ok=True)
+    archive_file.write_bytes(b"archive")
+
+    result = runner.invoke(
+        app,
+        [
+            "sync",
+            "git",
+            "cleanup",
+            "--repo",
+            str(repo),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["mode"] == "analysis"
+    assert payload["repo_path"] == str(repo)
+    assert set(payload["sizes"]) == {"git", "state", "obsolete"}
+    assert "recommendation" in payload
+
+
+@pytest.mark.skipif(not HAS_GIT, reason="git executable is required")
+def test_cli_sync_git_cleanup_worktree_human_output(tmp_path: Path) -> None:
+    runner, _, repo = _init_git_sync_repo_via_cli(tmp_path)
+    archive_file = repo / "archives" / "old.tar.gz"
+    archive_file.parent.mkdir(parents=True, exist_ok=True)
+    archive_file.write_bytes(b"archive")
+
+    result = runner.invoke(
+        app,
+        [
+            "sync",
+            "git",
+            "cleanup",
+            "--repo",
+            str(repo),
+            "--working-tree",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Git sync cleanup" in result.output
+    assert "mode: working-tree" in result.output
+    assert "removed paths:" in result.output
+
+
+def test_cli_sync_git_cleanup_modes_are_mutually_exclusive(tmp_path: Path) -> None:
+    runner = CliRunner()
+    repo = tmp_path / "repo"
+
+    result = runner.invoke(
+        app,
+        [
+            "sync",
+            "git",
+            "cleanup",
+            "--repo",
+            str(repo),
+            "--working-tree",
+            "--reset-history",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "mutually exclusive" in result.output
+
+
+def test_cli_sync_git_cleanup_reset_requires_force(tmp_path: Path) -> None:
+    runner = CliRunner()
+    repo = tmp_path / "repo"
+
+    result = runner.invoke(
+        app,
+        [
+            "sync",
+            "git",
+            "cleanup",
+            "--repo",
+            str(repo),
+            "--reset-history",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "--force" in result.output
+
+
+def test_cli_sync_git_cleanup_prints_reclone_warning_after_push(
+    tmp_path: Path, monkeypatch
+) -> None:
+    runner = CliRunner()
+    repo = tmp_path / "repo"
+
+    class _FakeResult:
+        def as_dict(self) -> dict[str, object]:
+            return {
+                "repo_path": str(repo),
+                "mode": "reset-history",
+                "dry_run": False,
+                "removed_paths": ["archives/old.tar.gz"],
+                "backup_bundle": str(tmp_path / "backup.bundle"),
+                "committed": True,
+                "commit_hash": "abc123",
+                "pushed": True,
+                "before_git_size": {"size-pack": "10.0 MiB"},
+                "after_git_size": {"size-pack": "1.0 MiB"},
+            }
+
+    monkeypatch.setattr(
+        "toktrail.cli_sync.reset_git_sync_history",
+        lambda *args, **kwargs: _FakeResult(),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "sync",
+            "git",
+            "cleanup",
+            "--repo",
+            str(repo),
+            "--reset-history",
+            "--force",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "reclone or hard-reset" in result.output
 
 
 @pytest.mark.skipif(not HAS_GIT, reason="git executable is required")

@@ -118,6 +118,34 @@ Compatibility commands for explicit orchestration/recovery remain available:
    toktrail sync git push
    toktrail sync git sync
 
+Cleaning a large git sync repository
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+If an older sync repository still contains historical ``archives/`` exports,
+``*.tar.gz`` files, or accidental sqlite files, ``git gc`` alone may not
+reduce ``.git`` because those blobs can still be reachable from history.
+
+Inspect first with the non-destructive analysis mode:
+
+.. code-block:: bash
+
+   toktrail sync git cleanup --repo ~/toktrail-state
+
+For an unreleased personal sync-state repo, the recommended compaction path is:
+
+.. code-block:: bash
+
+   toktrail sync git cleanup --repo ~/toktrail-state --reset-history --force --push
+
+If preserving most history matters more than the simplest reset, use:
+
+.. code-block:: bash
+
+   toktrail sync git cleanup --repo ~/toktrail-state --rewrite-history --force --push
+
+After a history reset or rewrite push, other clones must reclone or hard-reset
+before continuing normal sync.
+
 Use ``toktrail refresh`` for explicit/manual refresh operation. It reads enabled
 harnesses and source paths from ``config.toml``:
 

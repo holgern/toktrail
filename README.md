@@ -430,6 +430,35 @@ toktrail sync git push
 toktrail sync git sync
 ```
 
+### Cleaning a large git sync repository
+
+If an older sync repo still contains historical `archives/` exports, `*.tar.gz`
+files, or accidental sqlite files, `git gc` alone may not shrink `.git`
+because those blobs can still be reachable from commit history.
+
+Inspect first with the non-destructive analysis mode:
+
+```bash
+toktrail sync git cleanup --repo ~/toktrail-state
+```
+
+For an unreleased personal sync-state repo, the recommended compaction path is:
+
+```bash
+toktrail sync git cleanup --repo ~/toktrail-state --reset-history --force --push
+```
+
+That keeps the current text state under `state/`, creates a backup bundle, and
+replaces old history with a compact reset. If you prefer to preserve most
+history, use:
+
+```bash
+toktrail sync git cleanup --repo ~/toktrail-state --rewrite-history --force --push
+```
+
+After a history reset or rewrite push, other clones must reclone or hard-reset
+before continuing normal sync.
+
 CLI/env overrides still win over tracked paths:
 `--prices`, `--prices-dir`, `--subscriptions`, `TOKTRAIL_PRICES`,
 `TOKTRAIL_PRICES_DIR`, `TOKTRAIL_SUBSCRIPTIONS`.

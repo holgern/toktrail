@@ -21,6 +21,8 @@ from toktrail.db import (
     upsert_source_session_metadata,
 )
 from toktrail.git_sync import (
+    analyze_git_sync_cleanup,
+    cleanup_git_sync_worktree,
     ensure_git_repo,
     export_repo_archive,
     git_hooks_status,
@@ -29,6 +31,8 @@ from toktrail.git_sync import (
     import_repo_archives,
     install_git_hooks,
     list_archives,
+    reset_git_sync_history,
+    rewrite_git_sync_history,
     uninstall_git_hooks,
 )
 from toktrail.git_sync_parts import core as git_sync_core
@@ -106,6 +110,36 @@ def _seed_db(db_path: Path, *, event: UsageEvent, end_run_flag: bool = True) -> 
             end_tracking_session(conn, run_id, ended_at_ms=event.completed_ms)
     finally:
         conn.close()
+
+
+def _init_git_sync_repo(
+    tmp_path: Path,
+    *,
+    remote: Path | None = None,
+) -> tuple[Path, Path, Path]:
+    repo = tmp_path / "repo"
+    db_path = tmp_path / "toktrail.db"
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("config_version = 1\n", encoding="utf-8")
+    ensure_git_repo(repo, remote_url=None, branch="main")
+    _configure_git_identity(repo)
+    if remote is not None:
+        _git(repo, "remote", "add", "origin", str(remote))
+    _seed_db(db_path, event=_event("1", created_ms=1_777_801_200_000))
+    export_repo_archive(
+        db_path,
+        repo,
+        archive_dir="state",
+        config_path=config_path,
+        include_config=False,
+        redact_raw_json=True,
+        commit_message="sync",
+        remote="origin",
+        branch="main",
+        push=False,
+        allow_dirty=False,
+    )
+    return repo, db_path, config_path
 
 
 def _usage_total_tokens(db_path: Path) -> int:
@@ -776,6 +810,265 @@ def test_git_sync_list_archives_returns_sorted_paths(tmp_path: Path) -> None:
     paths = list_archives(repo)
 
     assert [path.name for path in paths] == ["a.json", "b.json"]
+
+
+def test_git_sync_cleanup_analysis_reports_obsolete_archives(tmp_path: Path) -> None:
+    repo, _, _ = _init_git_sync_repo(tmp_path)
+    archive_file = repo / "archives" / "old.tar.gz"
+    archive_file.parent.mkdir(parents=True, exist_ok=True)
+    archive_file.write_bytes(b"archive")
+    _git(repo, "add", "-f", "archives/old.tar.gz")
+    _git(repo, "commit", "-m", "add old archive")
+
+    analysis = analyze_git_sync_cleanup(repo)
+
+    assert analysis.recommended_action == "reset-history"
+    assert any(item.path == "archives" for item in analysis.obsolete_sizes)
+    assert analysis.state_size is not None
+
+
+def test_git_sync_cleanup_worktree_removes_archives_and_commits(tmp_path: Path) -> None:
+    repo, _, _ = _init_git_sync_repo(tmp_path)
+    archive_file = repo / "archives" / "old.tar.gz"
+    archive_file.parent.mkdir(parents=True, exist_ok=True)
+    archive_file.write_bytes(b"archive")
+    _git(repo, "add", "-f", "archives/old.tar.gz")
+    _git(repo, "commit", "-m", "add old archive")
+
+    result = cleanup_git_sync_worktree(repo, commit=True, dry_run=False)
+
+    assert result.committed is True
+    assert result.commit_hash is not None
+    assert not archive_file.exists()
+    assert "archives/old.tar.gz" not in _git_output(repo, "ls-files")
+
+
+def test_git_sync_cleanup_worktree_dry_run_changes_nothing(tmp_path: Path) -> None:
+    repo, _, _ = _init_git_sync_repo(tmp_path)
+    archive_file = repo / "archives" / "old.tar.gz"
+    archive_file.parent.mkdir(parents=True, exist_ok=True)
+    archive_file.write_bytes(b"archive")
+    _git(repo, "add", "-f", "archives/old.tar.gz")
+    _git(repo, "commit", "-m", "add old archive")
+
+    result = cleanup_git_sync_worktree(repo, commit=False, dry_run=True)
+
+    assert result.dry_run is True
+    assert archive_file.exists()
+    assert _git_output(repo, "status", "--short").strip() == ""
+
+
+def test_git_sync_cleanup_refuses_live_sqlite_unless_worktree_cleanup(
+    tmp_path: Path,
+) -> None:
+    repo, db_path, config_path = _init_git_sync_repo(tmp_path)
+    sqlite_path = repo / "toktrail.db"
+    sqlite_path.write_bytes(b"sqlite")
+
+    analysis = analyze_git_sync_cleanup(repo)
+
+    assert "toktrail.db" in analysis.live_sqlite_paths
+    with pytest.raises(ValueError, match="live sqlite state files"):
+        export_repo_archive(
+            db_path,
+            repo,
+            archive_dir="state",
+            config_path=config_path,
+            include_config=False,
+            redact_raw_json=True,
+            commit_message="sync",
+            remote="origin",
+            branch="main",
+            push=False,
+            allow_dirty=False,
+        )
+
+    cleanup_git_sync_worktree(repo, commit=False, dry_run=False)
+
+    assert not sqlite_path.exists()
+    export_repo_archive(
+        db_path,
+        repo,
+        archive_dir="state",
+        config_path=config_path,
+        include_config=False,
+        redact_raw_json=True,
+        commit_message="sync",
+        remote="origin",
+        branch="main",
+        push=False,
+        allow_dirty=False,
+    )
+
+
+def test_git_sync_cleanup_reset_history_keeps_only_allowed_paths(
+    tmp_path: Path,
+) -> None:
+    repo, db_path, config_path = _init_git_sync_repo(tmp_path)
+    archive_file = repo / "archives" / "old.tar.gz"
+    archive_file.parent.mkdir(parents=True, exist_ok=True)
+    archive_file.write_bytes(b"archive")
+    (repo / "scratch.txt").write_text("scratch\n", encoding="utf-8")
+    _git(repo, "add", "-f", "archives/old.tar.gz", "scratch.txt")
+    _git(repo, "commit", "-m", "add obsolete files")
+
+    result = reset_git_sync_history(
+        db_path,
+        repo,
+        config_path=config_path,
+        tracked_config_paths=(),
+        redact_raw_json=True,
+        force=True,
+        push=False,
+    )
+
+    tracked = set(_git_output(repo, "ls-files").splitlines())
+    assert result.committed is True
+    assert result.backup_bundle is not None and result.backup_bundle.exists()
+    assert "state/manifest.json" in tracked
+    assert "archives/old.tar.gz" not in tracked
+    assert "scratch.txt" not in tracked
+    assert not archive_file.exists()
+    assert _git_output(repo, "log", "--all", "--", "archives/old.tar.gz").strip() == ""
+
+
+def test_git_sync_cleanup_reset_history_writes_backup_bundle(tmp_path: Path) -> None:
+    repo, db_path, config_path = _init_git_sync_repo(tmp_path)
+
+    result = reset_git_sync_history(
+        db_path,
+        repo,
+        config_path=config_path,
+        tracked_config_paths=(),
+        redact_raw_json=True,
+        force=True,
+        push=False,
+    )
+
+    assert result.backup_bundle is not None
+    assert result.backup_bundle.exists()
+    assert result.backup_bundle.stat().st_size > 0
+
+
+def test_git_sync_cleanup_reset_history_accepts_legacy_git_sync_format(
+    tmp_path: Path,
+) -> None:
+    repo, db_path, config_path = _init_git_sync_repo(tmp_path)
+    format_path = repo / "meta" / "format.json"
+    payload = json.loads(format_path.read_text(encoding="utf-8"))
+    payload["format"] = "toktrail.git-sync.v1"
+    format_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    _git(repo, "add", "meta/format.json")
+    _git(repo, "commit", "-m", "use legacy format marker")
+
+    result = reset_git_sync_history(
+        db_path,
+        repo,
+        config_path=config_path,
+        tracked_config_paths=(),
+        redact_raw_json=True,
+        force=True,
+        push=False,
+    )
+
+    assert result.committed is True
+    assert (repo / "state" / "manifest.json").is_file()
+
+
+def test_git_sync_cleanup_rewrite_history_requires_filter_repo(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo, _, _ = _init_git_sync_repo(tmp_path)
+    monkeypatch.setattr(git_sync_core, "_filter_repo_available", lambda: False)
+
+    with pytest.raises(ValueError, match="git-filter-repo"):
+        rewrite_git_sync_history(repo, force=True)
+
+
+def test_git_sync_cleanup_destructive_requires_force(tmp_path: Path) -> None:
+    repo, db_path, config_path = _init_git_sync_repo(tmp_path)
+
+    with pytest.raises(ValueError, match="--force"):
+        reset_git_sync_history(
+            db_path,
+            repo,
+            config_path=config_path,
+            tracked_config_paths=(),
+            redact_raw_json=True,
+            force=False,
+            push=False,
+        )
+    with pytest.raises(ValueError, match="--force"):
+        rewrite_git_sync_history(repo, force=False)
+
+
+def test_git_sync_cleanup_does_not_push_without_push_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo, db_path, config_path = _init_git_sync_repo(tmp_path)
+    monkeypatch.setattr(
+        git_sync_core,
+        "_remote_branch_exists",
+        lambda repo_path, remote, branch: True,
+    )
+
+    def _unexpected_push(repo_path: Path, *, remote: str, branch: str) -> None:
+        raise AssertionError("cleanup must not push without push=True")
+
+    monkeypatch.setattr(git_sync_core, "_run_git_force_with_lease", _unexpected_push)
+
+    result = reset_git_sync_history(
+        db_path,
+        repo,
+        config_path=config_path,
+        tracked_config_paths=(),
+        redact_raw_json=True,
+        force=True,
+        push=False,
+    )
+
+    assert result.pushed is False
+
+
+def test_git_sync_cleanup_push_uses_force_with_lease(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    remote = tmp_path / "remote.git"
+    _git(tmp_path, "init", "--bare", str(remote))
+    repo, db_path, config_path = _init_git_sync_repo(tmp_path, remote=remote)
+    _git(repo, "push", "-u", "origin", "main")
+    archive_file = repo / "archives" / "old.tar.gz"
+    archive_file.parent.mkdir(parents=True, exist_ok=True)
+    archive_file.write_bytes(b"archive")
+    _git(repo, "add", "-f", "archives/old.tar.gz")
+    _git(repo, "commit", "-m", "add old archive")
+
+    original_run_git = git_sync_core._run_git
+    push_commands: list[tuple[str, ...]] = []
+
+    def _recording_run_git(repo_path: Path, *args: str):
+        if args and args[0] == "push":
+            push_commands.append(args)
+        return original_run_git(repo_path, *args)
+
+    monkeypatch.setattr(git_sync_core, "_run_git", _recording_run_git)
+
+    result = reset_git_sync_history(
+        db_path,
+        repo,
+        config_path=config_path,
+        tracked_config_paths=(),
+        redact_raw_json=True,
+        force=True,
+        push=True,
+    )
+
+    assert result.pushed is True
+    assert any("--force-with-lease" in command for command in push_commands)
+    assert all("--force" not in command for command in push_commands)
 
 
 def test_git_sync_existing_empty_main_branch_is_idempotent(tmp_path: Path) -> None:
