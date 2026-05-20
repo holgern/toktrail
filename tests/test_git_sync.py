@@ -8,6 +8,7 @@ from shutil import which
 
 import pytest
 
+from toktrail.config import normalize_identity
 from toktrail.db import (
     assign_area_to_source_session,
     connect,
@@ -75,41 +76,115 @@ def _event(
     *,
     created_ms: int,
     raw_json: str | None = "{}",
+    harness: str = "opencode",
+    source_session_id: str = "ses-1",
+    provider_id: str = "anthropic",
+    model_id: str = "claude-sonnet-4",
+    agent: str | None = "build",
+    origin_machine_id: str | None = None,
 ) -> UsageEvent:
     return UsageEvent(
-        harness="opencode",
-        source_session_id="ses-1",
+        harness=harness,
+        source_session_id=source_session_id,
         source_row_id=f"row-{dedup_suffix}",
         source_message_id=f"msg-{dedup_suffix}",
         source_dedup_key=f"msg-{dedup_suffix}",
-        global_dedup_key=f"opencode:msg-{dedup_suffix}",
+        global_dedup_key=f"{harness}:msg-{dedup_suffix}",
         fingerprint_hash=f"fp-{dedup_suffix}",
-        provider_id="anthropic",
-        model_id="claude-sonnet-4",
+        provider_id=provider_id,
+        model_id=model_id,
         thinking_level=None,
-        agent="build",
+        agent=agent,
         created_ms=created_ms,
         completed_ms=created_ms + 100,
         tokens=TokenBreakdown(input=100, output=20),
         source_cost_usd=Decimal("1.0"),
         raw_json=raw_json,
+        origin_machine_id=origin_machine_id,
     )
 
 
 def _seed_db(db_path: Path, *, event: UsageEvent, end_run_flag: bool = True) -> None:
+    _seed_db_events(db_path, events=[event], end_run_flag=end_run_flag)
+
+
+def _seed_db_events(
+    db_path: Path,
+    *,
+    events: list[UsageEvent],
+    end_run_flag: bool = True,
+) -> None:
+    assert events
     conn = connect(db_path)
     try:
         migrate(conn)
         run_id = create_tracking_session(
             conn,
             "seed-run",
-            started_at_ms=event.created_ms,
+            started_at_ms=min(event.created_ms for event in events),
         )
-        insert_usage_events(conn, run_id, [event])
+        insert_usage_events(conn, run_id, events)
         if end_run_flag:
-            end_tracking_session(conn, run_id, ended_at_ms=event.completed_ms)
+            end_tracking_session(
+                conn,
+                run_id,
+                ended_at_ms=max(
+                    event.completed_ms or event.created_ms for event in events
+                ),
+            )
     finally:
         conn.close()
+
+
+def _write_state_bytes(
+    state_root: Path, relpath: str, content: bytes
+) -> dict[str, object]:
+    target = state_root / relpath
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(content)
+    return {"path": relpath, "sha256": git_sync_core._sha256_file(target)}
+
+
+def _write_state_json(
+    state_root: Path, relpath: str, payload: dict[str, object]
+) -> dict[str, object]:
+    return _write_state_bytes(
+        state_root,
+        relpath,
+        (
+            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+            + b"\n"
+        ),
+    )
+
+
+def _write_state_manifest(
+    state_root: Path,
+    *,
+    format_version: str,
+    machine_id: str,
+    tables: dict[str, list[dict[str, object]]],
+) -> None:
+    manifest = {
+        "format": format_version,
+        "schema_version": git_sync_core.db.SCHEMA_VERSION,
+        "exported_at_ms": 1_777_801_200_000,
+        "machine_id": machine_id,
+        "machine_name": "legacy-host",
+        "raw_json_redacted": True,
+        "tables": {
+            table: {
+                "rows": len(tables.get(table, [])),
+                "files": len(tables.get(table, [])),
+                "entries": tables.get(table, []),
+            }
+            for table in git_sync_core._STATE_TABLES
+        },
+    }
+    (state_root / "manifest.json").write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
 
 
 def _init_git_sync_repo(
@@ -191,7 +266,8 @@ def test_git_sync_export_writes_text_state_files(
 
     assert result.state_path.exists()
     assert (repo / "state" / "manifest.json").is_file()
-    assert list((repo / "state" / "usage-events").rglob("*.json"))
+    assert list((repo / "state" / "usage-events").rglob("*.jsonl"))
+    assert list((repo / "state" / "run-events").rglob("*.jsonl"))
     assert not list(repo.rglob("*.tar.gz"))
 
     import_result = import_repo_archives(db_b, repo, dry_run=False)
@@ -284,10 +360,10 @@ def test_git_sync_export_updates_only_changed_files_and_removes_stale_files(
         push=False,
         allow_dirty=False,
     )
-    exported_files = sorted((repo / "state" / "usage-events").rglob("*.json"))
+    exported_files = sorted((repo / "state" / "usage-events").rglob("*.jsonl"))
     assert len(exported_files) == 1
-    first_event_path = exported_files[0]
-    first_event_mtime_ns = first_event_path.stat().st_mtime_ns
+    first_session_path = exported_files[0]
+    first_session_mtime_ns = first_session_path.stat().st_mtime_ns
 
     export_repo_archive(
         db_a,
@@ -302,9 +378,12 @@ def test_git_sync_export_updates_only_changed_files_and_removes_stale_files(
         push=False,
         allow_dirty=False,
     )
-    assert first_event_path.stat().st_mtime_ns == first_event_mtime_ns
+    assert first_session_path.stat().st_mtime_ns == first_session_mtime_ns
 
-    _seed_db(db_b, event=_event("2", created_ms=1_777_801_300_000))
+    _seed_db(
+        db_b,
+        event=_event("2", created_ms=1_777_801_300_000, source_session_id="ses-2"),
+    )
     export_repo_archive(
         db_b,
         repo,
@@ -319,11 +398,331 @@ def test_git_sync_export_updates_only_changed_files_and_removes_stale_files(
         allow_dirty=False,
     )
 
-    updated_files = sorted((repo / "state" / "usage-events").rglob("*.json"))
-    assert len(updated_files) == 1
-    assert not first_event_path.exists()
-    updated_payload = json.loads(updated_files[0].read_text(encoding="utf-8"))
-    assert updated_payload["source_row_id"] == "row-2"
+    second_session_files = sorted((repo / "state" / "usage-events").rglob("*.jsonl"))
+    assert len(second_session_files) == 1
+    second_session_path = second_session_files[0]
+    second_session_payload = second_session_path.read_text(encoding="utf-8")
+    assert second_session_path != first_session_path
+    assert not first_session_path.exists()
+
+    _seed_db(
+        db_b,
+        event=_event("3", created_ms=1_777_801_300_500, source_session_id="ses-2"),
+    )
+    export_repo_archive(
+        db_b,
+        repo,
+        archive_dir="state",
+        config_path=config_path,
+        include_config=False,
+        redact_raw_json=True,
+        commit_message=None,
+        remote="origin",
+        branch="main",
+        push=False,
+        allow_dirty=False,
+    )
+
+    updated_files = sorted((repo / "state" / "usage-events").rglob("*.jsonl"))
+    assert updated_files == [second_session_path]
+    assert updated_files[0].read_text(encoding="utf-8") != second_session_payload
+
+
+def test_git_sync_export_groups_usage_events_by_source_session(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    db_a = tmp_path / "a.db"
+    db_b = tmp_path / "b.db"
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("config_version = 1\n", encoding="utf-8")
+
+    ensure_git_repo(repo, remote_url=None, branch="main")
+    _configure_git_identity(repo)
+    _seed_db_events(
+        db_a,
+        events=[
+            _event("1", created_ms=1_777_801_200_000, source_session_id="ses-1"),
+            _event("2", created_ms=1_777_801_200_500, source_session_id="ses-1"),
+            _event("3", created_ms=1_777_801_201_000, source_session_id="ses-2"),
+        ],
+    )
+
+    export_repo_archive(
+        db_a,
+        repo,
+        archive_dir="state",
+        config_path=config_path,
+        include_config=False,
+        redact_raw_json=True,
+        commit_message="sync",
+        remote="origin",
+        branch="main",
+        push=False,
+        allow_dirty=False,
+    )
+
+    usage_files = sorted((repo / "state" / "usage-events").rglob("*.jsonl"))
+    run_event_files = sorted((repo / "state" / "run-events").rglob("*.jsonl"))
+
+    assert len(usage_files) == 2
+    assert len(run_event_files) == 1
+
+    ses_1_header: dict[str, object] | None = None
+    ses_1_records: list[dict[str, object]] = []
+    for path in usage_files:
+        lines = path.read_text(encoding="utf-8").splitlines()
+        header = json.loads(lines[0])
+        if header["source_session_id"] != "ses-1":
+            continue
+        ses_1_header = header
+        ses_1_records = [json.loads(line)["record"] for line in lines[1:]]
+        break
+
+    assert ses_1_header is not None
+    assert ses_1_header["format"] == git_sync_core._USAGE_SESSION_FORMAT
+    assert [record["created_ms"] for record in ses_1_records] == [
+        1_777_801_200_000,
+        1_777_801_200_500,
+    ]
+    assert len(ses_1_records) == 2
+
+    run_lines = run_event_files[0].read_text(encoding="utf-8").splitlines()
+    assert json.loads(run_lines[0])["format"] == git_sync_core._RUN_EVENTS_FORMAT
+    assert len(run_lines[1:]) == 3
+
+    import_result = import_repo_archives(db_b, repo, dry_run=False)
+
+    assert import_result.archives_imported == 1
+    assert _usage_total_tokens(db_a) == _usage_total_tokens(db_b)
+
+
+def test_git_sync_import_reads_legacy_v3_usage_event_files(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    db_path = tmp_path / "toktrail.db"
+    state_root = repo / "state"
+    machine_id = "legacy-machine"
+
+    ensure_git_repo(repo, remote_url=None, branch="main")
+
+    machine_entry = _write_state_json(
+        state_root,
+        f"machines/{machine_id}.json",
+        {
+            "machine_id": machine_id,
+            "name": "legacy-host",
+            "name_key": "legacy-host",
+            "first_seen_ms": 1_777_801_200_000,
+            "last_seen_ms": 1_777_801_200_000,
+            "is_local": 1,
+            "created_at_ms": 1_777_801_200_000,
+            "updated_at_ms": 1_777_801_200_000,
+            "imported_at_ms": 1_777_801_200_000,
+        },
+    )
+    usage_entry = _write_state_json(
+        state_root,
+        "usage-events/opencode/event.json",
+        {
+            "harness": "opencode",
+            "source_session_id": "ses-legacy",
+            "source_row_id": "row-legacy",
+            "source_message_id": "msg-legacy",
+            "source_dedup_key": "msg-legacy",
+            "global_dedup_key": "opencode:msg-legacy",
+            "fingerprint_hash": "fp-legacy",
+            "origin_machine_id": machine_id,
+            "role": "assistant",
+            "provider_id": "OpenAI",
+            "provider_key": "openai",
+            "model_id": "GPT-4o",
+            "model_key": "gpt-4o",
+            "thinking_level": None,
+            "agent": "Build Agent",
+            "agent_key": "build-agent",
+            "created_ms": 1_777_801_200_000,
+            "completed_ms": 1_777_801_200_100,
+            "input_tokens": 10,
+            "output_tokens": 2,
+            "reasoning_tokens": 0,
+            "cache_read_tokens": 0,
+            "cache_write_tokens": 0,
+            "cache_output_tokens": 0,
+            "source_cost_usd": "1.0",
+            "raw_json": None,
+            "imported_at_ms": 1_777_801_200_200,
+        },
+    )
+    _write_state_manifest(
+        state_root,
+        format_version=git_sync_core._LEGACY_STATE_FORMAT,
+        machine_id=machine_id,
+        tables={
+            "machines": [machine_entry],
+            "usage_events": [usage_entry],
+        },
+    )
+
+    result = import_repo_archives(db_path, repo, dry_run=False)
+
+    assert result.archives_imported == 1
+    assert result.import_results[0].usage_events_inserted == 1
+
+
+def test_git_sync_export_replaces_legacy_usage_event_files_with_session_files(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    db_path = tmp_path / "toktrail.db"
+    config_path = tmp_path / "config.toml"
+    state_root = repo / "state"
+    config_path.write_text("config_version = 1\n", encoding="utf-8")
+
+    ensure_git_repo(repo, remote_url=None, branch="main")
+    _configure_git_identity(repo)
+    _seed_db(db_path, event=_event("1", created_ms=1_777_801_200_000))
+
+    legacy_entry = _write_state_json(
+        state_root,
+        "usage-events/opencode/event.json",
+        {"legacy": True},
+    )
+    _write_state_manifest(
+        state_root,
+        format_version=git_sync_core._LEGACY_STATE_FORMAT,
+        machine_id="legacy-machine",
+        tables={"usage_events": [legacy_entry]},
+    )
+
+    export_repo_archive(
+        db_path,
+        repo,
+        archive_dir="state",
+        config_path=config_path,
+        include_config=False,
+        redact_raw_json=True,
+        commit_message="sync",
+        remote="origin",
+        branch="main",
+        push=False,
+        allow_dirty=False,
+    )
+
+    assert not (state_root / "usage-events" / "opencode" / "event.json").exists()
+    assert not list((state_root / "usage-events").rglob("*.json"))
+    assert list((state_root / "usage-events").rglob("*.jsonl"))
+
+
+def test_git_sync_usage_session_grouping_includes_origin_machine_id(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    db_path = tmp_path / "toktrail.db"
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("config_version = 1\n", encoding="utf-8")
+
+    ensure_git_repo(repo, remote_url=None, branch="main")
+    _configure_git_identity(repo)
+    conn = connect(db_path)
+    try:
+        migrate(conn)
+        run_id = create_tracking_session(
+            conn,
+            "seed-run",
+            started_at_ms=1_777_801_200_000,
+        )
+        insert_usage_events(
+            conn,
+            run_id,
+            [_event("1", created_ms=1_777_801_200_000)],
+            origin_machine_id="machine-a",
+        )
+        insert_usage_events(
+            conn,
+            run_id,
+            [_event("2", created_ms=1_777_801_200_500)],
+            origin_machine_id="machine-b",
+        )
+        end_tracking_session(conn, run_id, ended_at_ms=1_777_801_200_600)
+    finally:
+        conn.close()
+
+    export_repo_archive(
+        db_path,
+        repo,
+        archive_dir="state",
+        config_path=config_path,
+        include_config=False,
+        redact_raw_json=True,
+        commit_message="sync",
+        remote="origin",
+        branch="main",
+        push=False,
+        allow_dirty=False,
+    )
+
+    usage_files = sorted((repo / "state" / "usage-events").rglob("*.jsonl"))
+    headers = [
+        json.loads(path.read_text(encoding="utf-8").splitlines()[0])
+        for path in usage_files
+    ]
+
+    assert len(usage_files) == 2
+    assert {header["origin_machine_id"] for header in headers} == {
+        "machine-a",
+        "machine-b",
+    }
+
+
+def test_git_sync_round_trip_preserves_usage_identity_keys(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    db_a = tmp_path / "a.db"
+    db_b = tmp_path / "b.db"
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("config_version = 1\n", encoding="utf-8")
+
+    ensure_git_repo(repo, remote_url=None, branch="main")
+    _configure_git_identity(repo)
+    event = _event(
+        "keys",
+        created_ms=1_777_801_200_000,
+        provider_id="OpenAI",
+        model_id="GPT 4o",
+        agent="Build Agent",
+    )
+    _seed_db(db_a, event=event)
+
+    export_repo_archive(
+        db_a,
+        repo,
+        archive_dir="state",
+        config_path=config_path,
+        include_config=False,
+        redact_raw_json=True,
+        commit_message="sync",
+        remote="origin",
+        branch="main",
+        push=False,
+        allow_dirty=False,
+    )
+    import_repo_archives(db_b, repo, dry_run=False)
+
+    conn = connect(db_b)
+    try:
+        migrate(conn)
+        row = conn.execute(
+            """
+            SELECT provider_key, model_key, agent_key
+            FROM usage_events
+            WHERE global_dedup_key = ?
+            """,
+            (event.global_dedup_key,),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    assert row is not None
+    assert row["provider_key"] == normalize_identity(event.provider_id)
+    assert row["model_key"] == normalize_identity(event.model_id)
+    assert row["agent_key"] == normalize_identity(event.agent or "")
 
 
 def test_git_sync_export_records_machine_name(
@@ -1134,7 +1533,7 @@ def test_git_sync_import_rejects_state_checksum_mismatch(tmp_path: Path) -> None
         push=False,
         allow_dirty=False,
     )
-    usage_file = next((repo / "state" / "usage-events").rglob("*.json"))
+    usage_file = next((repo / "state" / "usage-events").rglob("*.jsonl"))
     usage_file.write_text('{"tampered":true}\n', encoding="utf-8")
 
     with pytest.raises(ValueError, match="checksum mismatch"):

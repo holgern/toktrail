@@ -1232,7 +1232,8 @@ def _merge_usage_events(
         SELECT id, tracking_session_id, harness_session_id, harness, source_session_id,
                source_row_id, source_message_id, source_dedup_key, global_dedup_key,
                fingerprint_hash, origin_machine_id,
-               role, provider_id, model_id, thinking_level, agent,
+               role, provider_id, provider_key, model_id, model_key,
+               thinking_level, agent, agent_key,
                created_ms, completed_ms, input_tokens, output_tokens, reasoning_tokens,
                cache_read_tokens, cache_write_tokens, cache_output_tokens,
                source_cost_usd, raw_json, imported_at_ms, area_id
@@ -1319,9 +1320,12 @@ def _merge_usage_events(
                 origin_machine_id,
                 role,
                 provider_id,
+                provider_key,
                 model_id,
+                model_key,
                 thinking_level,
                 agent,
+                agent_key,
                 created_ms,
                 completed_ms,
                 input_tokens,
@@ -1338,7 +1342,7 @@ def _merge_usage_events(
             VALUES (
                 ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                 ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                ?, ?, ?, ?, ?, ?, ?
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
             )
             """,
             (
@@ -1354,9 +1358,12 @@ def _merge_usage_events(
                 event_origin_machine_id,
                 row["role"],
                 row["provider_id"],
+                row["provider_key"],
                 row["model_id"],
+                row["model_key"],
                 row["thinking_level"],
                 row["agent"],
+                row["agent_key"],
                 int(row["created_ms"]),
                 row["completed_ms"],
                 int(row["input_tokens"]),

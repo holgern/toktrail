@@ -6,6 +6,7 @@ import shutil
 import sqlite3
 import subprocess
 import tempfile
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from hashlib import sha256
@@ -29,7 +30,11 @@ DEFAULT_STATE_DIR = "state"
 DEFAULT_ARCHIVE_DIR = DEFAULT_STATE_DIR
 DEFAULT_REMOTE = "origin"
 DEFAULT_BRANCH = "main"
-_STATE_FORMAT = "toktrail.text-state.v3"
+_LEGACY_STATE_FORMAT = "toktrail.text-state.v3"
+_STATE_FORMAT = "toktrail.text-state.v4"
+_SUPPORTED_STATE_FORMATS = frozenset({_STATE_FORMAT, _LEGACY_STATE_FORMAT})
+_USAGE_SESSION_FORMAT = "toktrail.usage-session.v1"
+_RUN_EVENTS_FORMAT = "toktrail.run-events.v1"
 _STAGING_PREFIX = ".state.staging."
 _STATE_DB_FILE_NAMES = frozenset({"toktrail.db", "toktrail.db-wal", "toktrail.db-shm"})
 _HOOK_MARKER = "# toktrail-managed-hook v1"
@@ -1697,12 +1702,6 @@ def _export_text_state(
                 int(row["id"]): str(row["sync_id"])
                 for row in dest.execute("SELECT id, sync_id FROM runs").fetchall()
             }
-            usage_key_by_id = {
-                int(row["id"]): f"{row['harness']}:{row['global_dedup_key'] or ''}"
-                for row in dest.execute(
-                    "SELECT id, harness, global_dedup_key FROM usage_events"
-                ).fetchall()
-            }
             staged_root = Path(
                 tempfile.mkdtemp(prefix=_STAGING_PREFIX, dir=str(state_root.parent))
             )
@@ -1711,15 +1710,24 @@ def _export_text_state(
             for table in _STATE_TABLES:
                 rows = _fetch_export_rows(dest, table)
                 counts[table] = len(rows)
+                if table == "usage_events":
+                    manifest_tables[table] = _write_usage_event_session_files(
+                        staged_root,
+                        rows,
+                        fallback_origin_machine_id=machine_id,
+                    )
+                    continue
+                if table == "run_events":
+                    manifest_tables[table] = _write_run_event_files(
+                        staged_root,
+                        rows,
+                        run_sync_by_id=run_sync_by_id,
+                    )
+                    continue
                 files: list[dict[str, object]] = []
                 for row in rows:
                     record = {key: row[key] for key in row.keys()}
-                    relpath = _state_record_relpath(
-                        table,
-                        record,
-                        run_sync_by_id=run_sync_by_id,
-                        usage_key_by_id=usage_key_by_id,
-                    )
+                    relpath = _state_record_relpath(table, record)
                     target = staged_root / relpath
                     payload = (
                         json.dumps(
@@ -1885,7 +1893,7 @@ def _load_text_state_into_db(
                 machine["name"] if isinstance(machine["name"], str) else None
             ),
             schema_version=db.SCHEMA_VERSION,
-            source_format=_STATE_FORMAT,
+            source_format=str(manifest["format"]),
         )
     finally:
         conn.close()
@@ -1900,18 +1908,178 @@ def _fetch_export_rows(conn: sqlite3.Connection, table: str) -> list[sqlite3.Row
         "runs": "sync_id",
         "source_sessions": "sync_id",
         "source_session_metadata": "origin_machine_id, harness, source_session_id",
-        "usage_events": "harness, global_dedup_key",
-        "run_events": "tracking_session_id, usage_event_id",
+        "usage_events": (
+            "origin_machine_id, harness, source_session_id, "
+            "created_ms, source_row_id, global_dedup_key, id"
+        ),
+        "run_events": "tracking_session_id, created_at_ms, usage_event_id",
     }[table]
     return conn.execute(f"SELECT * FROM {table} ORDER BY {order_by}").fetchall()
+
+
+def _write_usage_event_session_files(
+    staged_root: Path,
+    rows: list[sqlite3.Row],
+    *,
+    fallback_origin_machine_id: str,
+) -> dict[str, object]:
+    grouped: dict[tuple[str, str, str], list[dict[str, object]]] = {}
+    for row in rows:
+        record = {key: row[key] for key in row.keys()}
+        key = _usage_event_session_key(
+            record,
+            fallback_origin_machine_id=fallback_origin_machine_id,
+        )
+        grouped.setdefault(key, []).append(record)
+
+    entries: list[dict[str, object]] = []
+    for (origin, harness, source_session_id), records in sorted(grouped.items()):
+        records.sort(
+            key=lambda item: (
+                _int_sort_value(item.get("created_ms")),
+                str(item.get("source_row_id") or ""),
+                str(item.get("global_dedup_key") or ""),
+                _int_sort_value(item.get("id")),
+            )
+        )
+        relpath = _usage_session_record_relpath(
+            origin_machine_id=origin,
+            harness=harness,
+            source_session_id=source_session_id,
+        )
+        target = staged_root / relpath
+        header = {
+            "format": _USAGE_SESSION_FORMAT,
+            "origin_machine_id": origin,
+            "harness": harness,
+            "source_session_id": source_session_id,
+        }
+        _write_if_changed(target, _grouped_records_payload(header, records))
+        entries.append(
+            {
+                "path": relpath,
+                "sha256": _sha256_file(target),
+                "rows": len(records),
+                "group": {
+                    "origin_machine_id": origin,
+                    "harness": harness,
+                    "source_session_id": source_session_id,
+                },
+            }
+        )
+
+    return {
+        "rows": len(rows),
+        "files": len(entries),
+        "encoding": "jsonl-session-v1",
+        "entries": entries,
+    }
+
+
+def _usage_event_session_key(
+    record: dict[str, object],
+    *,
+    fallback_origin_machine_id: str,
+) -> tuple[str, str, str]:
+    harness = str(record["harness"])
+    source_session_id = str(record["source_session_id"])
+    origin_machine_id = str(
+        record.get("origin_machine_id") or fallback_origin_machine_id
+    )
+    return origin_machine_id, harness, source_session_id
+
+
+def _usage_session_record_relpath(
+    *,
+    origin_machine_id: str,
+    harness: str,
+    source_session_id: str,
+) -> str:
+    origin = _safe_segment(origin_machine_id)
+    harness_segment = _safe_segment(harness)
+    digest = _hash_key(f"{origin_machine_id}\0{harness}\0{source_session_id}")
+    return f"usage-events/{harness_segment}/{origin}/{digest}.jsonl"
+
+
+def _write_run_event_files(
+    staged_root: Path,
+    rows: list[sqlite3.Row],
+    *,
+    run_sync_by_id: dict[int, str],
+) -> dict[str, object]:
+    grouped: dict[str, list[dict[str, object]]] = {}
+    for row in rows:
+        record = {key: row[key] for key in row.keys()}
+        run_id = int(record["tracking_session_id"])
+        run_sync_id = str(run_sync_by_id.get(run_id, f"run-{run_id}"))
+        grouped.setdefault(run_sync_id, []).append(record)
+
+    entries: list[dict[str, object]] = []
+    for run_sync_id, records in sorted(grouped.items()):
+        records.sort(
+            key=lambda item: (
+                _int_sort_value(item.get("created_at_ms")),
+                _int_sort_value(item.get("usage_event_id")),
+                _int_sort_value(item.get("tracking_session_id")),
+            )
+        )
+        relpath = _run_event_records_relpath(run_sync_id=run_sync_id)
+        target = staged_root / relpath
+        header = {
+            "format": _RUN_EVENTS_FORMAT,
+            "run_sync_id": run_sync_id,
+        }
+        _write_if_changed(target, _grouped_records_payload(header, records))
+        entries.append(
+            {
+                "path": relpath,
+                "sha256": _sha256_file(target),
+                "rows": len(records),
+                "group": {"run_sync_id": run_sync_id},
+            }
+        )
+
+    return {
+        "rows": len(rows),
+        "files": len(entries),
+        "encoding": "jsonl-run-v1",
+        "entries": entries,
+    }
+
+
+def _run_event_records_relpath(*, run_sync_id: str) -> str:
+    return f"run-events/{_safe_segment(run_sync_id)}.jsonl"
+
+
+def _grouped_records_payload(
+    header: Mapping[str, object],
+    records: list[dict[str, object]],
+) -> bytes:
+    lines = [
+        json.dumps(header, sort_keys=True, separators=(",", ":")),
+        *(
+            json.dumps(
+                {"record": record},
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            for record in records
+        ),
+    ]
+    return ("\n".join(lines) + "\n").encode("utf-8")
+
+
+def _int_sort_value(value: object) -> int:
+    if isinstance(value, int):
+        return value
+    if value is None:
+        return 0
+    return int(str(value))
 
 
 def _state_record_relpath(
     table: str,
     record: dict[str, object],
-    *,
-    run_sync_by_id: dict[int, str],
-    usage_key_by_id: dict[int, str],
 ) -> str:
     if table == "machines":
         return f"machines/{_safe_segment(str(record['machine_id']))}.json"
@@ -1931,18 +2099,19 @@ def _state_record_relpath(
         session_hash = _hash_key(str(record["source_session_id"]))
         return f"source-session-metadata/{origin}/{harness}/{session_hash}.json"
     if table == "usage_events":
-        harness = _safe_segment(str(record["harness"]))
-        dedup = str(
-            record.get("global_dedup_key") or record.get("fingerprint_hash") or ""
+        origin_machine_id, harness, source_session_id = _usage_event_session_key(
+            record,
+            fallback_origin_machine_id=str(record.get("origin_machine_id") or ""),
         )
-        key_hash = _hash_key(dedup)
-        return f"usage-events/{harness}/{key_hash}.json"
+        return _usage_session_record_relpath(
+            origin_machine_id=origin_machine_id,
+            harness=harness,
+            source_session_id=source_session_id,
+        )
     if table == "run_events":
-        run_id = int(str(record["tracking_session_id"]))
-        usage_id = int(str(record["usage_event_id"]))
-        run_sync_id = _safe_segment(run_sync_by_id.get(run_id, f"run-{run_id}"))
-        usage_hash = _hash_key(usage_key_by_id.get(usage_id, f"usage-{usage_id}"))
-        return f"run-events/{run_sync_id}/{usage_hash}.json"
+        return _run_event_records_relpath(
+            run_sync_id=str(record.get("tracking_session_id") or "run"),
+        )
     msg = f"Unsupported state table: {table}"
     raise ValueError(msg)
 
@@ -1968,7 +2137,7 @@ def _load_state_manifest(state_root: Path) -> dict[str, object]:
 
 
 def _validate_state_manifest(state_root: Path, manifest: dict[str, object]) -> None:
-    if manifest.get("format") != _STATE_FORMAT:
+    if manifest.get("format") not in _SUPPORTED_STATE_FORMATS:
         msg = f"Unsupported state format: {manifest.get('format')!r}"
         raise ValueError(msg)
     schema_version = _optional_manifest_int(manifest, "schema_version")
@@ -2033,11 +2202,82 @@ def _load_state_table_records(
         relpath = entry.get("path")
         if not isinstance(relpath, str) or not relpath:
             continue
-        payload: object = json.loads((state_root / relpath).read_text(encoding="utf-8"))
+        target = state_root / relpath
+        if table == "usage_events":
+            rows.extend(
+                _load_grouped_state_records_file(
+                    target,
+                    header_format=_USAGE_SESSION_FORMAT,
+                    header_name="Usage session",
+                )
+            )
+            continue
+        if table == "run_events":
+            rows.extend(
+                _load_grouped_state_records_file(
+                    target,
+                    header_format=_RUN_EVENTS_FORMAT,
+                    header_name="Run event group",
+                )
+            )
+            continue
+        payload: object = json.loads(target.read_text(encoding="utf-8"))
         if not isinstance(payload, dict):
-            msg = f"State record is not an object: {state_root / relpath}"
+            msg = f"State record is not an object: {target}"
             raise ValueError(msg)
         rows.append(payload)
+    return rows
+
+
+def _load_grouped_state_records_file(
+    path: Path,
+    *,
+    header_format: str,
+    header_name: str,
+) -> list[dict[str, object]]:
+    lines = [
+        (line_no, line)
+        for line_no, line in enumerate(
+            path.read_text(encoding="utf-8").splitlines(),
+            start=1,
+        )
+        if line.strip()
+    ]
+    if not lines:
+        msg = f"State file is empty: {path}"
+        raise ValueError(msg)
+
+    if len(lines) == 1:
+        _, line = lines[0]
+        payload = json.loads(line)
+        if not isinstance(payload, dict):
+            msg = f"State record is not an object: {path}"
+            raise ValueError(msg)
+        if payload.get("format") != header_format and "record" not in payload:
+            return [payload]
+
+    rows: list[dict[str, object]] = []
+    header_seen = False
+    for line_no, line in lines:
+        payload = json.loads(line)
+        if not isinstance(payload, dict):
+            msg = f"State line is not an object: {path}:{line_no}"
+            raise ValueError(msg)
+        if payload.get("format") == header_format:
+            if header_seen:
+                msg = f"Duplicate {header_name.lower()} header: {path}:{line_no}"
+                raise ValueError(msg)
+            header_seen = True
+            continue
+        record = payload.get("record")
+        if not isinstance(record, dict):
+            msg = f"{header_name} line missing record: {path}:{line_no}"
+            raise ValueError(msg)
+        rows.append(record)
+
+    if not header_seen:
+        msg = f"{header_name} header missing: {path}"
+        raise ValueError(msg)
     return rows
 
 
