@@ -75,6 +75,43 @@ def make_api_usage_event(
     )
 
 
+def _seed_area_events(
+    state_db: Path,
+    rows: list[tuple[str, str, int, TokenBreakdown]],
+) -> None:
+    conn = connect(state_db)
+    try:
+        migrate(conn)
+        machine_id = get_local_machine_id(conn)
+        for index, (area_path, source_session_id, created_ms, tokens) in enumerate(
+            rows,
+            start=1,
+        ):
+            area = ensure_area(conn, area_path)
+            insert_usage_events(
+                conn,
+                None,
+                [
+                    make_api_usage_event(
+                        f"area-{index}",
+                        created_ms=created_ms,
+                        tokens=tokens,
+                        source_session_id=source_session_id,
+                    )
+                ],
+            )
+            assign_area_to_source_session(
+                conn,
+                area_id=area.id,
+                origin_machine_id=machine_id,
+                harness="opencode",
+                source_session_id=source_session_id,
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def _future_opencode_assistant() -> dict[str, object]:
     assistant = deepcopy(VALID_ASSISTANT)
     created_ms = float(int(datetime.now(timezone.utc).timestamp() * 1000) + 60_000)
@@ -730,6 +767,160 @@ def test_usage_sessions_report_accepts_area_filter(tmp_path: Path) -> None:
     assert len(report.sessions) == 1
     assert report.sessions[0].area_path == "privat/toktrail"
     assert report.filters["area"] == "privat"
+
+
+def test_usage_report_accepts_unique_suffix_area_selector(tmp_path: Path) -> None:
+    state_db = tmp_path / "toktrail.db"
+    _seed_area_events(
+        state_db,
+        [
+            (
+                "privat/toktrail",
+                "toktrail-ses",
+                1_000,
+                TokenBreakdown(input=8, output=2),
+            ),
+            ("work/odoo", "work-ses", 2_000, TokenBreakdown(input=4, output=1)),
+        ],
+    )
+
+    report = usage_report(state_db, area="toktrail")
+
+    assert report.totals.tokens.total == 10
+    assert report.filters["area"] == "toktrail"
+    assert report.filters["area_match"] == "unique_suffix"
+    assert report.filters["area_matches"] == ["privat/toktrail"]
+
+
+def test_usage_report_accepts_leaf_area_selector(tmp_path: Path) -> None:
+    state_db = tmp_path / "toktrail.db"
+    _seed_area_events(
+        state_db,
+        [
+            (
+                "privat/toktrail/tests",
+                "toktrail-tests",
+                1_000,
+                TokenBreakdown(input=4, output=1),
+            ),
+            (
+                "privat/taskledger/tests",
+                "taskledger-tests",
+                2_000,
+                TokenBreakdown(input=7, output=2),
+            ),
+            (
+                "privat/toktrail/docs",
+                "toktrail-docs",
+                3_000,
+                TokenBreakdown(input=50, output=10),
+            ),
+        ],
+    )
+
+    report = usage_report(state_db, area_leaf="tests")
+
+    assert report.totals.tokens.total == 14
+    assert report.filters["area"] == "tests"
+    assert report.filters["area_match"] == "leaf"
+    assert report.filters["area_matches"] == [
+        "privat/taskledger/tests",
+        "privat/toktrail/tests",
+    ]
+
+
+def test_usage_sessions_report_accepts_leaf_area_selector(tmp_path: Path) -> None:
+    state_db = tmp_path / "toktrail.db"
+    _seed_area_events(
+        state_db,
+        [
+            (
+                "privat/toktrail/tests",
+                "toktrail-tests",
+                1_000,
+                TokenBreakdown(input=4, output=1),
+            ),
+            (
+                "privat/taskledger/tests",
+                "taskledger-tests",
+                2_000,
+                TokenBreakdown(input=7, output=2),
+            ),
+        ],
+    )
+
+    report = usage_sessions_report(state_db, area_leaf="tests", limit=None)
+
+    assert len(report.sessions) == 2
+    assert report.filters["area"] == "tests"
+    assert report.filters["area_match"] == "leaf"
+    assert report.filters["area_matches"] == [
+        "privat/taskledger/tests",
+        "privat/toktrail/tests",
+    ]
+
+
+def test_usage_series_report_accepts_leaf_area_selector(tmp_path: Path) -> None:
+    state_db = tmp_path / "toktrail.db"
+    _seed_area_events(
+        state_db,
+        [
+            (
+                "privat/toktrail/tests",
+                "toktrail-tests",
+                1_000,
+                TokenBreakdown(input=4, output=1),
+            ),
+            (
+                "privat/taskledger/tests",
+                "taskledger-tests",
+                2_000,
+                TokenBreakdown(input=7, output=2),
+            ),
+        ],
+    )
+
+    report = usage_series_report(state_db, granularity="daily", area_leaf="tests")
+    payload = report.as_dict()
+
+    assert payload["filters"]["area"] == "tests"
+    assert payload["filters"]["area_match"] == "leaf"
+    assert payload["filters"]["area_matches"] == [
+        "privat/taskledger/tests",
+        "privat/toktrail/tests",
+    ]
+    assert payload["totals"]["total"] == 14
+
+
+def test_usage_areas_report_accepts_leaf_area_selector(tmp_path: Path) -> None:
+    state_db = tmp_path / "toktrail.db"
+    _seed_area_events(
+        state_db,
+        [
+            (
+                "privat/toktrail/tests",
+                "toktrail-tests",
+                1_000,
+                TokenBreakdown(input=4, output=1),
+            ),
+            (
+                "privat/taskledger/tests",
+                "taskledger-tests",
+                2_000,
+                TokenBreakdown(input=7, output=2),
+            ),
+        ],
+    )
+
+    report = usage_areas_report(state_db, area_leaf="tests")
+
+    assert report.filters["area"] == "tests"
+    assert report.filters["area_match"] == "leaf"
+    assert report.filters["area_matches"] == [
+        "privat/taskledger/tests",
+        "privat/toktrail/tests",
+    ]
+    assert report.totals.tokens.total == 14
 
 
 def test_usage_sessions_report_rejects_period_with_since_until(tmp_path: Path) -> None:

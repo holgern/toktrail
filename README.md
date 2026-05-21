@@ -218,12 +218,16 @@ toktrail area status
 toktrail area assign work/odoo --harness opencode --source-session-id ses-1
 toktrail area assign work/odoo --session "pc1/opencode/ses-1"
 toktrail area sessions --unassigned --today
+toktrail area sessions --area toktrail --today
+toktrail area sessions --area-leaf tests --today
 toktrail area bulk-assign work/odoo --unassigned --today --dry-run
 toktrail area bulk-assign work/odoo --unassigned --today --apply
 toktrail area detect
 toktrail area bind-cwd work/odoo --git-root
 toktrail usage today --area work
+toktrail usage today --area toktrail
 toktrail usage today --area work --area-exact
+toktrail usage today --area-leaf tests
 toktrail usage today --unassigned-area
 toktrail usage areas --today
 toktrail usage areas --today --direct
@@ -357,11 +361,18 @@ Area classification:
 - `toktrail area assign <path> --last` defaults to the local machine. Use
   `--all-machines` for global newest-session behavior.
 - `toktrail area sessions` lists source sessions with area metadata; use
-  `--unassigned` to find cleanup candidates.
+  `--unassigned` to find cleanup candidates, `--area <selector>` for explicit
+  selectors, or `--area-leaf <name>` for cross-parent leaf matches. The
+  positional area argument remains supported for exact paths and unique suffixes.
 - `toktrail area bulk-assign` supports dry-run and apply flows for historical
   repair.
-- `toktrail usage ... --area <path>` includes descendants by default.
+- `toktrail usage ... --area <path>` includes descendants by default. If the
+  selector is not an exact path, toktrail resolves a unique path suffix such as
+  `--area toktrail` to the matching full path and reports an ambiguity error
+  when multiple paths match.
 - Add `--area-exact` to match only the exact area path.
+- Use `--area-leaf <name>` to report the same leaf across different parents,
+  for example `--area-leaf tests`.
 - Use `--unassigned-area` to report events without any area.
 - `toktrail usage areas` reports subtree totals and explicit direct-vs-subtree
   columns; use `--direct`, `--subtree`, `--leaves`, and `--percent`.

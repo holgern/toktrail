@@ -258,6 +258,7 @@ def list_area_sessions(
     *,
     db_path: Path | None = None,
     area: str | None = None,
+    area_leaf: str | None = None,
     area_exact: bool = False,
     unassigned: bool = False,
     harness: str | None = None,
@@ -269,6 +270,7 @@ def list_area_sessions(
     return usage_sessions_report(
         db_path,
         area=area,
+        area_leaf=area_leaf,
         area_exact=area_exact,
         unassigned_area=unassigned,
         harness=harness,

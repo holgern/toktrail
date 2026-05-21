@@ -38,6 +38,7 @@ from toktrail.db import (
     move_area_path,
     normalize_area_path,
     record_imported_sync_archive,
+    resolve_area_filter_selection,
     set_active_area,
     summarize_subscription_usage,
     summarize_tracking_session,
@@ -796,6 +797,80 @@ def test_usage_report_unassigned_area_filter(tmp_path: Path) -> None:
         conn.close()
 
     assert report.totals.tokens.total == unassigned_event.tokens.total
+
+
+def test_resolve_area_filter_selection_unique_suffix(tmp_path: Path) -> None:
+    conn = connect(tmp_path / "toktrail.db")
+    try:
+        migrate(conn)
+        project_area = ensure_area(conn, "privat/toktrail")
+        child_area = ensure_area(conn, "privat/toktrail/tests")
+        ensure_area(conn, "work/odoo")
+        selection = resolve_area_filter_selection(conn, "toktrail")
+    finally:
+        conn.close()
+
+    assert selection.selector == "toktrail"
+    assert selection.area_match == "unique_suffix"
+    assert selection.matched_paths == ("privat/toktrail",)
+    assert selection.area_ids == (project_area.id, child_area.id)
+
+
+def test_resolve_area_filter_selection_suffix_ambiguous(tmp_path: Path) -> None:
+    conn = connect(tmp_path / "toktrail.db")
+    try:
+        migrate(conn)
+        ensure_area(conn, "privat/toktrail")
+        ensure_area(conn, "work/toktrail")
+        with pytest.raises(ValueError, match="Area selector 'toktrail' is ambiguous"):
+            resolve_area_filter_selection(conn, "toktrail")
+    finally:
+        conn.close()
+
+
+def test_resolve_area_filter_selection_leaf_matches_multiple_parents(
+    tmp_path: Path,
+) -> None:
+    conn = connect(tmp_path / "toktrail.db")
+    try:
+        migrate(conn)
+        toktrail_tests = ensure_area(conn, "privat/toktrail/tests")
+        toktrail_unit = ensure_area(conn, "privat/toktrail/tests/unit")
+        taskledger_tests = ensure_area(conn, "privat/taskledger/tests")
+        selection = resolve_area_filter_selection(conn, "tests", mode="leaf")
+    finally:
+        conn.close()
+
+    assert selection.selector == "tests"
+    assert selection.area_match == "leaf"
+    assert selection.matched_paths == (
+        "privat/taskledger/tests",
+        "privat/toktrail/tests",
+    )
+    assert selection.area_ids == tuple(
+        sorted((taskledger_tests.id, toktrail_tests.id, toktrail_unit.id))
+    )
+
+
+def test_resolve_area_filter_selection_leaf_exact_excludes_descendants(
+    tmp_path: Path,
+) -> None:
+    conn = connect(tmp_path / "toktrail.db")
+    try:
+        migrate(conn)
+        toktrail_tests = ensure_area(conn, "privat/toktrail/tests")
+        ensure_area(conn, "privat/toktrail/tests/unit")
+        taskledger_tests = ensure_area(conn, "privat/taskledger/tests")
+        selection = resolve_area_filter_selection(
+            conn,
+            "tests",
+            mode="leaf",
+            include_descendants=False,
+        )
+    finally:
+        conn.close()
+
+    assert selection.area_ids == tuple(sorted((taskledger_tests.id, toktrail_tests.id)))
 
 
 def test_usage_sessions_include_area_fields(tmp_path: Path) -> None:

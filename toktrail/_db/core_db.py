@@ -127,6 +127,14 @@ class Area:
 
 
 @dataclass(frozen=True)
+class ResolvedAreaSelection:
+    selector: str
+    area_match: str
+    matched_paths: tuple[str, ...]
+    area_ids: tuple[int, ...]
+
+
+@dataclass(frozen=True)
 class AreaSessionAssignment:
     id: int
     sync_id: str
@@ -2084,19 +2092,187 @@ def get_area_by_sync_id(conn: sqlite3.Connection, sync_id: str) -> Area | None:
     return _area_from_row(row)
 
 
-def resolve_area_selector(conn: sqlite3.Connection, selector: str) -> Area:
+def _list_active_areas_matching_suffix(
+    conn: sqlite3.Connection,
+    normalized_suffix: str,
+) -> tuple[Area, ...]:
+    rows = conn.execute(
+        """
+        SELECT
+            id,
+            sync_id,
+            parent_id,
+            slug,
+            name,
+            path,
+            archived_at_ms,
+            created_at_ms,
+            updated_at_ms,
+            imported_at_ms
+        FROM areas
+        WHERE archived_at_ms IS NULL
+          AND (path = ? OR path LIKE ?)
+        ORDER BY path ASC
+        """,
+        (normalized_suffix, f"%/{normalized_suffix}"),
+    ).fetchall()
+    return tuple(_area_from_row(row) for row in rows)
+
+
+def _list_active_areas_matching_leaf(
+    conn: sqlite3.Connection,
+    normalized_leaf: str,
+) -> tuple[Area, ...]:
+    rows = conn.execute(
+        """
+        SELECT
+            id,
+            sync_id,
+            parent_id,
+            slug,
+            name,
+            path,
+            archived_at_ms,
+            created_at_ms,
+            updated_at_ms,
+            imported_at_ms
+        FROM areas
+        WHERE archived_at_ms IS NULL
+          AND slug = ?
+        ORDER BY path ASC
+        """,
+        (normalized_leaf,),
+    ).fetchall()
+    return tuple(_area_from_row(row) for row in rows)
+
+
+def _resolve_area_selection_ids(
+    conn: sqlite3.Connection,
+    areas: Sequence[Area],
+    *,
+    include_descendants: bool,
+) -> tuple[int, ...]:
+    area_ids: set[int] = set()
+    for area in areas:
+        area_ids.update(
+            resolve_area_ids(
+                conn,
+                area.path,
+                include_descendants=include_descendants,
+            )
+        )
+    return tuple(sorted(area_ids))
+
+
+def resolve_area_filter_selection(
+    conn: sqlite3.Connection,
+    selector: str,
+    *,
+    include_descendants: bool = True,
+    mode: str = "auto",
+) -> ResolvedAreaSelection:
     raw = selector.strip()
     if not raw:
         msg = "Area selector must not be empty."
         raise ValueError(msg)
-    by_path = get_area_by_path(conn, raw)
-    if by_path is not None:
-        return by_path
+    if mode not in {"auto", "leaf"}:
+        msg = f"Unsupported area match mode: {mode!r}"
+        raise ValueError(msg)
+    if mode == "leaf":
+        normalized_leaf = normalize_identity(raw)
+        if not normalized_leaf:
+            msg = "Area leaf selector must not be empty."
+            raise ValueError(msg)
+        matches = _list_active_areas_matching_leaf(conn, normalized_leaf)
+        if not matches:
+            msg = f"No area leaf matched {selector!r}."
+            raise ValueError(msg)
+        return ResolvedAreaSelection(
+            selector=normalized_leaf,
+            area_match="leaf",
+            matched_paths=tuple(area.path for area in matches),
+            area_ids=_resolve_area_selection_ids(
+                conn,
+                matches,
+                include_descendants=include_descendants,
+            ),
+        )
+
+    normalized_selector: str | None = None
+    normalization_error: ValueError | None = None
+    try:
+        normalized_selector, _ = normalize_area_path(raw)
+    except ValueError as exc:
+        normalization_error = exc
+
+    if normalized_selector is not None:
+        by_path = get_area_by_path(conn, normalized_selector)
+        if by_path is not None:
+            return ResolvedAreaSelection(
+                selector=normalized_selector,
+                area_match="path",
+                matched_paths=(by_path.path,),
+                area_ids=resolve_area_ids(
+                    conn,
+                    by_path.path,
+                    include_descendants=include_descendants,
+                ),
+            )
+
     by_sync_id = get_area_by_sync_id(conn, raw)
     if by_sync_id is not None:
-        return by_sync_id
-    msg = f"Area not found: {selector}"
+        return ResolvedAreaSelection(
+            selector=raw,
+            area_match="sync_id",
+            matched_paths=(by_sync_id.path,),
+            area_ids=resolve_area_ids(
+                conn,
+                by_sync_id.path,
+                include_descendants=include_descendants,
+            ),
+        )
+
+    if normalization_error is not None or normalized_selector is None:
+        raise normalization_error or ValueError(f"Area not found: {selector}")
+
+    candidates = _list_active_areas_matching_suffix(conn, normalized_selector)
+    if len(candidates) == 1:
+        return ResolvedAreaSelection(
+            selector=normalized_selector,
+            area_match="unique_suffix",
+            matched_paths=(candidates[0].path,),
+            area_ids=resolve_area_ids(
+                conn,
+                candidates[0].path,
+                include_descendants=include_descendants,
+            ),
+        )
+    if len(candidates) > 1:
+        matches = ", ".join(area.path for area in candidates)
+        msg = (
+            f"Area selector {selector!r} is ambiguous. Matches: {matches}. "
+            "Use the full area path."
+        )
+        raise ValueError(msg)
+    msg = f"Area not found: {normalized_selector}"
     raise ValueError(msg)
+
+
+def resolve_area_selector(conn: sqlite3.Connection, selector: str) -> Area:
+    selection = resolve_area_filter_selection(
+        conn,
+        selector,
+        include_descendants=False,
+        mode="auto",
+    )
+    if len(selection.matched_paths) != 1:
+        msg = f"Area selector {selector!r} did not resolve to exactly one area."
+        raise ValueError(msg)
+    area = get_area_by_path(conn, selection.matched_paths[0])
+    if area is None:
+        msg = f"Area not found: {selection.matched_paths[0]}"
+        raise ValueError(msg)
+    return area
 
 
 def list_areas(
@@ -4679,9 +4855,7 @@ def summarize_usage_series(
                 "model_id": filters.model_id,
                 "thinking_level": filters.thinking_level,
                 "agent": filters.agent,
-                "area": usage_filters.area,
-                "area_exact": usage_filters.area_exact,
-                "unassigned_area": usage_filters.unassigned_area,
+                **_area_filter_payload(usage_filters),
                 "instances": filters.instances,
                 "breakdown": filters.breakdown,
                 "split_thinking": filters.split_thinking,
@@ -4974,9 +5148,7 @@ def summarize_usage_series(
         "model_id": filters.model_id,
         "thinking_level": filters.thinking_level,
         "agent": filters.agent,
-        "area": usage_filters.area,
-        "area_exact": usage_filters.area_exact,
-        "unassigned_area": usage_filters.unassigned_area,
+        **_area_filter_payload(usage_filters),
         "instances": filters.instances,
         "breakdown": filters.breakdown,
         "split_thinking": filters.split_thinking,
@@ -5294,9 +5466,7 @@ def summarize_usage_sessions(
         "thinking_level": filters.thinking_level,
         "agent": filters.agent,
         "split_thinking": filters.split_thinking,
-        "area": usage_filters.area,
-        "area_exact": usage_filters.area_exact,
-        "unassigned_area": usage_filters.unassigned_area,
+        **_area_filter_payload(usage_filters),
         "limit": filters.limit,
         "order": filters.order,
         "breakdown": filters.breakdown,
@@ -5443,9 +5613,7 @@ def summarize_usage_areas(
         "model_id": usage_filters.model_id,
         "thinking_level": usage_filters.thinking_level,
         "agent": usage_filters.agent,
-        "area": usage_filters.area,
-        "area_exact": usage_filters.area_exact,
-        "unassigned_area": usage_filters.unassigned_area,
+        **_area_filter_payload(usage_filters),
         "split_thinking": usage_filters.split_thinking,
     }
     return UsageAreasReport(
@@ -5493,13 +5661,32 @@ def _resolve_usage_area_filter(
         raise ValueError(msg)
     if filters.area is None:
         return filters
-    normalized_area, _ = normalize_area_path(filters.area)
-    area_ids = resolve_area_ids(
+    selection = resolve_area_filter_selection(
         conn,
-        normalized_area,
+        filters.area,
         include_descendants=not filters.area_exact,
+        mode=filters.area_match,
     )
-    return replace(filters, area=normalized_area, area_ids=area_ids)
+    return replace(
+        filters,
+        area=selection.selector,
+        area_match=selection.area_match,
+        area_matches=selection.matched_paths,
+        area_ids=selection.area_ids,
+    )
+
+
+def _area_filter_payload(filters: UsageReportFilter) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "area": filters.area,
+        "area_exact": filters.area_exact,
+        "unassigned_area": filters.unassigned_area,
+    }
+    if filters.area_match != "auto":
+        payload["area_match"] = filters.area_match
+    if filters.area_matches:
+        payload["area_matches"] = list(filters.area_matches)
+    return payload
 
 
 def _usage_where_parts(
@@ -6394,9 +6581,7 @@ def summarize_usage_runs(
         "model_id": filters.model_id,
         "thinking_level": filters.thinking_level,
         "agent": filters.agent,
-        "area": usage_filters.area,
-        "area_exact": usage_filters.area_exact,
-        "unassigned_area": usage_filters.unassigned_area,
+        **_area_filter_payload(usage_filters),
         "split_thinking": filters.split_thinking,
         "limit": filters.limit,
         "order": filters.order,

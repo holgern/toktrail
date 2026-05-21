@@ -57,8 +57,14 @@ class UsageReportFilter:
     until_ms: int | None = None
     split_thinking: bool = False
     area: str | None = None
+    area_match: str = "auto"
     area_exact: bool = False
     unassigned_area: bool = False
+    area_matches: tuple[str, ...] = field(
+        default_factory=tuple,
+        repr=False,
+        compare=False,
+    )
     area_ids: tuple[int, ...] = field(default_factory=tuple, repr=False, compare=False)
 
     def as_dict(
@@ -91,10 +97,14 @@ class UsageReportFilter:
             values["until_ms"] = self.until_ms
         if self.area is not None:
             values["area"] = self.area
+        if self.area_match != "auto":
+            values["area_match"] = self.area_match
         if self.area_exact:
             values["area_exact"] = True
         if self.unassigned_area:
             values["unassigned_area"] = True
+        if self.area_matches:
+            values["area_matches"] = list(self.area_matches)
         if self.split_thinking:
             values["split_thinking"] = True
         return values
@@ -550,8 +560,14 @@ class UsageSeriesFilter:
     until_ms: int | None = None
     split_thinking: bool = False
     area: str | None = None
+    area_match: str = "auto"
     area_exact: bool = False
     unassigned_area: bool = False
+    area_matches: tuple[str, ...] = field(
+        default_factory=tuple,
+        repr=False,
+        compare=False,
+    )
     instances: bool = False
     breakdown: bool = False
     start_of_week: str = "monday"
@@ -574,8 +590,10 @@ class UsageSeriesFilter:
             until_ms=self.until_ms,
             split_thinking=self.split_thinking,
             area=self.area,
+            area_match=self.area_match,
             area_exact=self.area_exact,
             unassigned_area=self.unassigned_area,
+            area_matches=self.area_matches,
         )
 
 
@@ -679,8 +697,14 @@ class UsageSessionsFilter:
     until_ms: int | None = None
     split_thinking: bool = False
     area: str | None = None
+    area_match: str = "auto"
     area_exact: bool = False
     unassigned_area: bool = False
+    area_matches: tuple[str, ...] = field(
+        default_factory=tuple,
+        repr=False,
+        compare=False,
+    )
     limit: int | None = 10
     order: str = "desc"
     breakdown: bool = False
@@ -699,8 +723,10 @@ class UsageSessionsFilter:
             until_ms=self.until_ms,
             split_thinking=self.split_thinking,
             area=self.area,
+            area_match=self.area_match,
             area_exact=self.area_exact,
             unassigned_area=self.unassigned_area,
+            area_matches=self.area_matches,
         )
 
 
@@ -790,8 +816,14 @@ class UsageRunsFilter:
     until_ms: int | None = None
     split_thinking: bool = False
     area: str | None = None
+    area_match: str = "auto"
     area_exact: bool = False
     unassigned_area: bool = False
+    area_matches: tuple[str, ...] = field(
+        default_factory=tuple,
+        repr=False,
+        compare=False,
+    )
     limit: int | None = 10
     order: str = "desc"
     last: bool = False
@@ -810,8 +842,10 @@ class UsageRunsFilter:
             until_ms=self.until_ms,
             split_thinking=self.split_thinking,
             area=self.area,
+            area_match=self.area_match,
             area_exact=self.area_exact,
             unassigned_area=self.unassigned_area,
+            area_matches=self.area_matches,
         )
 
 

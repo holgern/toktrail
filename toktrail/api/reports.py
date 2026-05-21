@@ -30,6 +30,23 @@ from toktrail.periods import resolve_time_range
 from toktrail.reporting import UsageReportFilter
 
 
+def _resolve_area_filter_inputs(
+    *,
+    area: str | None,
+    area_leaf: str | None,
+    unassigned_area: bool,
+) -> tuple[str | None, str]:
+    if sum(
+        bool(value)
+        for value in (area is not None, area_leaf is not None, unassigned_area)
+    ) > 1:
+        msg = "Use only one of area, area_leaf, or unassigned_area."
+        raise InvalidAPIUsageError(msg)
+    if area_leaf is not None:
+        return area_leaf, "leaf"
+    return area, "auto"
+
+
 def session_report(
     db_path: Path | None,
     session_id: int | None = None,
@@ -99,6 +116,7 @@ def usage_report(
     thinking_level: str | None = None,
     agent: str | None = None,
     area: str | None = None,
+    area_leaf: str | None = None,
     area_exact: bool = False,
     unassigned_area: bool = False,
     since_ms: int | None = None,
@@ -120,6 +138,11 @@ def usage_report(
         raise InvalidAPIUsageError(str(exc)) from exc
     effective_since_ms = resolved_range.since_ms if period is not None else since_ms
     effective_until_ms = resolved_range.until_ms if period is not None else until_ms
+    resolved_area, area_match = _resolve_area_filter_inputs(
+        area=area,
+        area_leaf=area_leaf,
+        unassigned_area=unassigned_area,
+    )
 
     conn, _ = _open_state_db(db_path)
     try:
@@ -134,7 +157,8 @@ def usage_report(
                 model_id=model_id,
                 thinking_level=thinking_level,
                 agent=agent,
-                area=area,
+                area=resolved_area,
+                area_match=area_match,
                 area_exact=area_exact,
                 unassigned_area=unassigned_area,
                 since_ms=effective_since_ms,
@@ -243,6 +267,7 @@ def usage_series_report(
     thinking_level: str | None = None,
     agent: str | None = None,
     area: str | None = None,
+    area_leaf: str | None = None,
     area_exact: bool = False,
     unassigned_area: bool = False,
     instances: bool = False,
@@ -258,6 +283,11 @@ def usage_series_report(
     from toktrail.periods import _resolve_timezone
     from toktrail.reporting import UsageSeriesFilter
 
+    resolved_area, area_match = _resolve_area_filter_inputs(
+        area=area,
+        area_leaf=area_leaf,
+        unassigned_area=unassigned_area,
+    )
     conn, _ = _open_state_db(db_path)
     try:
         migrate(conn)
@@ -278,7 +308,8 @@ def usage_series_report(
                 since_ms=since_ms,
                 until_ms=until_ms,
                 split_thinking=split_thinking,
-                area=area,
+                area=resolved_area,
+                area_match=area_match,
                 area_exact=area_exact,
                 unassigned_area=unassigned_area,
                 instances=instances,
@@ -336,6 +367,7 @@ def usage_sessions_report(
     thinking_level: str | None = None,
     agent: str | None = None,
     area: str | None = None,
+    area_leaf: str | None = None,
     area_exact: bool = False,
     unassigned_area: bool = False,
     limit: int | None = 10,
@@ -371,6 +403,11 @@ def usage_sessions_report(
     if limit is not None and limit < 0:
         msg = f"Invalid limit: {limit}. Must be non-negative."
         raise InvalidAPIUsageError(msg)
+    resolved_area, area_match = _resolve_area_filter_inputs(
+        area=area,
+        area_leaf=area_leaf,
+        unassigned_area=unassigned_area,
+    )
 
     conn, _ = _open_state_db(db_path)
     try:
@@ -387,7 +424,8 @@ def usage_sessions_report(
                 model_id=model_id,
                 thinking_level=thinking_level,
                 agent=agent,
-                area=area,
+                area=resolved_area,
+                area_match=area_match,
                 area_exact=area_exact,
                 unassigned_area=unassigned_area,
                 since_ms=effective_since_ms,
@@ -434,6 +472,7 @@ def usage_runs_report(
     thinking_level: str | None = None,
     agent: str | None = None,
     area: str | None = None,
+    area_leaf: str | None = None,
     area_exact: bool = False,
     unassigned_area: bool = False,
     limit: int | None = 10,
@@ -452,6 +491,11 @@ def usage_runs_report(
     if limit is not None and limit < 0:
         msg = f"Invalid limit: {limit}. Must be non-negative."
         raise InvalidAPIUsageError(msg)
+    resolved_area, area_match = _resolve_area_filter_inputs(
+        area=area,
+        area_leaf=area_leaf,
+        unassigned_area=unassigned_area,
+    )
 
     conn, _ = _open_state_db(db_path)
     try:
@@ -465,7 +509,8 @@ def usage_runs_report(
                 model_id=model_id,
                 thinking_level=thinking_level,
                 agent=agent,
-                area=area,
+                area=resolved_area,
+                area_match=area_match,
                 area_exact=area_exact,
                 unassigned_area=unassigned_area,
                 since_ms=since_ms,
@@ -501,6 +546,7 @@ def usage_areas_report(
     thinking_level: str | None = None,
     agent: str | None = None,
     area: str | None = None,
+    area_leaf: str | None = None,
     area_exact: bool = False,
     unassigned_area: bool = False,
     split_thinking: bool = False,
@@ -525,6 +571,11 @@ def usage_areas_report(
         raise InvalidAPIUsageError(str(exc)) from exc
     effective_since_ms = resolved_range.since_ms if period is not None else since_ms
     effective_until_ms = resolved_range.until_ms if period is not None else until_ms
+    resolved_area, area_match = _resolve_area_filter_inputs(
+        area=area,
+        area_leaf=area_leaf,
+        unassigned_area=unassigned_area,
+    )
 
     conn, _ = _open_state_db(db_path)
     try:
@@ -540,7 +591,8 @@ def usage_areas_report(
                 model_id=model_id,
                 thinking_level=thinking_level,
                 agent=agent,
-                area=area,
+                area=resolved_area,
+                area_match=area_match,
                 area_exact=area_exact,
                 unassigned_area=unassigned_area,
                 since_ms=effective_since_ms,

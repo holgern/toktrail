@@ -372,3 +372,125 @@ def test_cli_area_sessions_unassigned_json(tmp_path: Path) -> None:
     payload = json.loads(result.output)
     assert payload["sessions"]
     assert all(session["area_path"] is None for session in payload["sessions"])
+
+
+def test_cli_area_sessions_positional_selector_accepts_unique_suffix(
+    tmp_path: Path,
+) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    conn = connect(state_db)
+    try:
+        migrate(conn)
+        insert_usage_events(
+            conn,
+            None,
+            [
+                make_cli_usage_event(
+                    "area-suffix",
+                    source_session_id="ses-area-suffix",
+                    created_ms=_future_ms(),
+                    tokens=TokenBreakdown(input=10, output=2),
+                )
+            ],
+        )
+        machine_id = get_local_machine_id(conn)
+        area = ensure_area(conn, "privat/toktrail")
+        assign_area_to_source_session(
+            conn,
+            area_id=area.id,
+            origin_machine_id=machine_id,
+            harness="opencode",
+            source_session_id="ses-area-suffix",
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "area",
+            "sessions",
+            "toktrail",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert len(payload["sessions"]) == 1
+    assert payload["filters"]["area"] == "toktrail"
+    assert payload["filters"]["area_match"] == "unique_suffix"
+    assert payload["filters"]["area_matches"] == ["privat/toktrail"]
+
+
+def test_cli_area_sessions_accepts_area_leaf(tmp_path: Path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    conn = connect(state_db)
+    try:
+        migrate(conn)
+        insert_usage_events(
+            conn,
+            None,
+            [
+                make_cli_usage_event(
+                    "area-leaf-a",
+                    source_session_id="ses-area-leaf-a",
+                    created_ms=_future_ms(),
+                    tokens=TokenBreakdown(input=10, output=2),
+                ),
+                make_cli_usage_event(
+                    "area-leaf-b",
+                    source_session_id="ses-area-leaf-b",
+                    created_ms=_future_ms(),
+                    tokens=TokenBreakdown(input=8, output=1),
+                ),
+            ],
+        )
+        machine_id = get_local_machine_id(conn)
+        toktrail_tests = ensure_area(conn, "privat/toktrail/tests")
+        taskledger_tests = ensure_area(conn, "privat/taskledger/tests")
+        assign_area_to_source_session(
+            conn,
+            area_id=toktrail_tests.id,
+            origin_machine_id=machine_id,
+            harness="opencode",
+            source_session_id="ses-area-leaf-a",
+        )
+        assign_area_to_source_session(
+            conn,
+            area_id=taskledger_tests.id,
+            origin_machine_id=machine_id,
+            harness="opencode",
+            source_session_id="ses-area-leaf-b",
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "area",
+            "sessions",
+            "--area-leaf",
+            "tests",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert len(payload["sessions"]) == 2
+    assert payload["filters"]["area"] == "tests"
+    assert payload["filters"]["area_match"] == "leaf"
+    assert payload["filters"]["area_matches"] == [
+        "privat/taskledger/tests",
+        "privat/toktrail/tests",
+    ]

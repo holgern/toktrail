@@ -1478,7 +1478,191 @@ def test_cli_usage_summary_area_filters(tmp_path) -> None:
         ],
     )
     assert conflict_result.exit_code != 0
-    assert "Use either --area or --unassigned-area, not both." in conflict_result.output
+    assert (
+        "Use only one of --area, --area-leaf, or --unassigned-area."
+        in conflict_result.output
+    )
+
+
+def test_cli_usage_summary_area_unique_suffix_selector(tmp_path: Path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    conn = connect(state_db)
+    try:
+        migrate(conn)
+        insert_usage_events(
+            conn,
+            None,
+            [
+                make_cli_usage_event(
+                    "suffix-toktrail",
+                    source_session_id="ses-suffix-toktrail",
+                    created_ms=_future_ms(),
+                    tokens=TokenBreakdown(input=9, output=3),
+                ),
+                make_cli_usage_event(
+                    "suffix-work",
+                    source_session_id="ses-suffix-work",
+                    created_ms=_future_ms(),
+                    tokens=TokenBreakdown(input=5, output=1),
+                ),
+            ],
+        )
+        machine_id = get_local_machine_id(conn)
+        toktrail_area = ensure_area(conn, "privat/toktrail")
+        work_area = ensure_area(conn, "work/odoo")
+        assign_area_to_source_session(
+            conn,
+            area_id=toktrail_area.id,
+            origin_machine_id=machine_id,
+            harness="opencode",
+            source_session_id="ses-suffix-toktrail",
+        )
+        assign_area_to_source_session(
+            conn,
+            area_id=work_area.id,
+            origin_machine_id=machine_id,
+            harness="opencode",
+            source_session_id="ses-suffix-work",
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "usage",
+            "summary",
+            "--area",
+            "toktrail",
+            "--json",
+            "--no-refresh",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["totals"]["total"] == 12
+    assert payload["filters"]["area"] == "toktrail"
+    assert payload["filters"]["area_match"] == "unique_suffix"
+    assert payload["filters"]["area_matches"] == ["privat/toktrail"]
+
+
+def test_cli_usage_summary_area_unique_suffix_ambiguous(tmp_path: Path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    conn = connect(state_db)
+    try:
+        migrate(conn)
+        ensure_area(conn, "privat/toktrail")
+        ensure_area(conn, "work/toktrail")
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "usage",
+            "summary",
+            "--area",
+            "toktrail",
+            "--no-refresh",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "Area selector 'toktrail' is ambiguous." in result.output
+    assert "privat/toktrail" in result.output
+    assert "work/toktrail" in result.output
+
+
+def test_cli_usage_summary_area_leaf_selector(tmp_path: Path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    conn = connect(state_db)
+    try:
+        migrate(conn)
+        insert_usage_events(
+            conn,
+            None,
+            [
+                make_cli_usage_event(
+                    "leaf-a",
+                    source_session_id="ses-leaf-a",
+                    created_ms=_future_ms(),
+                    tokens=TokenBreakdown(input=4, output=1),
+                ),
+                make_cli_usage_event(
+                    "leaf-b",
+                    source_session_id="ses-leaf-b",
+                    created_ms=_future_ms(),
+                    tokens=TokenBreakdown(input=7, output=2),
+                ),
+                make_cli_usage_event(
+                    "leaf-docs",
+                    source_session_id="ses-leaf-docs",
+                    created_ms=_future_ms(),
+                    tokens=TokenBreakdown(input=30, output=5),
+                ),
+            ],
+        )
+        machine_id = get_local_machine_id(conn)
+        toktrail_tests = ensure_area(conn, "privat/toktrail/tests")
+        taskledger_tests = ensure_area(conn, "privat/taskledger/tests")
+        docs_area = ensure_area(conn, "privat/toktrail/docs")
+        assign_area_to_source_session(
+            conn,
+            area_id=toktrail_tests.id,
+            origin_machine_id=machine_id,
+            harness="opencode",
+            source_session_id="ses-leaf-a",
+        )
+        assign_area_to_source_session(
+            conn,
+            area_id=taskledger_tests.id,
+            origin_machine_id=machine_id,
+            harness="opencode",
+            source_session_id="ses-leaf-b",
+        )
+        assign_area_to_source_session(
+            conn,
+            area_id=docs_area.id,
+            origin_machine_id=machine_id,
+            harness="opencode",
+            source_session_id="ses-leaf-docs",
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "usage",
+            "summary",
+            "--area-leaf",
+            "tests",
+            "--json",
+            "--no-refresh",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["totals"]["total"] == 14
+    assert payload["filters"]["area"] == "tests"
+    assert payload["filters"]["area_match"] == "leaf"
+    assert payload["filters"]["area_matches"] == [
+        "privat/taskledger/tests",
+        "privat/toktrail/tests",
+    ]
 
 
 def test_cli_usage_sessions_table_shows_area_column(tmp_path) -> None:

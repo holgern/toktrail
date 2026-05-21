@@ -255,6 +255,7 @@ ModelOption = Annotated[str | None, typer.Option("--model")]
 ThinkingOption = Annotated[str | None, typer.Option("--thinking")]
 AgentOption = Annotated[str | None, typer.Option("--agent")]
 AreaOption = Annotated[str | None, typer.Option("--area")]
+AreaLeafOption = Annotated[str | None, typer.Option("--area-leaf")]
 AreaExactOption = Annotated[bool, typer.Option("--area-exact")]
 UnassignedAreaOption = Annotated[bool, typer.Option("--unassigned-area")]
 SinceMsOption = Annotated[int | None, typer.Option("--since-ms")]
@@ -826,6 +827,8 @@ def area_sessions(
         str | None,
         typer.Argument(help="Area path.", show_default=False),
     ] = None,
+    area: AreaOption = None,
+    area_leaf: AreaLeafOption = None,
     exact: Annotated[bool, typer.Option("--exact")] = False,
     unassigned: Annotated[bool, typer.Option("--unassigned")] = False,
     recent: Annotated[int, typer.Option("--recent")] = 20,
@@ -844,10 +847,16 @@ def area_sessions(
     json_output: JsonOption = False,
     rich_output: RichOption = False,
 ) -> None:
-    if path is not None and unassigned:
-        _exit_with_error("Use either an area path or --unassigned, not both.")
+    if path is not None and area is not None:
+        _exit_with_error("Use either the area path argument or --area, not both.")
     if recent < 1:
         _exit_with_error("--recent must be positive.")
+    selected_area_input = area if area is not None else path
+    selected_area, area_match = _resolve_area_filter_inputs_or_exit(
+        area=selected_area_input,
+        area_leaf=area_leaf,
+        unassigned_area=unassigned,
+    )
     selected_period = _resolve_usage_session_period_or_exit(
         period=period,
         today=today,
@@ -877,7 +886,8 @@ def area_sessions(
             UsageSessionsFilter(
                 machine_id=machine_id,
                 harness=harness,
-                area=path,
+                area=selected_area,
+                area_match=area_match,
                 area_exact=exact,
                 unassigned_area=unassigned,
                 since_ms=resolved_range.since_ms,
@@ -887,6 +897,8 @@ def area_sessions(
             ),
             costing_config=_load_costing_config_or_exit(ctx),
         )
+    except ValueError as exc:
+        _exit_with_error(str(exc))
     finally:
         conn.close()
     if json_output:
@@ -2001,6 +2013,7 @@ def usage(  # noqa: C901
     thinking_level: ThinkingOption = None,
     agent: AgentOption = None,
     area: AreaOption = None,
+    area_leaf: AreaLeafOption = None,
     area_exact: AreaExactOption = False,
     unassigned_area: UnassignedAreaOption = False,
     since: TimeBoundaryOption = None,
@@ -2044,10 +2057,13 @@ def usage(  # noqa: C901
 ) -> None:
     if timezone_name is not None and utc:
         _exit_with_error("Use either --timezone or --utc, not both.")
-    if area is not None and unassigned_area:
-        _exit_with_error("Use either --area or --unassigned-area, not both.")
     if direct and subtree:
         _exit_with_error("Use either --direct or --subtree, not both.")
+    selected_area, area_match = _resolve_area_filter_inputs_or_exit(
+        area=area,
+        area_leaf=area_leaf,
+        unassigned_area=unassigned_area,
+    )
     info_name = ctx.info_name
     if info_name is None:
         _exit_with_error("Missing usage subcommand.")
@@ -2083,7 +2099,8 @@ def usage(  # noqa: C901
             model_id=model_id,
             thinking_level=thinking_level,
             agent=agent,
-            area=area,
+            area=selected_area,
+            area_match=area_match,
             area_exact=area_exact,
             unassigned_area=unassigned_area,
             since=since,
@@ -2132,7 +2149,8 @@ def usage(  # noqa: C901
             model_id=model_id,
             thinking_level=thinking_level,
             agent=agent,
-            area=area,
+            area=selected_area,
+            area_match=area_match,
             area_exact=area_exact,
             unassigned_area=unassigned_area,
             since=since,
@@ -2184,7 +2202,8 @@ def usage(  # noqa: C901
             model_id=model_id,
             thinking_level=thinking_level,
             agent=agent,
-            area=area,
+            area=selected_area,
+            area_match=area_match,
             area_exact=area_exact,
             unassigned_area=unassigned_area,
             since=since,
@@ -2233,7 +2252,8 @@ def usage(  # noqa: C901
             model_id=model_id,
             thinking_level=thinking_level,
             agent=agent,
-            area=area,
+            area=selected_area,
+            area_match=area_match,
             area_exact=area_exact,
             unassigned_area=unassigned_area,
             since=since,
@@ -2286,7 +2306,8 @@ def usage(  # noqa: C901
             model_id=model_id,
             thinking_level=thinking_level,
             agent=agent,
-            area=area,
+            area=selected_area,
+            area_match=area_match,
             area_exact=area_exact,
             unassigned_area=unassigned_area,
             since=since,
@@ -2332,7 +2353,8 @@ def usage(  # noqa: C901
             model_id=model_id,
             thinking_level=thinking_level,
             agent=agent,
-            area=area,
+            area=selected_area,
+            area_match=area_match,
             area_exact=area_exact,
             unassigned_area=unassigned_area,
             since=since,
@@ -2422,6 +2444,24 @@ def _resolve_usage_session_period_or_exit(
     return value
 
 
+def _resolve_area_filter_inputs_or_exit(
+    *,
+    area: str | None,
+    area_leaf: str | None,
+    unassigned_area: bool,
+) -> tuple[str | None, str]:
+    if sum(
+        bool(value)
+        for value in (area is not None, area_leaf is not None, unassigned_area)
+    ) > 1:
+        _exit_with_error(
+            "Use only one of --area, --area-leaf, or --unassigned-area."
+        )
+    if area_leaf is not None:
+        return area_leaf, "leaf"
+    return area, "auto"
+
+
 def _usage_series(
     *,
     ctx: typer.Context,
@@ -2435,6 +2475,7 @@ def _usage_series(
     thinking_level: str | None,
     agent: str | None,
     area: str | None,
+    area_match: str,
     area_exact: bool,
     unassigned_area: bool,
     since: str | None,
@@ -2480,6 +2521,7 @@ def _usage_series(
                 thinking_level=thinking_level,
                 agent=agent,
                 area=area,
+                area_match=area_match,
                 area_exact=area_exact,
                 unassigned_area=unassigned_area,
                 since_ms=since_ms,
@@ -2495,6 +2537,8 @@ def _usage_series(
             ),
             costing_config=costing_config,
         )
+    except ValueError as exc:
+        _exit_with_error(str(exc))
     finally:
         conn.close()
 
@@ -2536,6 +2580,9 @@ def _print_usage_series(
         raise TypeError(msg)
 
     typer.echo(f"toktrail usage {report.granularity}")
+    area_filter_summary = _format_area_filter_summary(report.filters)
+    if area_filter_summary is not None:
+        typer.echo(area_filter_summary)
     if instances:
         for instance in report.instances:
             typer.echo(f"\nInstance: {instance.instance_label}")
@@ -2766,6 +2813,7 @@ def _usage_machines(
     thinking_level: str | None,
     agent: str | None,
     area: str | None,
+    area_match: str,
     area_exact: bool,
     unassigned_area: bool,
     since: str | None,
@@ -2802,6 +2850,7 @@ def _usage_machines(
                 thinking_level=thinking_level,
                 agent=agent,
                 area=area,
+                area_match=area_match,
                 area_exact=area_exact,
                 unassigned_area=unassigned_area,
                 since_ms=resolved_range.since_ms,
@@ -2810,6 +2859,8 @@ def _usage_machines(
             ),
             costing_config=costing_config,
         )
+    except ValueError as exc:
+        _exit_with_error(str(exc))
     finally:
         conn.close()
 
@@ -2923,6 +2974,7 @@ def _usage_sessions(
     thinking_level: str | None,
     agent: str | None,
     area: str | None,
+    area_match: str,
     area_exact: bool,
     unassigned_area: bool,
     since: str | None,
@@ -2981,6 +3033,7 @@ def _usage_sessions(
                 thinking_level=thinking_level,
                 agent=agent,
                 area=area,
+                area_match=area_match,
                 area_exact=area_exact,
                 unassigned_area=unassigned_area,
                 since_ms=resolved_range.since_ms,
@@ -2992,6 +3045,8 @@ def _usage_sessions(
             ),
             costing_config=costing_config,
         )
+    except ValueError as exc:
+        _exit_with_error(str(exc))
     finally:
         conn.close()
 
@@ -3309,6 +3364,7 @@ def _usage_runs(
     thinking_level: str | None,
     agent: str | None,
     area: str | None,
+    area_match: str,
     area_exact: bool,
     unassigned_area: bool,
     since: str | None,
@@ -3344,6 +3400,7 @@ def _usage_runs(
                 thinking_level=thinking_level,
                 agent=agent,
                 area=area,
+                area_match=area_match,
                 area_exact=area_exact,
                 unassigned_area=unassigned_area,
                 since_ms=since_ms,
@@ -3357,6 +3414,8 @@ def _usage_runs(
             ),
             costing_config=costing_config,
         )
+    except ValueError as exc:
+        _exit_with_error(str(exc))
     finally:
         conn.close()
 
@@ -3494,6 +3553,7 @@ def _usage_areas(
     thinking_level: str | None,
     agent: str | None,
     area: str | None,
+    area_match: str,
     area_exact: bool,
     unassigned_area: bool,
     since: str | None,
@@ -3535,6 +3595,7 @@ def _usage_areas(
                 thinking_level=thinking_level,
                 agent=agent,
                 area=area,
+                area_match=area_match,
                 area_exact=area_exact,
                 unassigned_area=unassigned_area,
                 since_ms=resolved_range.since_ms,
@@ -3543,6 +3604,8 @@ def _usage_areas(
             ),
             costing_config=costing_config,
         )
+    except ValueError as exc:
+        _exit_with_error(str(exc))
     finally:
         conn.close()
 
@@ -3787,14 +3850,45 @@ def _format_area_filter_summary(filters: object) -> str | None:
             return filters.get(key)
         return getattr(filters, key, None)
 
+    def _matches() -> tuple[str, ...]:
+        raw_matches = _value("area_matches")
+        if isinstance(raw_matches, (list, tuple)):
+            return tuple(str(item) for item in raw_matches)
+        return ()
+
+    def _preview(matches: tuple[str, ...]) -> str:
+        shown = ", ".join(matches[:3])
+        if len(matches) > 3:
+            shown = f"{shown}, ..."
+        return shown
+
     if bool(_value("unassigned_area")):
         return "Area filter: unassigned only"
     area_value = _value("area")
     if not isinstance(area_value, str) or not area_value:
         return None
+    area_match = _value("area_match")
+    matches = _matches()
+    if area_match == "leaf":
+        if matches:
+            return (
+                f"Area filter: leaf {area_value} "
+                f"({len(matches)} matches: {_preview(matches)})"
+            )
+        return f"Area filter: leaf {area_value}"
+    display_area = matches[0] if len(matches) == 1 else area_value
+    detail: str | None = None
+    if area_match == "unique_suffix" and display_area != area_value:
+        detail = f"resolved from selector {area_value}"
+    elif area_match == "sync_id" and display_area != area_value:
+        detail = f"resolved from sync id {area_value}"
     if bool(_value("area_exact")):
-        return f"Area filter: {area_value} (exact only)"
-    return f"Area filter: {area_value} (including descendants)"
+        if detail is not None:
+            return f"Area filter: {display_area} ({detail}; exact only)"
+        return f"Area filter: {display_area} (exact only)"
+    if detail is not None:
+        return f"Area filter: {display_area} ({detail}; including descendants)"
+    return f"Area filter: {display_area} (including descendants)"
 
 
 def _print_unassigned_area_warning(
@@ -3840,6 +3934,7 @@ def _usage_aggregate(
     thinking_level: str | None,
     agent: str | None,
     area: str | None,
+    area_match: str,
     area_exact: bool,
     unassigned_area: bool,
     since: str | None,
@@ -3890,6 +3985,7 @@ def _usage_aggregate(
             thinking_level=thinking_level,
             agent=agent,
             area=area,
+            area_match=area_match,
             area_exact=area_exact,
             unassigned_area=unassigned_area,
             since_ms=resolved_range.since_ms,
@@ -3908,6 +4004,8 @@ def _usage_aggregate(
                 costing_config=costing_config,
             )
             unassigned_total = unassigned_report.totals.tokens.total
+    except ValueError as exc:
+        _exit_with_error(str(exc))
     finally:
         conn.close()
 

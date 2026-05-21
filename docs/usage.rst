@@ -223,7 +223,9 @@ Session usage by period
    toktrail usage areas --today --direct
    toktrail usage areas --today --leaves --percent --share-by tokens
    toktrail usage summary --area work
+   toktrail usage summary --area toktrail
    toktrail usage summary --area work --area-exact
+   toktrail usage summary --area-leaf tests
    toktrail usage summary --unassigned-area
 
 The default sessions output is line-based. Use ``--table`` for the wide tabular
@@ -244,6 +246,8 @@ Areas provide a persistent hierarchy for usage classification.
    toktrail area assign work/odoo --session "pc1/opencode/ses-1"
    toktrail area unassign --harness opencode --source-session-id ses-1
    toktrail area sessions --unassigned --today
+   toktrail area sessions --area toktrail --today
+   toktrail area sessions --area-leaf tests --today
    toktrail area bulk-assign work/odoo --unassigned --today --dry-run
    toktrail area bulk-assign work/odoo --unassigned --today --apply
    toktrail area detect
@@ -258,8 +262,16 @@ Key behavior:
   and ``area sessions``.
 - ``toktrail area assign --last`` defaults to the local machine; use
   ``--all-machines`` to restore global latest-session behavior.
-- ``--area <path>`` includes descendants by default.
+- ``toktrail area sessions`` also accepts ``--area <selector>`` and
+  ``--area-leaf <name>``. The positional area argument remains supported for
+  exact paths and unique suffixes.
+- ``--area <path>`` includes descendants by default. If the selector is not an
+  exact path, toktrail resolves a unique path suffix such as
+  ``--area toktrail`` to the matching full path and raises an ambiguity error
+  when multiple paths match.
 - ``--area-exact`` matches only the exact area path.
+- ``--area-leaf <name>`` reports matching leaf areas across different parents,
+  for example ``--area-leaf tests``.
 - ``--unassigned-area`` filters events with no area assignment.
 - ``toktrail usage areas`` exposes direct-vs-subtree totals in both JSON and
   human output.
