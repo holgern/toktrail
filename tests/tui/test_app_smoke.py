@@ -7,6 +7,8 @@ from toktrail.api.config import init_config
 from toktrail.api.sessions import init_state
 from toktrail.tui.app import ToktrailTuiApp
 
+pytestmark = pytest.mark.asyncio
+
 
 def _make_app(tmp_path) -> ToktrailTuiApp:
     db_path = tmp_path / "toktrail.db"
@@ -29,3 +31,4 @@ async def test_tui_opens_dashboard(tmp_path) -> None:
         await pilot.pause()
         assert app.query_one("#dashboard") is not None
         assert app.query_one("#content").current == "dashboard"
+        assert "Top providers" in app._dashboard.get_export_text()

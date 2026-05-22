@@ -7,6 +7,36 @@ Screen {
   border: round $panel;
 }
 
+#dashboard,
+#sessions,
+#areas,
+#prices,
+#config {
+  height: 1fr;
+  width: 100%;
+}
+
+#sessions,
+#areas,
+#prices {
+  layout: vertical;
+}
+
+#sessions-table,
+#areas-table,
+#prices-configured-table,
+#prices-unconfigured-table {
+  height: 1fr;
+}
+
+#sessions-detail,
+#areas-detail,
+#prices-detail {
+  height: auto;
+  border-top: heavy $panel;
+  padding: 0 1;
+}
+
 #status {
   height: auto;
   padding: 0 1;

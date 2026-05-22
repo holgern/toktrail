@@ -1,6 +1,9 @@
 # mypy: ignore-errors
 from __future__ import annotations
 
+import os
+import shutil
+import subprocess
 from pathlib import Path
 
 from textual.app import App, ComposeResult
@@ -37,6 +40,8 @@ class ToktrailTuiApp(App[None]):
         Binding("l", "assign_latest", "Assign latest"),
         Binding("s", "assign_selected_session", "Assign selected"),
         Binding("e", "edit_selected_price", "Edit price"),
+        Binding("y", "copy_current_view", "Copy"),
+        Binding("Y", "export_current_view", "Export"),
         Binding("question_mark", "help", "Help"),
         Binding("q", "quit", "Quit"),
     ]
@@ -82,6 +87,7 @@ class ToktrailTuiApp(App[None]):
             Tab("Areas", id="tab-areas"),
             Tab("Prices", id="tab-prices"),
             Tab("Config", id="tab-config"),
+            active="tab-dashboard",
             id="tabs",
         )
         yield ContentSwitcher(
@@ -110,10 +116,20 @@ class ToktrailTuiApp(App[None]):
         tabs = self.query_one("#tabs", Tabs)
         tabs.active = f"tab-{pane_id}"
 
+    def on_tabs_tab_activated(self, event: Tabs.TabActivated) -> None:
+        tab_id = event.tab.id
+        if not isinstance(tab_id, str):
+            return
+        if not tab_id.startswith("tab-"):
+            return
+        content = self.query_one("#content", ContentSwitcher)
+        content.current = tab_id.removeprefix("tab-")
+
     def action_help(self) -> None:
         self._status.update(
             "1-5 switch panes, r refresh, q quit, "
-            "areas: create/set/clear/assign latest/assign selected, prices: edit"
+            "areas: create/set/clear/assign latest/assign selected, prices: edit, "
+            "y copy, Y export"
         )
 
     def action_refresh(self) -> None:
@@ -172,6 +188,32 @@ class ToktrailTuiApp(App[None]):
             return
         self.push_screen(PriceFormScreen(seed), self._on_price_saved)
 
+    def action_copy_current_view(self) -> None:
+        pane_id, text = self._current_pane_text()
+        if not text.strip():
+            self._status.update("Current view is empty.")
+            return
+        copied = self._copy_to_clipboard(text)
+        fallback = self._copy_fallback_path()
+        fallback.parent.mkdir(parents=True, exist_ok=True)
+        fallback.write_text(text, encoding="utf-8")
+        if copied:
+            self._status.update(f"Copied {pane_id} view to clipboard.")
+            return
+        self._status.update(
+            f"Clipboard unavailable; wrote copy fallback to {fallback}."
+        )
+
+    def action_export_current_view(self) -> None:
+        pane_id, text = self._current_pane_text()
+        if not text.strip():
+            self._status.update("Current view is empty.")
+            return
+        export_path = self._export_dir() / f"toktrail-{pane_id}.txt"
+        export_path.parent.mkdir(parents=True, exist_ok=True)
+        export_path.write_text(text, encoding="utf-8")
+        self._status.update(f"Exported current view: {export_path}")
+
     def _on_area_form_saved(self, value: str | None) -> None:
         if not value:
             self._status.update("Area creation cancelled.")
@@ -198,3 +240,59 @@ class ToktrailTuiApp(App[None]):
         self._areas.set_data(self.service.areas())
         self._prices.set_data(self.service.prices())
         self._config.set_data(self.service.config())
+
+    def _current_pane_text(self) -> tuple[str, str]:
+        content = self.query_one("#content", ContentSwitcher)
+        pane_id = content.current or "dashboard"
+        pane = self.query_one(f"#{pane_id}")
+        if hasattr(pane, "get_export_text"):
+            value = pane.get_export_text()
+            if isinstance(value, str):
+                return pane_id, value
+        return pane_id, str(pane)
+
+    def _export_dir(self) -> Path:
+        xdg_cache_home = os.environ.get("XDG_CACHE_HOME")
+        if xdg_cache_home:
+            return Path(xdg_cache_home).expanduser() / "toktrail" / "exports"
+        return Path.home() / ".cache" / "toktrail" / "exports"
+
+    def _copy_fallback_path(self) -> Path:
+        xdg_cache_home = os.environ.get("XDG_CACHE_HOME")
+        if xdg_cache_home:
+            return Path(xdg_cache_home).expanduser() / "toktrail" / "tui-last-view.txt"
+        return Path.home() / ".cache" / "toktrail" / "tui-last-view.txt"
+
+    def _copy_to_clipboard(self, text: str) -> bool:
+        wayland = os.environ.get("WAYLAND_DISPLAY")
+        display = os.environ.get("DISPLAY")
+        if wayland and self._run_clipboard(["wl-copy"], text):
+            return True
+        if display and self._run_clipboard(["xclip", "-selection", "clipboard"], text):
+            return True
+        if display and self._run_clipboard(["xsel", "--clipboard", "--input"], text):
+            return True
+        if self._run_clipboard(["pbcopy"], text):
+            return True
+        if self._run_clipboard(["clip.exe"], text):
+            return True
+        return self._run_clipboard(
+            ["powershell.exe", "-NoProfile", "-Command", "Set-Clipboard"],
+            text,
+        )
+
+    def _run_clipboard(self, command: list[str], text: str) -> bool:
+        executable = command[0]
+        if shutil.which(executable) is None:
+            return False
+        try:
+            subprocess.run(
+                command,
+                input=text,
+                text=True,
+                check=True,
+                capture_output=True,
+            )
+        except (subprocess.CalledProcessError, OSError):
+            return False
+        return True

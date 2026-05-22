@@ -7,22 +7,25 @@ import pytest
 
 pytest.importorskip("textual")
 
-from tests.helpers import VALID_ASSISTANT, create_opencode_db, insert_message
 from toktrail.api.config import init_config
 from toktrail.api.imports import import_usage
 from toktrail.api.prices import list_unconfigured_models
 from toktrail.api.sessions import init_state
 from toktrail.tui.app import ToktrailTuiApp
 
+from ..helpers import VALID_ASSISTANT, create_opencode_db, insert_message
 
-def _future_assistant() -> dict[str, object]:
+pytestmark = pytest.mark.asyncio
+
+
+def _future_assistant(*, provider: str, model: str) -> dict[str, object]:
     assistant = deepcopy(VALID_ASSISTANT)
     created_ms = float(int(datetime.now(timezone.utc).timestamp() * 1000) + 60_000)
     time_block = assistant["time"]
     assert isinstance(time_block, dict)
     time_block["created"] = created_ms
-    assistant["providerID"] = "openai-codex"
-    assistant["modelID"] = "gpt-5.3-codex"
+    assistant["providerID"] = provider
+    assistant["modelID"] = model
     return assistant
 
 
@@ -33,7 +36,18 @@ def _make_seeded_app(tmp_path) -> ToktrailTuiApp:
     init_state(db_path)
     init_config(config_path, template="copilot")
     conn = create_opencode_db(source_db)
-    insert_message(conn, row_id="row-1", session_id="ses-1", data=_future_assistant())
+    insert_message(
+        conn,
+        row_id="row-1",
+        session_id="ses-1",
+        data=_future_assistant(provider="unknown-a", model="unknown-model-a"),
+    )
+    insert_message(
+        conn,
+        row_id="row-2",
+        session_id="ses-2",
+        data=_future_assistant(provider="unknown-b", model="unknown-model-b"),
+    )
     conn.commit()
     conn.close()
     import_usage(db_path, "opencode", source_path=source_db, use_active_session=False)
@@ -51,6 +65,14 @@ async def test_upsert_price_from_unconfigured_seed(tmp_path) -> None:
     app = _make_seeded_app(tmp_path)
     async with app.run_test(size=(120, 40)) as pilot:
         app._refresh_views()
+        table = app.query_one("#prices-unconfigured-table")
+        assert table.row_count >= 1
+        selected_index = 1 if table.row_count > 1 else 0
+        second = table.ordered_rows[selected_index]
+        app._prices.on_data_table_row_highlighted(
+            table.RowHighlighted(table, selected_index, second.key)
+        )
+        assert app._prices.selected_unconfigured is not None
         seed = app._prices.seed_manual_price_row()
         assert seed is not None
         saved_path = app.service.upsert_manual_price(

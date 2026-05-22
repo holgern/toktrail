@@ -9,7 +9,6 @@ pytest.importorskip("textual")
 
 from toktrail.api.config import init_config
 from toktrail.api.imports import import_usage
-from toktrail.api.reports import usage_sessions_report
 from toktrail.api.sessions import init_state
 from toktrail.tui.app import ToktrailTuiApp
 
@@ -24,6 +23,8 @@ def _future_assistant() -> dict[str, object]:
     time_block = assistant["time"]
     assert isinstance(time_block, dict)
     time_block["created"] = created_ms
+    assistant["providerID"] = "openai-codex"
+    assistant["modelID"] = "gpt-5.3-codex"
     return assistant
 
 
@@ -48,34 +49,17 @@ def _make_seeded_app(tmp_path) -> ToktrailTuiApp:
     )
 
 
-async def test_create_set_clear_and_assign_latest_area(tmp_path) -> None:
+async def test_export_current_view_writes_copyable_file(tmp_path, monkeypatch) -> None:
     app = _make_seeded_app(tmp_path)
+    export_dir = tmp_path / "exports"
+    monkeypatch.setattr(app, "_export_dir", lambda: export_dir)
     async with app.run_test(size=(120, 40)) as pilot:
-        app.service.create_area("private/toktrail")
-        app.service.create_area("work/odoo19")
-        app._refresh_views()
-        areas_table = app.query_one("#areas-table")
-        work_row_index = next(
-            idx
-            for idx, row in enumerate(areas_table.ordered_rows)
-            if row.key.value == "work/odoo19"
-        )
-        work_row = areas_table.ordered_rows[work_row_index]
-        app._areas.on_data_table_row_highlighted(
-            areas_table.RowHighlighted(areas_table, work_row_index, work_row.key)
-        )
-        assert app._areas.selected_area_path == "work/odoo19"
-        app.action_set_active_area()
-        app.action_assign_latest()
+        await pilot.press("2")
         await pilot.pause()
-        sessions = usage_sessions_report(
-            app.state.db_path,
-            period="today",
-            config_path=app.state.config_path,
-            limit=1,
-        )
-        assert sessions.sessions[0].area_path == "work/odoo19"
-        app._refresh_views()
-        assert app._areas.selected_area_path == "work/odoo19"
-        app.action_clear_active_area()
+        await pilot.press("Y")
         await pilot.pause()
+        exported = export_dir / "toktrail-sessions.txt"
+        assert exported.exists()
+        text = exported.read_text(encoding="utf-8")
+        assert "opencode" in text
+        assert "tokens" in text.lower()

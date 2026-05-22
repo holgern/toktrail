@@ -15,13 +15,20 @@ from toktrail.api.areas import (
 )
 from toktrail.api.config import config_summary
 from toktrail.api.imports import import_configured_usage
-from toktrail.api.models import PriceRow, UnconfiguredModelRow
+from toktrail.api.models import (
+    AreaSummaryRow,
+    ModelSummaryRow,
+    PriceRow,
+    ProviderSummaryRow,
+    UnconfiguredModelRow,
+    UsageSessionRow,
+)
 from toktrail.api.prices import (
     list_prices,
     list_unconfigured_models,
     upsert_manual_price,
 )
-from toktrail.api.reports import usage_report, usage_sessions_report
+from toktrail.api.reports import usage_areas_report, usage_report, usage_sessions_report
 from toktrail.errors import InvalidAPIUsageError
 from toktrail.tui.state import ToktrailTuiState
 
@@ -29,8 +36,13 @@ from toktrail.tui.state import ToktrailTuiState
 @dataclass(frozen=True)
 class DashboardData:
     total_tokens: int
+    actual_cost_usd: float
+    virtual_cost_usd: float
+    savings_usd: float
     active_area: str | None
     unpriced_count: int
+    top_providers: tuple[ProviderSummaryRow, ...]
+    top_models: tuple[ModelSummaryRow, ...]
     config_path: str
     prices_path: str
     subscriptions_path: str
@@ -38,13 +50,14 @@ class DashboardData:
 
 @dataclass(frozen=True)
 class SessionsData:
-    session_keys: tuple[str, ...]
+    sessions: tuple[UsageSessionRow, ...]
 
 
 @dataclass(frozen=True)
 class AreasData:
     area_paths: tuple[str, ...]
     active_area: str | None
+    usage_rows: tuple[AreaSummaryRow, ...]
 
 
 @dataclass(frozen=True)
@@ -74,8 +87,13 @@ class ToktrailTuiService:
         summary = config_summary(self.state.config_path)
         return DashboardData(
             total_tokens=report.totals.tokens.total,
+            actual_cost_usd=float(report.totals.costs.actual_cost_usd),
+            virtual_cost_usd=float(report.totals.costs.virtual_cost_usd),
+            savings_usd=float(report.totals.costs.savings_usd),
             active_area=None if active is None else active.path,
             unpriced_count=report.totals.costs.unpriced_count,
+            top_providers=tuple(report.by_provider[:3]),
+            top_models=tuple(report.by_model[:3]),
             config_path=str(summary["config_path"]),
             prices_path=str(summary["manual_prices_path"]),
             subscriptions_path=str(summary["subscriptions_path"]),
@@ -90,14 +108,22 @@ class ToktrailTuiService:
             config_path=self.state.config_path,
             limit=50,
         )
-        return SessionsData(session_keys=tuple(row.key for row in report.sessions))
+        return SessionsData(sessions=tuple(report.sessions))
 
     def areas(self) -> AreasData:
         status = get_active_area_status(self.state.db_path)
         areas = list_areas(self.state.db_path)
+        usage = usage_areas_report(
+            self.state.db_path,
+            period="today",
+            timezone=self.state.timezone_name,
+            utc=self.state.utc,
+            config_path=self.state.config_path,
+        )
         return AreasData(
             area_paths=tuple(area.path for area in areas),
             active_area=None if status.area is None else status.area.path,
+            usage_rows=tuple(usage.areas),
         )
 
     def prices(self) -> PricesData:
