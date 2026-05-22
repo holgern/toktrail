@@ -5,6 +5,7 @@ import os
 import shutil
 import subprocess
 from pathlib import Path
+from typing import cast
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -19,7 +20,7 @@ from toktrail.tui.panes.sessions import SessionsPane
 from toktrail.tui.screens.area_form import AreaFormScreen
 from toktrail.tui.screens.confirm import ConfirmScreen
 from toktrail.tui.screens.price_form import PriceFormScreen
-from toktrail.tui.services import ToktrailTuiService
+from toktrail.tui.services import DashboardView, ToktrailTuiService
 from toktrail.tui.state import ToktrailTuiState
 
 
@@ -33,6 +34,9 @@ class ToktrailTuiApp(App[None]):
         Binding("3", "switch_pane('areas')", "Areas", show=False),
         Binding("4", "switch_pane('prices')", "Prices", show=False),
         Binding("5", "switch_pane('config')", "Config", show=False),
+        Binding("t", "switch_dashboard('today')", "Today", show=False),
+        Binding("d", "switch_dashboard('daily')", "Daily", show=False),
+        Binding("w", "switch_dashboard('weekly')", "Weekly", show=False),
         Binding("r", "refresh", "Refresh"),
         Binding("a", "create_area", "Create area"),
         Binding("u", "set_active_area", "Use area"),
@@ -78,6 +82,7 @@ class ToktrailTuiApp(App[None]):
         self._prices = PricesPane(id="prices")
         self._config = ConfigPane(id="config")
         self._status = Static("", id="status")
+        self._dashboard_view: DashboardView = "today"
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -127,7 +132,7 @@ class ToktrailTuiApp(App[None]):
 
     def action_help(self) -> None:
         self._status.update(
-            "1-5 switch panes, r refresh, q quit, "
+            "1-5 switch panes, t/d/w switch dashboard, r refresh, q quit, "
             "areas: create/set/clear/assign latest/assign selected, prices: edit, "
             "y copy, Y export"
         )
@@ -188,6 +193,15 @@ class ToktrailTuiApp(App[None]):
             return
         self.push_screen(PriceFormScreen(seed), self._on_price_saved)
 
+    def action_switch_dashboard(self, view: str) -> None:
+        if view not in {"today", "daily", "weekly"}:
+            self._status.update(f"Unknown dashboard: {view}")
+            return
+        self._dashboard_view = cast(DashboardView, view)
+        self._dashboard.set_data(self.service.dashboard(self._dashboard_view))
+        self.action_switch_pane("dashboard")
+        self._status.update(f"Dashboard view: {view}")
+
     def action_copy_current_view(self) -> None:
         pane_id, text = self._current_pane_text()
         if not text.strip():
@@ -235,7 +249,7 @@ class ToktrailTuiApp(App[None]):
         self._status.update(f"Saved to {written}")
 
     def _refresh_views(self) -> None:
-        self._dashboard.set_data(self.service.dashboard())
+        self._dashboard.set_data(self.service.dashboard(self._dashboard_view))
         self._sessions.set_data(self.service.sessions())
         self._areas.set_data(self.service.areas())
         self._prices.set_data(self.service.prices())

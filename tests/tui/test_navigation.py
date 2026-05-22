@@ -48,3 +48,25 @@ async def test_clicking_tabs_switches_content(tmp_path) -> None:
         await pilot.click("#tab-prices")
         await pilot.pause()
         assert app.query_one("#content").current == "prices"
+
+
+async def test_switch_dashboard_views_with_keys(tmp_path) -> None:
+    app = _make_app(tmp_path)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.press("d")
+        await pilot.pause()
+        assert app.query_one("#content").current == "dashboard"
+        assert "Dashboard: Daily" in app._dashboard.get_export_text()
+        assert "Daily usage" in app._dashboard.get_export_text()
+
+        await pilot.press("w")
+        await pilot.pause()
+        assert app.query_one("#content").current == "dashboard"
+        assert "Dashboard: Weekly" in app._dashboard.get_export_text()
+        assert "Weekly usage" in app._dashboard.get_export_text()
+
+        await pilot.press("t")
+        await pilot.pause()
+        assert app.query_one("#content").current == "dashboard"
+        assert "Dashboard: Today" in app._dashboard.get_export_text()
+        assert "Top providers" in app._dashboard.get_export_text()

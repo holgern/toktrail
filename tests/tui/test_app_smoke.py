@@ -31,4 +31,5 @@ async def test_tui_opens_dashboard(tmp_path) -> None:
         await pilot.pause()
         assert app.query_one("#dashboard") is not None
         assert app.query_one("#content").current == "dashboard"
+        assert "Dashboard: Today" in app._dashboard.get_export_text()
         assert "Top providers" in app._dashboard.get_export_text()

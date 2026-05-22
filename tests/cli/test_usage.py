@@ -1282,6 +1282,42 @@ def test_cli_usage_daily_rich_output(tmp_path) -> None:
         assert "toktrail usage daily" in rich.output
 
 
+def test_cli_usage_day_and_week_aliases(tmp_path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    source_db = tmp_path / "opencode.db"
+    create_source_db(source_db)
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    refresh = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "refresh",
+            "--harness",
+            "opencode",
+            "--source",
+            str(source_db),
+        ],
+    )
+    assert refresh.exit_code == 0, refresh.output
+
+    day = runner.invoke(
+        app,
+        ["--db", str(state_db), "usage", "day", "--json", "--no-refresh"],
+    )
+    assert day.exit_code == 0, day.output
+    assert json.loads(day.output)["filters"]["period"] == "today"
+
+    week = runner.invoke(
+        app,
+        ["--db", str(state_db), "usage", "week", "--json", "--no-refresh"],
+    )
+    assert week.exit_code == 0, week.output
+    assert json.loads(week.output)["filters"]["period"] == "this-week"
+
+
 def test_cli_usage_runs_json_shape(tmp_path) -> None:
     runner = CliRunner()
     state_db = tmp_path / "toktrail.db"

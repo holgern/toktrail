@@ -2022,8 +2022,10 @@ def stats(
 @usage_app.command("weekly")
 @usage_app.command("monthly")
 @usage_app.command("summary")
+@usage_app.command("day")
 @usage_app.command("today")
 @usage_app.command("yesterday")
+@usage_app.command("week")
 @usage_app.command("this-week")
 @usage_app.command("last-week")
 @usage_app.command("this-month")
@@ -2098,6 +2100,11 @@ def usage(  # noqa: C901
     if info_name is None:
         _exit_with_error("Missing usage subcommand.")
     normalized_view = info_name.strip().lower()
+    view_aliases = {
+        "day": "today",
+        "week": "this-week",
+    }
+    normalized_view = view_aliases.get(normalized_view, normalized_view)
     series_views = {"daily", "weekly", "monthly"}
     named_periods = {
         "today",

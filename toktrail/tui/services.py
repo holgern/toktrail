@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from toktrail.api.areas import (
     assign_area_to_session,
@@ -21,6 +22,7 @@ from toktrail.api.models import (
     PriceRow,
     ProviderSummaryRow,
     UnconfiguredModelRow,
+    UsageSeriesBucket,
     UsageSessionRow,
 )
 from toktrail.api.prices import (
@@ -28,13 +30,20 @@ from toktrail.api.prices import (
     list_unconfigured_models,
     upsert_manual_price,
 )
-from toktrail.api.reports import usage_areas_report, usage_report, usage_sessions_report
+from toktrail.api.reports import (
+    usage_areas_report,
+    usage_report,
+    usage_series_report,
+    usage_sessions_report,
+)
 from toktrail.errors import InvalidAPIUsageError
 from toktrail.tui.state import ToktrailTuiState
 
 
 @dataclass(frozen=True)
 class DashboardData:
+    view: str
+    title: str
     total_tokens: int
     actual_cost_usd: float
     virtual_cost_usd: float
@@ -43,9 +52,13 @@ class DashboardData:
     unpriced_count: int
     top_providers: tuple[ProviderSummaryRow, ...]
     top_models: tuple[ModelSummaryRow, ...]
+    series_buckets: tuple[UsageSeriesBucket, ...]
     config_path: str
     prices_path: str
     subscriptions_path: str
+
+
+DashboardView = Literal["today", "daily", "weekly"]
 
 
 @dataclass(frozen=True)
@@ -75,25 +88,55 @@ class ToktrailTuiService:
     def __init__(self, state: ToktrailTuiState) -> None:
         self.state = state
 
-    def dashboard(self) -> DashboardData:
-        report = usage_report(
+    def dashboard(self, view: DashboardView = "today") -> DashboardData:
+        active = get_active_area_status(self.state.db_path).area
+        summary = config_summary(self.state.config_path)
+        if view == "today":
+            report = usage_report(
+                self.state.db_path,
+                period="today",
+                timezone=self.state.timezone_name,
+                utc=self.state.utc,
+                config_path=self.state.config_path,
+            )
+            return DashboardData(
+                view=view,
+                title="Today",
+                total_tokens=report.totals.tokens.total,
+                actual_cost_usd=float(report.totals.costs.actual_cost_usd),
+                virtual_cost_usd=float(report.totals.costs.virtual_cost_usd),
+                savings_usd=float(report.totals.costs.savings_usd),
+                active_area=None if active is None else active.path,
+                unpriced_count=report.totals.costs.unpriced_count,
+                top_providers=tuple(report.by_provider[:3]),
+                top_models=tuple(report.by_model[:3]),
+                series_buckets=(),
+                config_path=str(summary["config_path"]),
+                prices_path=str(summary["manual_prices_path"]),
+                subscriptions_path=str(summary["subscriptions_path"]),
+            )
+        granularity = "daily" if view == "daily" else "weekly"
+        title = "Daily" if view == "daily" else "Weekly"
+        series = usage_series_report(
             self.state.db_path,
-            period="today",
+            granularity=granularity,
             timezone=self.state.timezone_name,
             utc=self.state.utc,
             config_path=self.state.config_path,
         )
-        active = get_active_area_status(self.state.db_path).area
-        summary = config_summary(self.state.config_path)
+        limit = 14 if view == "daily" else 12
         return DashboardData(
-            total_tokens=report.totals.tokens.total,
-            actual_cost_usd=float(report.totals.costs.actual_cost_usd),
-            virtual_cost_usd=float(report.totals.costs.virtual_cost_usd),
-            savings_usd=float(report.totals.costs.savings_usd),
+            view=view,
+            title=title,
+            total_tokens=series.totals.tokens.total,
+            actual_cost_usd=float(series.totals.costs.actual_cost_usd),
+            virtual_cost_usd=float(series.totals.costs.virtual_cost_usd),
+            savings_usd=float(series.totals.costs.savings_usd),
             active_area=None if active is None else active.path,
-            unpriced_count=report.totals.costs.unpriced_count,
-            top_providers=tuple(report.by_provider[:3]),
-            top_models=tuple(report.by_model[:3]),
+            unpriced_count=series.totals.costs.unpriced_count,
+            top_providers=(),
+            top_models=(),
+            series_buckets=tuple(series.buckets[:limit]),
             config_path=str(summary["config_path"]),
             prices_path=str(summary["manual_prices_path"]),
             subscriptions_path=str(summary["subscriptions_path"]),
