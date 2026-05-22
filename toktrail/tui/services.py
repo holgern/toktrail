@@ -21,6 +21,7 @@ from toktrail.api.models import (
     ModelSummaryRow,
     PriceRow,
     ProviderSummaryRow,
+    SubscriptionUsageRow,
     UnconfiguredModelRow,
     UsageSeriesBucket,
     UsageSessionRow,
@@ -31,6 +32,7 @@ from toktrail.api.prices import (
     upsert_manual_price,
 )
 from toktrail.api.reports import (
+    subscription_usage_report,
     usage_areas_report,
     usage_report,
     usage_series_report,
@@ -82,6 +84,12 @@ class PricesData:
 @dataclass(frozen=True)
 class ConfigData:
     summary: dict[str, object]
+
+
+@dataclass(frozen=True)
+class SubscriptionsData:
+    generated_at_ms: int
+    subscriptions: tuple[SubscriptionUsageRow, ...]
 
 
 class ToktrailTuiService:
@@ -186,6 +194,19 @@ class ToktrailTuiService:
 
     def config(self) -> ConfigData:
         return ConfigData(summary=config_summary(self.state.config_path))
+
+    def subscriptions(self) -> SubscriptionsData:
+        report = subscription_usage_report(
+            self.state.db_path,
+            config_path=self.state.config_path,
+            prices_path=self.state.prices_path,
+            prices_dir=self.state.prices_dir,
+            subscriptions_path=self.state.subscriptions_path,
+        )
+        return SubscriptionsData(
+            generated_at_ms=report.generated_at_ms,
+            subscriptions=tuple(report.subscriptions),
+        )
 
     def refresh(self) -> tuple[object, ...]:
         return tuple(

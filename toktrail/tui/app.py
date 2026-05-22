@@ -19,6 +19,7 @@ from toktrail.tui.panes.config import ConfigPane
 from toktrail.tui.panes.dashboard import DashboardPane
 from toktrail.tui.panes.prices import PricesPane
 from toktrail.tui.panes.sessions import SessionsPane
+from toktrail.tui.panes.subscriptions import SubscriptionsPane
 from toktrail.tui.screens.area_form import AreaFormScreen
 from toktrail.tui.screens.confirm import ConfirmScreen
 from toktrail.tui.screens.price_form import PriceFormScreen
@@ -35,7 +36,8 @@ class ToktrailTuiApp(App[None]):
         Binding("2", "switch_pane('sessions')", "Sessions", show=False),
         Binding("3", "switch_pane('areas')", "Areas", show=False),
         Binding("4", "switch_pane('prices')", "Prices", show=False),
-        Binding("5", "switch_pane('config')", "Config", show=False),
+        Binding("5", "switch_pane('subscriptions')", "Subscriptions", show=False),
+        Binding("6", "switch_pane('config')", "Config", show=False),
         Binding("t", "switch_dashboard('today')", "Today", show=False),
         Binding("d", "switch_dashboard('daily')", "Daily", show=False),
         Binding("w", "switch_dashboard('weekly')", "Weekly", show=False),
@@ -87,6 +89,8 @@ class ToktrailTuiApp(App[None]):
         self._sessions = SessionsPane(id="sessions")
         self._areas = AreasPane(id="areas")
         self._prices = PricesPane(id="prices")
+        self._subscriptions = SubscriptionsPane(id="subscriptions")
+        self._config = ConfigPane(id="config")
         self._config = ConfigPane(id="config")
         self._tui_display: TuiDisplay | None = None
         self._compact_details_visible = False
@@ -102,6 +106,7 @@ class ToktrailTuiApp(App[None]):
             Tab("Sessions", id="tab-sessions"),
             Tab("Areas", id="tab-areas"),
             Tab("Prices", id="tab-prices"),
+            Tab("Subscriptions", id="tab-subscriptions"),
             Tab("Config", id="tab-config"),
             active="tab-dashboard",
             id="tabs",
@@ -111,6 +116,7 @@ class ToktrailTuiApp(App[None]):
             self._sessions,
             self._areas,
             self._prices,
+            self._subscriptions,
             self._config,
             initial="dashboard",
             id="content",
@@ -157,12 +163,12 @@ class ToktrailTuiApp(App[None]):
     def action_help(self) -> None:
         if self._tui_display is not None and self._tui_display.compact:
             self._status.update(
-                "1 dash 2 sess 3 area 4 price 5 cfg | t d w | r refresh | "
+                "1 dash 2 sess 3 area 4 price 5 subs 6 cfg | t d w | r refresh | "
                 "a/u/c/l/s areas | e edit | p price view | i details | y/Y copy/export"
             )
             return
         self._status.update(
-            "1-5 switch panes, t/d/w switch dashboard, r refresh, q quit, "
+            "1-6 switch panes, t/d/w switch dashboard, r refresh, q quit, "
             "areas: create/set/clear/assign latest/assign selected, prices: edit, "
             "y copy, Y export, p toggle prices, i/enter details"
         )
@@ -301,6 +307,7 @@ class ToktrailTuiApp(App[None]):
         self._sessions.set_data(self.service.sessions())
         self._areas.set_data(self.service.areas())
         self._prices.set_data(self.service.prices())
+        self._subscriptions.set_data(self.service.subscriptions())
         self._config.set_data(self.service.config())
         self._update_compact_bar()
 
@@ -368,6 +375,7 @@ class ToktrailTuiApp(App[None]):
             self._sessions,
             self._areas,
             self._prices,
+            self._subscriptions,
             self._config,
         ):
             if hasattr(pane, "set_display"):
@@ -385,6 +393,7 @@ class ToktrailTuiApp(App[None]):
             "sessions": "Sess",
             "areas": "Area",
             "prices": "Price",
+            "subscriptions": "Subs",
             "config": "Cfg",
         }
         if display.mode == "micro":
@@ -393,7 +402,8 @@ class ToktrailTuiApp(App[None]):
             )
             return
         self._compact_bar.update(
-            "toktrail [1]Dash [2]Sess [3]Area [4]Price [5]Cfg  r refresh  ? help"
+            "toktrail [1]Dash [2]Sess [3]Area [4]Price [5]Subs [6]Cfg"
+            "  r refresh  ? help"
         )
 
     def _micro_detail_preview(self) -> str:
@@ -403,6 +413,7 @@ class ToktrailTuiApp(App[None]):
             "sessions": "#sessions-detail",
             "areas": "#areas-detail",
             "prices": "#prices-detail",
+            "subscriptions": "#subscriptions-detail",
         }.get(pane_id)
         if detail_id is None:
             return "No details for this pane."

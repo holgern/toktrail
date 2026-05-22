@@ -18,6 +18,7 @@ Screen {
 #sessions,
 #areas,
 #prices,
+#subscriptions,
 #config {
   height: 1fr;
   width: 100%;
@@ -25,12 +26,14 @@ Screen {
 
 #sessions,
 #areas,
-#prices {
+#prices,
+#subscriptions {
   layout: vertical;
 }
 
 #sessions-table,
 #areas-table,
+#subscriptions-table,
 #prices-configured-table,
 #prices-unconfigured-table {
   height: 1fr;
@@ -38,6 +41,7 @@ Screen {
 
 #sessions-detail,
 #areas-detail,
+#subscriptions-detail,
 #prices-detail {
   height: auto;
   border-top: heavy $panel;
@@ -77,18 +81,21 @@ Screen.micro #content {
 
 Screen.compact.compact-details-hidden #sessions-detail,
 Screen.compact.compact-details-hidden #areas-detail,
+Screen.compact.compact-details-hidden #subscriptions-detail,
 Screen.compact.compact-details-hidden #prices-detail {
   display: none;
 }
 
 Screen.compact #sessions-detail,
 Screen.compact #areas-detail,
+Screen.compact #subscriptions-detail,
 Screen.compact #prices-detail {
   height: 6;
 }
 
 Screen.micro #sessions-detail,
 Screen.micro #areas-detail,
+Screen.micro #subscriptions-detail,
 Screen.micro #prices-detail {
   display: none;
 }

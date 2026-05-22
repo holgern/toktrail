@@ -20,12 +20,14 @@ from toktrail.api.models import (
     UsageSeriesReport,
     UsageSessionsReport,
 )
+from toktrail.config import load_resolved_costing_config
 from toktrail.errors import (
     InvalidAPIUsageError,
     NoActiveRunError,
     RunNotFoundError,
     StateDatabaseError,
 )
+from toktrail.paths import resolve_toktrail_config_path
 from toktrail.periods import resolve_time_range
 from toktrail.reporting import UsageReportFilter
 
@@ -336,12 +338,26 @@ def subscription_usage_report(
     provider_id: str | None = None,
     now_ms: int | None = None,
     config_path: Path | None = None,
+    prices_path: Path | None = None,
+    prices_dir: Path | None = None,
+    subscriptions_path: Path | None = None,
 ) -> SubscriptionUsageReport:
+    has_explicit = prices_path or prices_dir or subscriptions_path
+    if has_explicit:
+        resolved_config = resolve_toktrail_config_path(config_path)
+        costing_config = load_resolved_costing_config(
+            config_cli_value=resolved_config,
+            prices_cli_value=prices_path,
+            prices_dir_cli_value=prices_dir,
+            subscriptions_cli_value=subscriptions_path,
+        ).config
+    else:
+        costing_config = _load_costing_config(config_path)
     conn, _ = _open_state_db(db_path)
     try:
         report = db_module.summarize_subscription_usage(
             conn,
-            _load_costing_config(config_path),
+            costing_config,
             provider_id=provider_id,
             now_ms=now_ms,
         )

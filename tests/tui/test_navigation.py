@@ -26,7 +26,7 @@ def _make_app(tmp_path, *, tui_mode: str = "auto") -> ToktrailTuiApp:
     )
 
 
-async def test_switch_to_areas_and_prices_with_keys(tmp_path) -> None:
+async def test_switch_to_areas_prices_subscriptions_config_with_keys(tmp_path) -> None:
     app = _make_app(tmp_path)
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.press("3")
@@ -35,6 +35,12 @@ async def test_switch_to_areas_and_prices_with_keys(tmp_path) -> None:
         await pilot.press("4")
         await pilot.pause()
         assert app.query_one("#content").current == "prices"
+        await pilot.press("5")
+        await pilot.pause()
+        assert app.query_one("#content").current == "subscriptions"
+        await pilot.press("6")
+        await pilot.pause()
+        assert app.query_one("#content").current == "config"
 
 
 async def test_clicking_tabs_switches_content(tmp_path) -> None:
@@ -49,6 +55,9 @@ async def test_clicking_tabs_switches_content(tmp_path) -> None:
         await pilot.click("#tab-prices")
         await pilot.pause()
         assert app.query_one("#content").current == "prices"
+        await pilot.click("#tab-subscriptions")
+        await pilot.pause()
+        assert app.query_one("#content").current == "subscriptions"
 
 
 async def test_switch_dashboard_views_with_keys(tmp_path) -> None:

@@ -5,5 +5,13 @@ from toktrail.tui.panes.config import ConfigPane
 from toktrail.tui.panes.dashboard import DashboardPane
 from toktrail.tui.panes.prices import PricesPane
 from toktrail.tui.panes.sessions import SessionsPane
+from toktrail.tui.panes.subscriptions import SubscriptionsPane
 
-__all__ = ["AreasPane", "ConfigPane", "DashboardPane", "PricesPane", "SessionsPane"]
+__all__ = [
+    "AreasPane",
+    "ConfigPane",
+    "DashboardPane",
+    "PricesPane",
+    "SessionsPane",
+    "SubscriptionsPane",
+]
