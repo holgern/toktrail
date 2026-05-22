@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from toktrail.errors import AmbiguousSourceSessionError, SourcePathError
 
@@ -725,6 +725,50 @@ class UnconfiguredModelRow:
             "thinking_level": self.thinking_level,
             "message_count": self.message_count,
             **self.tokens.as_dict(),
+        }
+
+
+@dataclass(frozen=True)
+class PriceRow:
+    table: Literal["actual", "virtual"]
+    provider: str
+    model: str
+    input_usd_per_1m: float
+    output_usd_per_1m: float
+    cached_input_usd_per_1m: float | None = None
+    cache_write_usd_per_1m: float | None = None
+    cached_output_usd_per_1m: float | None = None
+    reasoning_usd_per_1m: float | None = None
+    context_min_tokens: int | None = None
+    context_max_tokens: int | None = None
+    context_label: str | None = None
+    context_basis: str = "prompt_like"
+    category: str | None = None
+    release_status: str | None = None
+    aliases: tuple[str, ...] = ()
+    source_path: str | None = None
+    source_kind: Literal["manual", "provider", "effective"] = "manual"
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "table": self.table,
+            "provider": self.provider,
+            "model": self.model,
+            "input_usd_per_1m": self.input_usd_per_1m,
+            "output_usd_per_1m": self.output_usd_per_1m,
+            "cached_input_usd_per_1m": self.cached_input_usd_per_1m,
+            "cache_write_usd_per_1m": self.cache_write_usd_per_1m,
+            "cached_output_usd_per_1m": self.cached_output_usd_per_1m,
+            "reasoning_usd_per_1m": self.reasoning_usd_per_1m,
+            "context_min_tokens": self.context_min_tokens,
+            "context_max_tokens": self.context_max_tokens,
+            "context_label": self.context_label,
+            "context_basis": self.context_basis,
+            "category": self.category,
+            "release_status": self.release_status,
+            "aliases": list(self.aliases),
+            "source_path": self.source_path,
+            "source_kind": self.source_kind,
         }
 
 
@@ -1575,6 +1619,7 @@ __all__ = [
     "Machine",
     "MachineSummaryRow",
     "ModelSummaryRow",
+    "PriceRow",
     "PreparedManualRun",
     "ProviderSummaryRow",
     "RunScope",

@@ -9,6 +9,7 @@ include = ["toktrail*"]
 [tool.setuptools.package-data]
 toktrail = [
     "py.typed",
+    "tui/styles/*.tcss",
 ]
 
 [tool.pytest.ini_options]
@@ -62,12 +63,17 @@ dev = [
     "build",
     "mypy",
     "pytest",
+    "pytest-asyncio",
     "ruff",
     "twine",
     "types-PyYAML",
 ]
 rich = [
     "rich",
+]
+tui = [
+    "textual>=3,<4",
+    "tomlkit>=0.13",
 ]
 docs = [
     "sphinx",

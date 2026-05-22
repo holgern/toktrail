@@ -440,6 +440,36 @@ def init(ctx: typer.Context) -> None:
     typer.echo(f"Initialized toktrail database: {db_path}")
 
 
+@app.command("tui")
+def tui(
+    ctx: typer.Context,
+    no_refresh: Annotated[bool, typer.Option("--no-refresh")] = False,
+    area: AreaOption = None,
+    timezone_name: TimezoneOption = None,
+    utc: UtcOption = False,
+) -> None:
+    """Open interactive terminal UI."""
+    try:
+        from toktrail.tui.app import ToktrailTuiApp
+    except ImportError:
+        _exit_with_error(
+            "Textual mode requires installing toktrail[tui]. "
+            "Run: python -m pip install 'toktrail[tui]'"
+        )
+    app_instance = ToktrailTuiApp(
+        db_path=_resolve_state_db(ctx),
+        config_path=_resolve_config_path(ctx),
+        prices_path=_resolve_prices_path(ctx),
+        prices_dir=_resolve_prices_dir(ctx),
+        subscriptions_path=_resolve_subscriptions_path(ctx),
+        initial_area=area,
+        timezone_name=timezone_name,
+        utc=utc,
+        refresh_on_start=not no_refresh,
+    )
+    app_instance.run()
+
+
 @area_app.command("create")
 def area_create(
     ctx: typer.Context,

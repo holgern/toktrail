@@ -1,0 +1,14 @@
+Screen {
+  layout: vertical;
+}
+
+#content {
+  height: 1fr;
+  border: round $panel;
+}
+
+#status {
+  height: auto;
+  padding: 0 1;
+  color: $text-muted;
+}

@@ -41,6 +41,12 @@ from toktrail.api.machines import (
     machine_status,
     set_machine_name,
 )
+from toktrail.api.prices import (
+    delete_manual_price,
+    list_prices,
+    list_unconfigured_models,
+    upsert_manual_price,
+)
 from toktrail.api.models import (
     ActiveArea,
     ActivitySummaryRow,
@@ -58,6 +64,7 @@ from toktrail.api.models import (
     Machine,
     MachineSummaryRow,
     ModelSummaryRow,
+    PriceRow,
     PreparedManualRun,
     ProviderSummaryRow,
     ScanUsageResult,
@@ -157,6 +164,7 @@ __all__ = [
     "Machine",
     "MachineSummaryRow",
     "ModelSummaryRow",
+    "PriceRow",
     "PreparedManualRun",
     "ProviderSummaryRow",
     "ScanUsageResult",
@@ -218,6 +226,8 @@ __all__ = [
     "list_areas",
     "list_area_sessions",
     "list_machines",
+    "list_prices",
+    "list_unconfigured_models",
     "init_config",
     "init_state",
     "is_supported_harness",
@@ -227,6 +237,7 @@ __all__ = [
     "prepare_environment",
     "prepare_manual_run",
     "machine_status",
+    "delete_manual_price",
     "record_usage_event",
     "record_usage_events",
     "render_config_template",
@@ -253,6 +264,7 @@ __all__ = [
     "unarchive_run",
     "clear_machine_name",
     "supported_harnesses",
+    "upsert_manual_price",
     "usage_report",
     "usage_series_report",
     "usage_areas_report",

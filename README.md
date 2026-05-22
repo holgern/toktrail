@@ -94,6 +94,12 @@ For development:
 python -m pip install -e ".[dev]"
 ```
 
+For Textual mode:
+
+```bash
+python -m pip install -e ".[tui]"
+```
+
 ## Performance benchmark
 
 Run the local synthetic report benchmark:
@@ -162,6 +168,8 @@ toktrail refresh --harness amp --source ~/.local/share/amp/threads
 toktrail refresh --harness claude --source ~/.claude/projects
 toktrail refresh --dry-run
 toktrail refresh --no-run
+toktrail tui
+toktrail tui --no-refresh
 ```
 
 For local acceptance and testing, the repository includes a sample OpenCode
