@@ -7,11 +7,13 @@ import subprocess
 from pathlib import Path
 from typing import cast
 
+from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.widgets import ContentSwitcher, Footer, Header, Static, Tab, Tabs
 
 from toktrail.errors import InvalidAPIUsageError
+from toktrail.tui.layout import TuiDisplay, TuiMode, resolve_tui_display
 from toktrail.tui.panes.areas import AreasPane
 from toktrail.tui.panes.config import ConfigPane
 from toktrail.tui.panes.dashboard import DashboardPane
@@ -44,8 +46,11 @@ class ToktrailTuiApp(App[None]):
         Binding("l", "assign_latest", "Assign latest"),
         Binding("s", "assign_selected_session", "Assign selected"),
         Binding("e", "edit_selected_price", "Edit price"),
+        Binding("p", "toggle_price_subview", "Toggle prices view", show=False),
         Binding("y", "copy_current_view", "Copy"),
         Binding("Y", "export_current_view", "Export"),
+        Binding("i", "toggle_details", "Details", show=False),
+        Binding("enter", "toggle_details", "Details", show=False),
         Binding("question_mark", "help", "Help"),
         Binding("q", "quit", "Quit"),
     ]
@@ -62,6 +67,7 @@ class ToktrailTuiApp(App[None]):
         timezone_name: str | None = None,
         utc: bool = False,
         refresh_on_start: bool = True,
+        tui_mode: TuiMode = "auto",
     ) -> None:
         super().__init__()
         self.state = ToktrailTuiState(
@@ -74,6 +80,7 @@ class ToktrailTuiApp(App[None]):
             timezone_name=timezone_name,
             utc=utc,
             refresh_on_start=refresh_on_start,
+            tui_mode=tui_mode,
         )
         self.service = ToktrailTuiService(self.state)
         self._dashboard = DashboardPane(id="dashboard")
@@ -81,11 +88,15 @@ class ToktrailTuiApp(App[None]):
         self._areas = AreasPane(id="areas")
         self._prices = PricesPane(id="prices")
         self._config = ConfigPane(id="config")
+        self._tui_display: TuiDisplay | None = None
+        self._compact_details_visible = False
+        self._compact_bar = Static("", id="compact-bar")
         self._status = Static("", id="status")
         self._dashboard_view: DashboardView = "today"
 
     def compose(self) -> ComposeResult:
         yield Header()
+        yield self._compact_bar
         yield Tabs(
             Tab("Dashboard", id="tab-dashboard"),
             Tab("Sessions", id="tab-sessions"),
@@ -108,18 +119,30 @@ class ToktrailTuiApp(App[None]):
         yield Footer()
 
     def on_mount(self) -> None:
+        self._apply_display()
         self._refresh_views()
         if self.state.initial_area:
             self.service.set_active_area(self.state.initial_area)
             self._refresh_views()
         if self.state.refresh_on_start:
             self.action_refresh()
+        self._update_compact_bar()
+
+    def on_resize(self, event: events.Resize) -> None:
+        del event
+        previous_mode = None if self._tui_display is None else self._tui_display.mode
+        self._apply_display()
+        current_mode = None if self._tui_display is None else self._tui_display.mode
+        if current_mode != previous_mode:
+            self._refresh_views()
+        self._update_compact_bar()
 
     def action_switch_pane(self, pane_id: str) -> None:
         content = self.query_one("#content", ContentSwitcher)
         content.current = pane_id
         tabs = self.query_one("#tabs", Tabs)
         tabs.active = f"tab-{pane_id}"
+        self._update_compact_bar()
 
     def on_tabs_tab_activated(self, event: Tabs.TabActivated) -> None:
         tab_id = event.tab.id
@@ -129,12 +152,19 @@ class ToktrailTuiApp(App[None]):
             return
         content = self.query_one("#content", ContentSwitcher)
         content.current = tab_id.removeprefix("tab-")
+        self._update_compact_bar()
 
     def action_help(self) -> None:
+        if self._tui_display is not None and self._tui_display.compact:
+            self._status.update(
+                "1 dash 2 sess 3 area 4 price 5 cfg | t d w | r refresh | "
+                "a/u/c/l/s areas | e edit | p price view | i details | y/Y copy/export"
+            )
+            return
         self._status.update(
             "1-5 switch panes, t/d/w switch dashboard, r refresh, q quit, "
             "areas: create/set/clear/assign latest/assign selected, prices: edit, "
-            "y copy, Y export"
+            "y copy, Y export, p toggle prices, i/enter details"
         )
 
     def action_refresh(self) -> None:
@@ -202,6 +232,23 @@ class ToktrailTuiApp(App[None]):
         self.action_switch_pane("dashboard")
         self._status.update(f"Dashboard view: {view}")
 
+    def action_toggle_price_subview(self) -> None:
+        selected = self._prices.toggle_subview()
+        self._status.update(f"Prices view: {selected}")
+
+    def action_toggle_details(self) -> None:
+        display = self._tui_display or self._resolve_display()
+        if display.mode == "full":
+            self._status.update("Details are always visible in full mode.")
+            return
+        if display.mode == "micro":
+            self._status.update(self._micro_detail_preview())
+            return
+        self._compact_details_visible = not self._compact_details_visible
+        self._apply_display()
+        state = "shown" if self._compact_details_visible else "hidden"
+        self._status.update(f"Details {state}.")
+
     def action_copy_current_view(self) -> None:
         pane_id, text = self._current_pane_text()
         if not text.strip():
@@ -249,11 +296,13 @@ class ToktrailTuiApp(App[None]):
         self._status.update(f"Saved to {written}")
 
     def _refresh_views(self) -> None:
+        self._apply_display()
         self._dashboard.set_data(self.service.dashboard(self._dashboard_view))
         self._sessions.set_data(self.service.sessions())
         self._areas.set_data(self.service.areas())
         self._prices.set_data(self.service.prices())
         self._config.set_data(self.service.config())
+        self._update_compact_bar()
 
     def _current_pane_text(self) -> tuple[str, str]:
         content = self.query_one("#content", ContentSwitcher)
@@ -278,6 +327,8 @@ class ToktrailTuiApp(App[None]):
         return Path.home() / ".cache" / "toktrail" / "tui-last-view.txt"
 
     def _copy_to_clipboard(self, text: str) -> bool:
+        if self._run_clipboard(["termux-clipboard-set"], text):
+            return True
         wayland = os.environ.get("WAYLAND_DISPLAY")
         display = os.environ.get("DISPLAY")
         if wayland and self._run_clipboard(["wl-copy"], text):
@@ -294,6 +345,75 @@ class ToktrailTuiApp(App[None]):
             ["powershell.exe", "-NoProfile", "-Command", "Set-Clipboard"],
             text,
         )
+
+    def _resolve_display(self) -> TuiDisplay:
+        size = getattr(self, "size", None)
+        columns = getattr(size, "width", None)
+        rows = getattr(size, "height", None)
+        return resolve_tui_display(self.state.tui_mode, columns=columns, rows=rows)
+
+    def _apply_display(self) -> None:
+        display = self._resolve_display()
+        if self._tui_display is not None and self._tui_display.mode != display.mode:
+            self._compact_details_visible = False
+        self._tui_display = display
+        self.set_class(display.mode == "compact", "compact")
+        self.set_class(display.mode == "micro", "micro")
+        hide_compact_details = display.mode == "compact" and (
+            not self._compact_details_visible
+        )
+        self.set_class(hide_compact_details, "compact-details-hidden")
+        for pane in (
+            self._dashboard,
+            self._sessions,
+            self._areas,
+            self._prices,
+            self._config,
+        ):
+            if hasattr(pane, "set_display"):
+                pane.set_display(display)
+
+    def _update_compact_bar(self) -> None:
+        display = self._tui_display or self._resolve_display()
+        if display.mode == "full":
+            self._compact_bar.update("")
+            return
+        content = self.query_one("#content", ContentSwitcher)
+        current = content.current or "dashboard"
+        labels = {
+            "dashboard": "Dash",
+            "sessions": "Sess",
+            "areas": "Area",
+            "prices": "Price",
+            "config": "Cfg",
+        }
+        if display.mode == "micro":
+            self._compact_bar.update(
+                f"toktrail {labels.get(current, current)}  ? help  q quit"
+            )
+            return
+        self._compact_bar.update(
+            "toktrail [1]Dash [2]Sess [3]Area [4]Price [5]Cfg  r refresh  ? help"
+        )
+
+    def _micro_detail_preview(self) -> str:
+        content = self.query_one("#content", ContentSwitcher)
+        pane_id = content.current or "dashboard"
+        detail_id = {
+            "sessions": "#sessions-detail",
+            "areas": "#areas-detail",
+            "prices": "#prices-detail",
+        }.get(pane_id)
+        if detail_id is None:
+            return "No details for this pane."
+        try:
+            detail = self.query_one(detail_id, Static)
+        except Exception:
+            return "No details available."
+        text = detail.renderable
+        value = str(text)
+        first_line = value.splitlines()[0] if value else "No details available."
+        return first_line
 
     def _run_clipboard(self, command: list[str], text: str) -> bool:
         executable = command[0]

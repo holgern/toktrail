@@ -7,12 +7,26 @@ from textual.widgets import DataTable, Static
 
 from toktrail.cli_parts.formatting import _format_cost, _format_int
 from toktrail.formatting import format_epoch_ms_compact
+from toktrail.tui.formatting import (
+    compact_model,
+    compact_time,
+    leaf_path,
+    session_cost_label,
+)
+from toktrail.tui.layout import TuiDisplay, resolve_tui_display
 from toktrail.tui.panes.exportable import ExportablePaneMixin
 from toktrail.tui.services import SessionsData
 
 
 class SessionsPane(ExportablePaneMixin, Vertical):
     selected_session_key: str | None = None
+
+    def __init__(self, *args, **kwargs) -> None:  # type: ignore[no-untyped-def]
+        super().__init__(*args, **kwargs)
+        self.tui_display: TuiDisplay = resolve_tui_display("full")
+
+    def set_display(self, display: TuiDisplay) -> None:
+        self.tui_display = display
 
     def compose(self) -> ComposeResult:
         table = DataTable(id="sessions-table")
@@ -21,6 +35,14 @@ class SessionsPane(ExportablePaneMixin, Vertical):
         yield Static("No session selected.", id="sessions-detail")
 
     def set_data(self, data: SessionsData) -> None:
+        if self.tui_display.mode == "full":
+            self._set_full_data(data)
+        elif self.tui_display.mode == "compact":
+            self._set_compact_data(data)
+        else:
+            self._set_micro_data(data)
+
+    def _set_full_data(self, data: SessionsData) -> None:
         table = self.query_one("#sessions-table", DataTable)
         detail = self.query_one("#sessions-detail", Static)
         table.clear(columns=True)
@@ -68,6 +90,73 @@ class SessionsPane(ExportablePaneMixin, Vertical):
             table.move_cursor(row=selected_row_index, column=0)
             self._update_detail(self.selected_session_key)
             self.export_text = self._build_export_text(data)
+
+    def _set_compact_data(self, data: SessionsData) -> None:
+        table = self.query_one("#sessions-table", DataTable)
+        detail = self.query_one("#sessions-detail", Static)
+        table.clear(columns=True)
+        table.add_columns("Time", "Area", "Model", "Tokens", "Cost")
+        previous_selected = self.selected_session_key
+        self._rows_by_key = {}
+        for row in data.sessions:
+            key = row.key
+            self._rows_by_key[key] = row
+            table.add_row(
+                compact_time(format_epoch_ms_compact(row.last_ms)),
+                leaf_path(row.area_path),
+                compact_model(row.models, limit=1),
+                _format_int(row.tokens.total),
+                session_cost_label(
+                    float(row.costs.actual_cost_usd), float(row.costs.virtual_cost_usd)
+                ),
+                key=key,
+            )
+        if not data.sessions:
+            self.selected_session_key = None
+            self.export_text = "Sessions\n(none)"
+            detail.update("No session selected.")
+            return
+        if previous_selected and previous_selected in self._rows_by_key:
+            self.selected_session_key = previous_selected
+        else:
+            self.selected_session_key = data.sessions[0].key
+        row_index = table.get_row_index(self.selected_session_key)
+        table.move_cursor(row=row_index, column=0)
+        self._update_detail(self.selected_session_key)
+        self.export_text = self._build_export_text(data)
+
+    def _set_micro_data(self, data: SessionsData) -> None:
+        table = self.query_one("#sessions-table", DataTable)
+        detail = self.query_one("#sessions-detail", Static)
+        table.clear(columns=True)
+        table.add_columns("Session")
+        previous_selected = self.selected_session_key
+        self._rows_by_key = {}
+        for row in data.sessions:
+            key = row.key
+            self._rows_by_key[key] = row
+            table.add_row(
+                (
+                    f"{compact_time(format_epoch_ms_compact(row.last_ms))} "
+                    f"{row.harness} {leaf_path(row.area_path)} "
+                    f"{_format_int(row.tokens.total)} "
+                    f"{compact_model(row.models, limit=1)}"
+                ),
+                key=key,
+            )
+        if not data.sessions:
+            self.selected_session_key = None
+            self.export_text = "Sessions\n(none)"
+            detail.update("No session selected.")
+            return
+        if previous_selected and previous_selected in self._rows_by_key:
+            self.selected_session_key = previous_selected
+        else:
+            self.selected_session_key = data.sessions[0].key
+        row_index = table.get_row_index(self.selected_session_key)
+        table.move_cursor(row=row_index, column=0)
+        self._update_detail(self.selected_session_key)
+        self.export_text = self._build_export_text(data)
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
         if event.data_table.id != "sessions-table":

@@ -4,6 +4,8 @@ from __future__ import annotations
 from textual.widgets import Static
 
 from toktrail.cli_parts.formatting import _format_cost, _format_int
+from toktrail.tui.formatting import leaf_path
+from toktrail.tui.layout import TuiDisplay, resolve_tui_display
 from toktrail.tui.panes.exportable import ExportablePaneMixin
 from toktrail.tui.services import DashboardData
 
@@ -17,7 +19,21 @@ def _format_model_list(models: tuple[str, ...], *, limit: int = 2) -> str:
 
 
 class DashboardPane(ExportablePaneMixin, Static):
+    def __init__(self, *args, **kwargs) -> None:  # type: ignore[no-untyped-def]
+        super().__init__(*args, **kwargs)
+        self.tui_display: TuiDisplay = resolve_tui_display("full")
+
+    def set_display(self, display: TuiDisplay) -> None:
+        self.tui_display = display
+
     def set_data(self, data: DashboardData) -> None:
+        self.export_text = self._build_full_text(data)
+        if self.tui_display.compact:
+            self.update(self._build_compact_text(data))
+            return
+        self.update(self.export_text)
+
+    def _build_full_text(self, data: DashboardData) -> str:
         active = data.active_area or "none"
         lines = [
             f"Dashboard: {data.title}",
@@ -87,5 +103,39 @@ class DashboardPane(ExportablePaneMixin, Static):
                 f"  Subscriptions: {data.subscriptions_path}",
             ]
         )
-        self.export_text = "\n".join(lines)
-        self.update(self.export_text)
+        return "\n".join(lines)
+
+    def _build_compact_text(self, data: DashboardData) -> str:
+        lines = [
+            data.title,
+            f"Tokens  {_format_int(data.total_tokens)}",
+            f"Actual  {_format_cost(data.actual_cost_usd)}",
+            f"Virtual {_format_cost(data.virtual_cost_usd)}",
+            f"Save    {_format_cost(data.savings_usd)}",
+            f"Area    {data.active_area or 'none'}",
+            "",
+        ]
+        if data.view == "today":
+            lines.append("Top providers")
+            if data.top_providers:
+                for row in data.top_providers:
+                    lines.append(
+                        f"{leaf_path(row.provider_id):<10} "
+                        f"{_format_int(row.tokens.total):>8} "
+                        f"{_format_cost(row.costs.actual_cost_usd)}"
+                    )
+            else:
+                lines.append("(none)")
+            return "\n".join(lines)
+
+        lines.append("Buckets")
+        if data.series_buckets:
+            for bucket in data.series_buckets:
+                lines.append(
+                    f"{bucket.label:<10} "
+                    f"{_format_int(bucket.tokens.total):>8} "
+                    f"{_format_cost(bucket.costs.actual_cost_usd)}"
+                )
+        else:
+            lines.append("(none)")
+        return "\n".join(lines)

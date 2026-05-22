@@ -170,6 +170,9 @@ toktrail refresh --dry-run
 toktrail refresh --no-run
 toktrail tui
 toktrail tui --no-refresh
+toktrail tui --tui-mode auto
+toktrail tui --tui-mode compact
+TOKTRAIL_TUI_MODE=micro toktrail tui --no-refresh
 ```
 
 For local acceptance and testing, the repository includes a sample OpenCode

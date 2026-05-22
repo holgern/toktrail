@@ -6,12 +6,21 @@ from textual.containers import Vertical
 from textual.widgets import DataTable, Static
 
 from toktrail.cli_parts.formatting import _format_cost, _format_int
+from toktrail.tui.formatting import leaf_path
+from toktrail.tui.layout import TuiDisplay, resolve_tui_display
 from toktrail.tui.panes.exportable import ExportablePaneMixin
 from toktrail.tui.services import AreasData
 
 
 class AreasPane(ExportablePaneMixin, Vertical):
     selected_area_path: str | None = None
+
+    def __init__(self, *args, **kwargs) -> None:  # type: ignore[no-untyped-def]
+        super().__init__(*args, **kwargs)
+        self.tui_display: TuiDisplay = resolve_tui_display("full")
+
+    def set_display(self, display: TuiDisplay) -> None:
+        self.tui_display = display
 
     def compose(self) -> ComposeResult:
         table = DataTable(id="areas-table")
@@ -20,6 +29,14 @@ class AreasPane(ExportablePaneMixin, Vertical):
         yield Static("No area selected.", id="areas-detail")
 
     def set_data(self, data: AreasData) -> None:
+        if self.tui_display.mode == "full":
+            self._set_full_data(data)
+        elif self.tui_display.mode == "compact":
+            self._set_compact_data(data)
+        else:
+            self._set_micro_data(data)
+
+    def _set_full_data(self, data: AreasData) -> None:
         table = self.query_one("#areas-table", DataTable)
         detail = self.query_one("#areas-detail", Static)
         table.clear(columns=True)
@@ -61,6 +78,86 @@ class AreasPane(ExportablePaneMixin, Vertical):
             table.move_cursor(row=row_index, column=0)
             self._update_detail(self.selected_area_path, usage_by_path)
             self.export_text = self._build_export_text(data, usage_by_path)
+
+    def _set_compact_data(self, data: AreasData) -> None:
+        table = self.query_one("#areas-table", DataTable)
+        detail = self.query_one("#areas-detail", Static)
+        table.clear(columns=True)
+        table.add_columns("*", "Area", "Tokens", "Cost")
+        self._latest_usage_rows = data.usage_rows
+        usage_by_path = {row.path: row for row in data.usage_rows if row.path}
+        previous_selected = self.selected_area_path
+        for path in data.area_paths:
+            usage = usage_by_path.get(path)
+            token_total = usage.tokens.total if usage is not None else 0
+            actual_cost = (
+                float(usage.costs.actual_cost_usd) if usage is not None else 0.0
+            )
+            virtual_cost = (
+                float(usage.costs.virtual_cost_usd) if usage is not None else 0.0
+            )
+            cost_value = actual_cost if actual_cost > 0 else virtual_cost
+            table.add_row(
+                "*" if path == data.active_area else "",
+                leaf_path(path),
+                _format_int(token_total),
+                _format_cost(cost_value),
+                key=path,
+            )
+        if not data.area_paths:
+            self.selected_area_path = None
+            self.export_text = "Areas\n(none)"
+            detail.update("No area selected.")
+            return
+        if previous_selected and previous_selected in data.area_paths:
+            self.selected_area_path = previous_selected
+        else:
+            self.selected_area_path = data.area_paths[0]
+        row_index = table.get_row_index(self.selected_area_path)
+        table.move_cursor(row=row_index, column=0)
+        self._update_detail(self.selected_area_path, usage_by_path)
+        self.export_text = self._build_export_text(data, usage_by_path)
+
+    def _set_micro_data(self, data: AreasData) -> None:
+        table = self.query_one("#areas-table", DataTable)
+        detail = self.query_one("#areas-detail", Static)
+        table.clear(columns=True)
+        table.add_columns("Area")
+        self._latest_usage_rows = data.usage_rows
+        usage_by_path = {row.path: row for row in data.usage_rows if row.path}
+        previous_selected = self.selected_area_path
+        for path in data.area_paths:
+            usage = usage_by_path.get(path)
+            token_total = usage.tokens.total if usage is not None else 0
+            actual_cost = (
+                float(usage.costs.actual_cost_usd) if usage is not None else 0.0
+            )
+            virtual_cost = (
+                float(usage.costs.virtual_cost_usd) if usage is not None else 0.0
+            )
+            cost_value = actual_cost if actual_cost > 0 else virtual_cost
+            marker = "*" if path == data.active_area else " "
+            line = (
+                f"{marker} {leaf_path(path)} {_format_int(token_total)} "
+                f"{_format_cost(cost_value)}"
+            )
+            table.add_row(
+                line,
+                key=path,
+            )
+        if not data.area_paths:
+            self.selected_area_path = None
+            self.export_text = "Areas\n(none)"
+            detail.update("No area selected.")
+            return
+        if previous_selected and previous_selected in data.area_paths:
+            self.selected_area_path = previous_selected
+        else:
+            self.selected_area_path = data.area_paths[0]
+        row_index = table.get_row_index(self.selected_area_path)
+        table.move_cursor(row=row_index, column=0)
+        self._update_detail(self.selected_area_path, usage_by_path)
+        self.export_text = self._build_export_text(data, usage_by_path)
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
         if event.data_table.id != "areas-table":

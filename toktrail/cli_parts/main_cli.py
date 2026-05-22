@@ -447,15 +447,29 @@ def tui(
     area: AreaOption = None,
     timezone_name: TimezoneOption = None,
     utc: UtcOption = False,
+    tui_mode: Annotated[
+        str | None,
+        typer.Option(
+            "--tui-mode",
+            help="TUI layout mode: auto, full, compact, or micro.",
+        ),
+    ] = None,
 ) -> None:
     """Open interactive terminal UI."""
     try:
         from toktrail.tui.app import ToktrailTuiApp
+        from toktrail.tui.layout import normalize_tui_mode
     except ImportError:
         _exit_with_error(
             "Textual mode requires installing toktrail[tui]. "
             "Run: python -m pip install 'toktrail[tui]'"
         )
+    try:
+        requested_tui_mode = normalize_tui_mode(
+            tui_mode or os.environ.get("TOKTRAIL_TUI_MODE") or "auto"
+        )
+    except ValueError as exc:
+        _exit_with_error(str(exc))
     app_instance = ToktrailTuiApp(
         db_path=_resolve_state_db(ctx),
         config_path=_resolve_config_path(ctx),
@@ -466,6 +480,7 @@ def tui(
         timezone_name=timezone_name,
         utc=utc,
         refresh_on_start=not no_refresh,
+        tui_mode=requested_tui_mode,
     )
     app_instance.run()
 
@@ -2487,13 +2502,14 @@ def _resolve_area_filter_inputs_or_exit(
     area_leaf: str | None,
     unassigned_area: bool,
 ) -> tuple[str | None, str]:
-    if sum(
-        bool(value)
-        for value in (area is not None, area_leaf is not None, unassigned_area)
-    ) > 1:
-        _exit_with_error(
-            "Use only one of --area, --area-leaf, or --unassigned-area."
+    if (
+        sum(
+            bool(value)
+            for value in (area is not None, area_leaf is not None, unassigned_area)
         )
+        > 1
+    ):
+        _exit_with_error("Use only one of --area, --area-leaf, or --unassigned-area.")
     if area_leaf is not None:
         return area_leaf, "leaf"
     return area, "auto"

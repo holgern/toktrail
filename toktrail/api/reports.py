@@ -36,10 +36,13 @@ def _resolve_area_filter_inputs(
     area_leaf: str | None,
     unassigned_area: bool,
 ) -> tuple[str | None, str]:
-    if sum(
-        bool(value)
-        for value in (area is not None, area_leaf is not None, unassigned_area)
-    ) > 1:
+    if (
+        sum(
+            bool(value)
+            for value in (area is not None, area_leaf is not None, unassigned_area)
+        )
+        > 1
+    ):
         msg = "Use only one of area, area_leaf, or unassigned_area."
         raise InvalidAPIUsageError(msg)
     if area_leaf is not None:

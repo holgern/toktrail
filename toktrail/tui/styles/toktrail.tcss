@@ -2,6 +2,13 @@ Screen {
   layout: vertical;
 }
 
+#compact-bar {
+  display: none;
+  height: 1;
+  padding: 0 1;
+  color: $text-muted;
+}
+
 #content {
   height: 1fr;
   border: round $panel;
@@ -41,4 +48,53 @@ Screen {
   height: auto;
   padding: 0 1;
   color: $text-muted;
+}
+
+Screen.compact Header,
+Screen.micro Header {
+  display: none;
+}
+
+Screen.compact Footer,
+Screen.micro Footer {
+  display: none;
+}
+
+Screen.compact Tabs,
+Screen.micro Tabs {
+  display: none;
+}
+
+Screen.compact #compact-bar,
+Screen.micro #compact-bar {
+  display: block;
+}
+
+Screen.compact #content,
+Screen.micro #content {
+  border: none;
+}
+
+Screen.compact.compact-details-hidden #sessions-detail,
+Screen.compact.compact-details-hidden #areas-detail,
+Screen.compact.compact-details-hidden #prices-detail {
+  display: none;
+}
+
+Screen.compact #sessions-detail,
+Screen.compact #areas-detail,
+Screen.compact #prices-detail {
+  height: 6;
+}
+
+Screen.micro #sessions-detail,
+Screen.micro #areas-detail,
+Screen.micro #prices-detail {
+  display: none;
+}
+
+Screen.compact #status,
+Screen.micro #status {
+  height: 1;
+  padding: 0 1;
 }

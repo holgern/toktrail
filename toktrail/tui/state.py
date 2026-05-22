@@ -4,6 +4,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from toktrail.tui.layout import TuiMode
+
 
 @dataclass(frozen=True)
 class ToktrailTuiState:
@@ -16,3 +18,4 @@ class ToktrailTuiState:
     timezone_name: str | None = None
     utc: bool = False
     refresh_on_start: bool = True
+    tui_mode: TuiMode = "auto"

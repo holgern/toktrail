@@ -7,6 +7,7 @@ from textual.widgets import DataTable, Static
 
 from toktrail.api.models import PriceRow, UnconfiguredModelRow
 from toktrail.cli_parts.formatting import _format_int, _format_price
+from toktrail.tui.layout import TuiDisplay, resolve_tui_display
 from toktrail.tui.panes.exportable import ExportablePaneMixin
 from toktrail.tui.services import PricesData
 
@@ -14,27 +15,28 @@ from toktrail.tui.services import PricesData
 class PricesPane(ExportablePaneMixin, Vertical):
     selected_unconfigured: UnconfiguredModelRow | None = None
 
+    def __init__(self, *args, **kwargs) -> None:  # type: ignore[no-untyped-def]
+        super().__init__(*args, **kwargs)
+        self.tui_display: TuiDisplay = resolve_tui_display("full")
+        self._price_subview: str = "unconfigured"
+
+    def set_display(self, display: TuiDisplay) -> None:
+        self.tui_display = display
+        self._sync_subview_visibility()
+
+    def toggle_subview(self) -> str:
+        if self._price_subview == "unconfigured":
+            self._price_subview = "configured"
+        else:
+            self._price_subview = "unconfigured"
+        self._sync_subview_visibility()
+        return self._price_subview
+
     def compose(self) -> ComposeResult:
         configured = DataTable(id="prices-configured-table")
         configured.cursor_type = "row"
-        configured.add_columns(
-            "Kind",
-            "Table",
-            "Provider",
-            "Model",
-            "Input/1M",
-            "Output/1M",
-        )
         unconfigured = DataTable(id="prices-unconfigured-table")
         unconfigured.cursor_type = "row"
-        unconfigured.add_columns(
-            "Required",
-            "Harness",
-            "Provider",
-            "Model",
-            "Msgs",
-            "Tokens",
-        )
         yield configured
         yield unconfigured
         yield Static("No unconfigured model selected.", id="prices-detail")
@@ -43,32 +45,51 @@ class PricesPane(ExportablePaneMixin, Vertical):
         configured = self.query_one("#prices-configured-table", DataTable)
         unconfigured = self.query_one("#prices-unconfigured-table", DataTable)
         detail = self.query_one("#prices-detail", Static)
+        self._configure_columns(configured, unconfigured)
         configured.clear(columns=False)
         unconfigured.clear(columns=False)
         for row in data.rows:
-            configured.add_row(
-                row.source_kind,
-                row.table,
-                row.provider,
-                row.model,
-                _format_price(row.input_usd_per_1m),
-                _format_price(row.output_usd_per_1m),
-            )
+            if self.tui_display.mode == "full":
+                configured.add_row(
+                    row.source_kind,
+                    row.table,
+                    row.provider,
+                    row.model,
+                    _format_price(row.input_usd_per_1m),
+                    _format_price(row.output_usd_per_1m),
+                )
+            else:
+                configured.add_row(
+                    row.source_kind,
+                    row.provider,
+                    row.model,
+                    _format_price(row.input_usd_per_1m),
+                    _format_price(row.output_usd_per_1m),
+                )
 
         previous_key = self._unconfigured_row_key(self.selected_unconfigured)
         self._rows_by_key: dict[str, UnconfiguredModelRow] = {}
         for row in data.unconfigured:
             key = self._unconfigured_row_key(row)
             self._rows_by_key[key] = row
-            unconfigured.add_row(
-                ",".join(row.required),
-                row.harness,
-                row.provider_id,
-                row.model_id,
-                _format_int(row.message_count),
-                _format_int(row.tokens.total),
-                key=key,
-            )
+            if self.tui_display.mode == "full":
+                unconfigured.add_row(
+                    ",".join(row.required),
+                    row.harness,
+                    row.provider_id,
+                    row.model_id,
+                    _format_int(row.message_count),
+                    _format_int(row.tokens.total),
+                    key=key,
+                )
+            else:
+                unconfigured.add_row(
+                    ",".join(row.required),
+                    row.provider_id,
+                    row.model_id,
+                    _format_int(row.tokens.total),
+                    key=key,
+                )
 
         if not data.unconfigured:
             self.selected_unconfigured = None
@@ -84,6 +105,7 @@ class PricesPane(ExportablePaneMixin, Vertical):
             unconfigured.move_cursor(row=row_index, column=0)
             self._update_detail(self.selected_unconfigured)
             self.export_text = self._build_export_text(data)
+        self._sync_subview_visibility()
 
     def seed_manual_price_row(self) -> PriceRow | None:
         if self.selected_unconfigured is None:
@@ -164,3 +186,42 @@ class PricesPane(ExportablePaneMixin, Vertical):
                 )
             )
         return "\n".join(lines)
+
+    def _configure_columns(
+        self, configured: DataTable, unconfigured: DataTable
+    ) -> None:
+        configured.clear(columns=True)
+        unconfigured.clear(columns=True)
+        if self.tui_display.mode == "full":
+            configured.add_columns(
+                "Kind",
+                "Table",
+                "Provider",
+                "Model",
+                "Input/1M",
+                "Output/1M",
+            )
+            unconfigured.add_columns(
+                "Required",
+                "Harness",
+                "Provider",
+                "Model",
+                "Msgs",
+                "Tokens",
+            )
+            return
+        configured.add_columns("Kind", "Provider", "Model", "In", "Out")
+        unconfigured.add_columns("Need", "Provider", "Model", "Tokens")
+
+    def _sync_subview_visibility(self) -> None:
+        try:
+            configured = self.query_one("#prices-configured-table", DataTable)
+            unconfigured = self.query_one("#prices-unconfigured-table", DataTable)
+        except Exception:
+            return
+        if self.tui_display.mode == "full":
+            configured.display = True
+            unconfigured.display = True
+            return
+        configured.display = self._price_subview == "configured"
+        unconfigured.display = self._price_subview == "unconfigured"
