@@ -1,0 +1,848 @@
+{
+  "created_at": "2026-05-23T06:05:25Z",
+  "directories": {
+    ".": {
+      "file_count": 240,
+      "sha256": "87eaa1dbfe782bdcb103b7bbcb99bf690f28234d7d469664595c4aef01133397"
+    },
+    ".github": {
+      "file_count": 4,
+      "sha256": "0119ea651c188d1072b11f7f841887798c4af35b6b7cb32e9dd79472f7f7f40f"
+    },
+    ".github/workflows": {
+      "file_count": 4,
+      "sha256": "57ace192497869227fb3aef2e1fe8d7cf0b56532cc1affe796b56e8a12f41161"
+    },
+    "docs": {
+      "file_count": 8,
+      "sha256": "3192f862b2ab66fc1725acfb404d39b565585435492797e4eea3db3f5eb43b62"
+    },
+    "examples": {
+      "file_count": 10,
+      "sha256": "2deadcfdad7d04b4ef56d4f16246d0d3163fe9adfea9b2b2e8181553122fff15"
+    },
+    "scripts": {
+      "file_count": 1,
+      "sha256": "45a78dd25036eb5994ffaa03654343e37b8580f5c03c191048e11c951ff0a6f5"
+    },
+    "tests": {
+      "file_count": 68,
+      "sha256": "7297f8cd0e11ac1bfdefdf920500fef99228cdea185af0bb831aa66b79fedc40"
+    },
+    "tests/cli": {
+      "file_count": 19,
+      "sha256": "667b730dd2a053f140fb80b075ceccd37c024c6a5d630d8abc070695a904af4b"
+    },
+    "tests/perf": {
+      "file_count": 1,
+      "sha256": "00aadd647093eb5cc1dde13520d31bdd01011f23fe61a3b8c77fb09a701bee26"
+    },
+    "tests/tui": {
+      "file_count": 8,
+      "sha256": "4e378c40f667701e5f05703e2a1363e8292a1e0bd260aafea2633602a884057c"
+    },
+    "toktrail": {
+      "file_count": 137,
+      "sha256": "d2002cabd8aac29ee5db1490031024fc9a47e08a4b93ff6fd8d4b4bb98737e7a"
+    },
+    "toktrail/_db": {
+      "file_count": 16,
+      "sha256": "1a427e1814e6b539c3b3d801a583ad59d0685dfdd43f79ea066c2db68eff7c3a"
+    },
+    "toktrail/adapters": {
+      "file_count": 15,
+      "sha256": "024f93f28691ec5e51c5eda7515edd64e728b7f45045b99045cee7c03130faf1"
+    },
+    "toktrail/api": {
+      "file_count": 33,
+      "sha256": "b0880b9ddced1e69ceaa4ab2e184e27f9890ca6a5b76073d330ed0b7264594b6"
+    },
+    "toktrail/api/model_parts": {
+      "file_count": 12,
+      "sha256": "75ff51818f84a04cb9e84bd03767e41dfafa144b156846363cda083e540e6070"
+    },
+    "toktrail/cli_parts": {
+      "file_count": 19,
+      "sha256": "01cc242d03444a260be380969ef4acbad12002b5fd26cd02164f1712cf2ad050"
+    },
+    "toktrail/config_parts": {
+      "file_count": 12,
+      "sha256": "08e56026294d74aef8c9fad10639a8664dacfc6b368bb3bb8b869d0e671252e8"
+    },
+    "toktrail/git_sync_parts": {
+      "file_count": 2,
+      "sha256": "951b442395c3ac0a6f20422fbb91ae1ce55b8147d3cd78b6623d58853a89d175"
+    },
+    "toktrail/sync_parts": {
+      "file_count": 2,
+      "sha256": "f05e40e2de7c70b41c460310d6dc793ad83784721b26feaddd5b3b41f6282f66"
+    },
+    "toktrail/tui": {
+      "file_count": 18,
+      "sha256": "3371680d0d2e57f6e775a2df4d813d94e0d0c0a85a182cb086d4120aff2d8617"
+    },
+    "toktrail/tui/panes": {
+      "file_count": 8,
+      "sha256": "77bc4d80f631ec0d351b5b7f71468b89b866b667d88a74be97272f9fa1c1b217"
+    },
+    "toktrail/tui/screens": {
+      "file_count": 4,
+      "sha256": "5623c750a0f1e34f3e0434372f675a6a0777d2d1ab32d7182fd9accd4bdf9dff"
+    }
+  },
+  "files": {
+    ".archledger.toml": {
+      "sha256": "53e4d7ecc9c65839681cce88510927fd3c034657b27847c75b1e49b3c8d7f555"
+    },
+    ".codecrate.toml": {
+      "sha256": "b28ec5cb6cc0678bdb9a83450a23132b801e337ccf40478f76e5bd28f1e304fb"
+    },
+    ".github/workflows/codecov.yml": {
+      "sha256": "38f978fafd266e8c0ede289c983c4ed9dd443846f5c7c73b3e4007bec90c4915"
+    },
+    ".github/workflows/pre-commit.yml": {
+      "sha256": "58d92d74ca5f6b04a2e3acc3030e14d81d3aec1100570ce0e5bf80cac4042d11"
+    },
+    ".github/workflows/python-publish.yml": {
+      "sha256": "2a9e59c962656ff18116500344a5d783d258c66abe899fe528726736076320ac"
+    },
+    ".github/workflows/tests.yml": {
+      "sha256": "13a9661952305332f38a16bcddf8f1338e7d4fcf533c07d4cec27ccead52af96"
+    },
+    ".pre-commit-config.yaml": {
+      "sha256": "f62c5fe9146a9e7f992c5af12f5f02010bc1896d9a5426c02d6829547b016dc9"
+    },
+    ".readthedocs.yaml": {
+      "sha256": "da28d5b8d562fdb135b048a945b344a2a99ad9132754dc0aa5e3125f04c09e71"
+    },
+    ".ruff.toml": {
+      "sha256": "a2772615e41d74ec62417cea55b13a2b371822b0ce7f02552198f33822f184b1"
+    },
+    ".taskledger.toml": {
+      "sha256": "b630c77ef50bd52ff4c6101604c87b626897ec9dba0329dfded89e7dadea6264"
+    },
+    "AGENTS.md": {
+      "sha256": "7a1860444f1daa4dfe3c60c74901793e0bc5230abfe7bf5e82305e4af0e140a1"
+    },
+    "API.md": {
+      "sha256": "032097f37a568006e48a6317a78cbe6cb8ee321107ead875edf05fd14cdffa70"
+    },
+    "CHANGELOG.md": {
+      "sha256": "71af457c033816130428a663b0815ee4d519dc51893dc125a8f7907e1721d605"
+    },
+    "README.md": {
+      "sha256": "11e5b31d73fa6074c594a26c9eb8c1efc4359b4b77830e63b2278634fb065000"
+    },
+    "docs/api.rst": {
+      "sha256": "cc908432fe833b3cb8e4c167a869136c63b937215db359817288286dba5688cc"
+    },
+    "docs/api_usage.rst": {
+      "sha256": "06ccd0d04c469eed639603149ad2a715054c687bc09bb48970b04789ffacb3d5"
+    },
+    "docs/conf.py": {
+      "sha256": "921108db22c05ed55630702f8837b6e68e49986959da4e6644ca823e6d2ba6c8"
+    },
+    "docs/config.rst": {
+      "sha256": "f6e262fc8a347b0c2e1baba933522e3f0dc9b1f97e7001dbced07cf7bbb21e39"
+    },
+    "docs/harnesses.rst": {
+      "sha256": "f9f985ff16a86b87c31fd39988e3d206221fd6a181a46257c2fd690d10690825"
+    },
+    "docs/index.rst": {
+      "sha256": "49f3b4dd33acae855dad5445f49b6c87720bd6786a7d9b73c6ba7d1b30a8ce3e"
+    },
+    "docs/stable_api_examples.md": {
+      "sha256": "4098707a743186eb588bca27f14f7724e97ac246075fec996be0d75fbb8be599"
+    },
+    "docs/usage.rst": {
+      "sha256": "65ef7150c907bbb170c8178156868ad3ae44c58d4f80c01f9c605e46d980ad2e"
+    },
+    "examples/_manual_run_common.py": {
+      "sha256": "39a010bfbb3118c3c6607577d0a841bca70eb6b9ccaf888602785e10cc9ee193"
+    },
+    "examples/manual_run_amp.py": {
+      "sha256": "18b8f6f8b0ae9b5fd286433af124b78a48288409aaa176ffe167720258579411"
+    },
+    "examples/manual_run_claude.py": {
+      "sha256": "32b479a97f21ffe7f7c8c7b6a71b191cecae8a597f5d17958c12089066b02d37"
+    },
+    "examples/manual_run_codex.py": {
+      "sha256": "32b34843ccaa1f7fd15ea9fdcf0fddfebe6e4b786d21c81321225c65dad79585"
+    },
+    "examples/manual_run_copilot.py": {
+      "sha256": "f8cf8dcd52c6b906cdf833413e1fcf405e406ab2c6d8d3a95310a2dec1c57257"
+    },
+    "examples/manual_run_droid.py": {
+      "sha256": "a18195d398dbb3f74aee7a3d8870944ca35b9f41d3dacf748712b62cdc268804"
+    },
+    "examples/manual_run_goose.py": {
+      "sha256": "ec75d25659052e3e2be9fed6f2e190348321ba46d16cc11c024991afd6052925"
+    },
+    "examples/manual_run_opencode.py": {
+      "sha256": "221aed16410aa93eb9003eb75ef5c29143705a7a4841d7d1180fe2deb29ccfd6"
+    },
+    "examples/manual_run_pi.py": {
+      "sha256": "79c7d33ef835629694926a7dcb22ad5a90675672dd0109f05aa6c2c58ce7541d"
+    },
+    "examples/manual_run_vibe.py": {
+      "sha256": "1897154db093426619f586da6e3c0ba6ee97e90ad4350bd7ced5c5fb2760b9ca"
+    },
+    "pyproject.toml": {
+      "sha256": "7fc9b920c8ab20a72c82ac1e521bd846ee1a69fd0ea78a894c0cb54c7baa23b3"
+    },
+    "scripts/file_stats.py": {
+      "sha256": "bebfc89e8a8083730508a2aa43d26b3f7bb9c68b5e29b0771c79207c2fdd1d7c"
+    },
+    "setup.py": {
+      "sha256": "843ac26c38a41abae578250bc0f9419194b320a0f67327d941037a4268f6cfe7"
+    },
+    "tests/__init__.py": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "tests/cli/__init__.py": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "tests/cli/conftest.py": {
+      "sha256": "2b16cf247a7b020ab49f7c5f4de2d422949413b2e2e338e2842b36e55407da2f"
+    },
+    "tests/cli/git_helpers.py": {
+      "sha256": "b2ac301343f1479e1e4603144f0932ebfa42a9e529b1ed301f9ad743708d8dd5"
+    },
+    "tests/cli/helpers.py": {
+      "sha256": "8046a0106537f1b930a2124b4de09dcf0a5e7ca91f02082eb2cb6f26ebd70493"
+    },
+    "tests/cli/test_analyze.py": {
+      "sha256": "8c610cbb7aa9ad46925805f8cc3143e2b11d6a201018062c8745bb25b7d6bff1"
+    },
+    "tests/cli/test_area.py": {
+      "sha256": "c44fc12f3600e64db196571eac59040dc1fea5ab521cf112640b25b246f39489"
+    },
+    "tests/cli/test_copilot.py": {
+      "sha256": "fc3cc5863a20f1e0994e908b046cb8840b7ccb828dc9a32cb434b2e63fc10c6c"
+    },
+    "tests/cli/test_machines.py": {
+      "sha256": "a34911b9f7086192c0a63e0668940ce77b4cedd60cca1e8f7b0b54e8b829fac7"
+    },
+    "tests/cli/test_pricing_config.py": {
+      "sha256": "e2b6b93e2f54a7309ad706dd37e3972ae6443c294a24c3cdc0e0690522de06e8"
+    },
+    "tests/cli/test_refresh.py": {
+      "sha256": "389c322c06845792f0e8aa5657c63c9ddc00fd716f651c863d4053e2b02066c4"
+    },
+    "tests/cli/test_run.py": {
+      "sha256": "7a00d87dd6aa931bd4d7d631e9bf90b83994bc4530f5bac141651ddcc2aaa006"
+    },
+    "tests/cli/test_sources.py": {
+      "sha256": "f9477c3e8899fdc8b280a6007874cd9503cbe015b7b305182e0687bdcbe92c1a"
+    },
+    "tests/cli/test_status.py": {
+      "sha256": "58fb0b3cbde48bde07060dae955abe22d23a8eb4c477b1273e4ee1e99027a543"
+    },
+    "tests/cli/test_statusline.py": {
+      "sha256": "9190a75ef028b470a06f39525d44cad114b26c69f5081a3285729f49bda4aaf7"
+    },
+    "tests/cli/test_subscriptions.py": {
+      "sha256": "2157d8e198346483ee249247a3ac82ba4957c82969e7d34da9aa4c57939d68de"
+    },
+    "tests/cli/test_sync_git.py": {
+      "sha256": "2443eb9f28f0d3d0b67cd5d84341c0ea7b866a03350fadcf44af712ec6ee7d33"
+    },
+    "tests/cli/test_tui.py": {
+      "sha256": "e805d47d7699aa1bba65a61b01e5608f8dea185dc96a96952a52b89cb5524603"
+    },
+    "tests/cli/test_usage.py": {
+      "sha256": "6b2daa1db4602e945a9ecb5f2e192f64ba8ddaca28a0ec63f2d7dfce9c5d2b47"
+    },
+    "tests/cli/test_watch.py": {
+      "sha256": "46c1d92e0a78e3496adfd1f0982711636db2d6ded82a25dd5e7d0bf8913a42b0"
+    },
+    "tests/helpers.py": {
+      "sha256": "e0e12f49af69b1aaa4974bf3f223aee32f4110d4418fc922acd31c9f470392c1"
+    },
+    "tests/perf/bench_reports.py": {
+      "sha256": "9e90cc228bdb24e398a1fb7ac1ae2764c42e54cbe10023a8a2031370a160e63b"
+    },
+    "tests/test_adapter_summary.py": {
+      "sha256": "f9b4e69430e386fb99fc7db36841fe933910844c3a1ba3cd7123eb6ef6572905"
+    },
+    "tests/test_amp_parser.py": {
+      "sha256": "5081854e0f05eb46afe8c42c4e7550ff897527072894714f2fdf4a239fec133c"
+    },
+    "tests/test_analysis.py": {
+      "sha256": "3d06f5df2ca5b462a532e0128c3b2aee3b04e406e5ea51cb74ad6286f5ff089a"
+    },
+    "tests/test_api_config.py": {
+      "sha256": "932db52e5b2962c7ceda92e9f2537534917ee3806bdf0b6ac2b3ee2da3e45889"
+    },
+    "tests/test_api_contract.py": {
+      "sha256": "ff367cc109a115aa6250ff93a6ef9bcc121f009ddad02534422e9935fe606763"
+    },
+    "tests/test_api_environment.py": {
+      "sha256": "a1b41b963ee8b8e35fff81e073b9d11ee9bcdddbe45e66a2d3c43b311608418a"
+    },
+    "tests/test_api_events.py": {
+      "sha256": "64921e37af216cebd3c9a111e4a6cbc2581a45ee2b6a3b2434ba25f546ff1687"
+    },
+    "tests/test_api_imports.py": {
+      "sha256": "3e177fa4703f684bf9024626f47b8d7892ec65a15f25e777fc916f18dad5a799"
+    },
+    "tests/test_api_prices.py": {
+      "sha256": "86a05a7160635b2f75675bd702c7ef46df3bd52266ab50b0b1564b949beb58e6"
+    },
+    "tests/test_api_reports.py": {
+      "sha256": "7d45bad683b246a010ab0cc17237236bccfe6d44f59cfd4e263a421e9f0bea4a"
+    },
+    "tests/test_api_sessions.py": {
+      "sha256": "a9ad7d83d9a33b438e770773700e4a64749db998e60571d675c4d8caf9eda4ea"
+    },
+    "tests/test_api_sources.py": {
+      "sha256": "fa9fbdb5f2a7157a17ef511897fa462807629a69c8c24f05f82607baf505e496"
+    },
+    "tests/test_api_statusline.py": {
+      "sha256": "439c3407121589fda891c10adc10edb839b1ce6b12ce495a0138123352a0e62b"
+    },
+    "tests/test_api_workflow.py": {
+      "sha256": "30ed61aa45dfdff3eaf36be32a67b0bf429e421cf8fdfab0af5b720fa6bd2325"
+    },
+    "tests/test_architecture_smoke.py": {
+      "sha256": "830154f569aa7169006dd5ef2ab39f18c7228fb60d101975f0967e6ba6f7ce79"
+    },
+    "tests/test_cache.py": {
+      "sha256": "4e616d0e3693cc43cdd73240cb3f2affba1312de167fcb77ae015da16ec573ca"
+    },
+    "tests/test_claude_parser.py": {
+      "sha256": "09eef485f88c02e26aa84a1014845cf0b523e02798e8cc526cfb22320b22bc07"
+    },
+    "tests/test_code_parser.py": {
+      "sha256": "71842b803d8cff7ca287db054ad0bd4198e97293cbef67be93da205200194a06"
+    },
+    "tests/test_codex_parser.py": {
+      "sha256": "5f72ba794ee3ed78e9fb28db554231c496920df7d08d1cad4c8318911b00b776"
+    },
+    "tests/test_config.py": {
+      "sha256": "edb9d1b75347810589035d64e62dd887c509afa046c8f58daaaf168c25032544"
+    },
+    "tests/test_copilot_parser.py": {
+      "sha256": "0bcf5db03fdaa85a5cd923552d16f6b6daf91b4944ab383bb6682e5241c7491f"
+    },
+    "tests/test_costing.py": {
+      "sha256": "a42d4e5e981ce0ffa2242e634f7b1a3446f1595ac5fff7d493d2dac4305e813c"
+    },
+    "tests/test_db.py": {
+      "sha256": "67d2868cf563039bed1e958838f1a2c23eec409c8c007986d58f405c511c6702"
+    },
+    "tests/test_docs_commands.py": {
+      "sha256": "da9a25db46c8b1cda5ec27d44ae3543c4c4b5d2b8cedc999e27185fee8730fd0"
+    },
+    "tests/test_droid_parser.py": {
+      "sha256": "4c469bb1a103cad5fafe32c7de0a23250f2cff23552bb6357a59cb251595dcc6"
+    },
+    "tests/test_git_sync.py": {
+      "sha256": "2147c54013e9cc1533ca3efd312a2de85c2b9b644cba56bcee787c3b28d3a1f0"
+    },
+    "tests/test_goose_parser.py": {
+      "sha256": "1e682ba5d5404cf62b33d4f8cdf9a4d5bd6b01ed173ac1ababcda517914c8102"
+    },
+    "tests/test_harnessbridge_parser.py": {
+      "sha256": "e7306eaffdc88779da0b553eb6730f113f2a56f60495aae4f5f29169be821e9f"
+    },
+    "tests/test_opencode_parser.py": {
+      "sha256": "d9e56eed4b9302938b6f5baf6165a90e5b165ca7cc2a442c0d0abe828824cbf2"
+    },
+    "tests/test_paths.py": {
+      "sha256": "80b7a4ee401bc860ab498ddefc4f73f9852f2d265c3d4d0ef26edcc9cd1a64c5"
+    },
+    "tests/test_periods.py": {
+      "sha256": "e9d6fbec78844b660b6dc3a56d71aa099dba14afa5854f6251f005fba5b06bd1"
+    },
+    "tests/test_pi_parser.py": {
+      "sha256": "71aa3eff364765350ad91017d8346ae64a8dd5bbba9d7e0405ad764b424d5f7b"
+    },
+    "tests/test_price_parser.py": {
+      "sha256": "b47345c65f837b4166d7d026301349a258c9d094df36b30806d5450531f4dfe7"
+    },
+    "tests/test_provider_identity.py": {
+      "sha256": "85432f4d0a9e2e86cb83a89e1a438fe1e818d6fa513a2f77f629c7526ee9c9e1"
+    },
+    "tests/test_scanner.py": {
+      "sha256": "bb5afb332ec8126381a6f0529059d67b5774cadacea51a7ac98946d9fcab7413"
+    },
+    "tests/test_stable_api_examples.py": {
+      "sha256": "ed771d8ce1c263844d5b5d60a7a432635b07e7c091ee03dafbd5decbedd10fd2"
+    },
+    "tests/test_sync.py": {
+      "sha256": "da0ef33c1fb5558773825b5ed0b1824fe9ea94727c5babdf4de3f23037cc281b"
+    },
+    "tests/test_vibe_parser.py": {
+      "sha256": "37429de24a589dfb572bcee6699d203b1175a35ab477b4f5076a849abec3cedd"
+    },
+    "tests/tui/__init__.py": {
+      "sha256": "090baa0424f79a4f8d88383f1ac59d62f92d04626487fe031c3cac2f0e35da59"
+    },
+    "tests/tui/test_app_smoke.py": {
+      "sha256": "77255541e9e46b94b52cfc71abc7bb7eaa3578920f54d1ac499bca5acc57eecf"
+    },
+    "tests/tui/test_areas_pane.py": {
+      "sha256": "214097b395e3366a89a9017e58aa42c70858ef851277b7ed2b0ad8176d46c664"
+    },
+    "tests/tui/test_copy_export.py": {
+      "sha256": "ce8b169ae1220de88d20c4ad68fbf22dd896886bebbd76dcb40b22ba4c24208b"
+    },
+    "tests/tui/test_layout.py": {
+      "sha256": "19a5c3e04c0c6fc6c4ff8cea966e28428c0167c438ae2c4a2bf178cb3e249ce4"
+    },
+    "tests/tui/test_navigation.py": {
+      "sha256": "7e8f2813d6e12a1cdd510d65fa5af11486777b59090dac4d1518854e6c7adc1f"
+    },
+    "tests/tui/test_prices_pane.py": {
+      "sha256": "bba56be58aeeb936663614b467ba9c9af00b084d3926be03afc3b49ed4f85926"
+    },
+    "tests/tui/test_subscriptions_pane.py": {
+      "sha256": "b3230fe40c5d21d08256878ff100ed639c029edb10f5a25d662cf7b36596b60f"
+    },
+    "toktrail/__init__.py": {
+      "sha256": "fa16130d375d2a4a1c046c621880f6e7f66704766c33b024c25316f51e40592f"
+    },
+    "toktrail/_db/__init__.py": {
+      "sha256": "0e21d4a7f7b79ae544fb8c78eba5fc423c670d705e55403cad4ae9439cedcf0b"
+    },
+    "toktrail/_db/areas.py": {
+      "sha256": "3b27b95ad4c2ae20aa1e41fff3408eacf2f33e646b6c4efce7a374df69d6cbb3"
+    },
+    "toktrail/_db/connection.py": {
+      "sha256": "3b27b95ad4c2ae20aa1e41fff3408eacf2f33e646b6c4efce7a374df69d6cbb3"
+    },
+    "toktrail/_db/core_db.py": {
+      "sha256": "bc399a245cacea31ddc676a7bbd9c91bde0377783455debbb916bdb46e414bb8"
+    },
+    "toktrail/_db/legacy_db.py": {
+      "sha256": "fe4b27564a4f824bae5e36cb5064268654fd76c20475ebf0bd04e5a6e9d82151"
+    },
+    "toktrail/_db/migrations.py": {
+      "sha256": "3b27b95ad4c2ae20aa1e41fff3408eacf2f33e646b6c4efce7a374df69d6cbb3"
+    },
+    "toktrail/_db/reports_areas.py": {
+      "sha256": "3b27b95ad4c2ae20aa1e41fff3408eacf2f33e646b6c4efce7a374df69d6cbb3"
+    },
+    "toktrail/_db/reports_runs.py": {
+      "sha256": "3b27b95ad4c2ae20aa1e41fff3408eacf2f33e646b6c4efce7a374df69d6cbb3"
+    },
+    "toktrail/_db/reports_series.py": {
+      "sha256": "3b27b95ad4c2ae20aa1e41fff3408eacf2f33e646b6c4efce7a374df69d6cbb3"
+    },
+    "toktrail/_db/reports_sessions.py": {
+      "sha256": "3b27b95ad4c2ae20aa1e41fff3408eacf2f33e646b6c4efce7a374df69d6cbb3"
+    },
+    "toktrail/_db/reports_subscriptions.py": {
+      "sha256": "3b27b95ad4c2ae20aa1e41fff3408eacf2f33e646b6c4efce7a374df69d6cbb3"
+    },
+    "toktrail/_db/reports_usage.py": {
+      "sha256": "3b27b95ad4c2ae20aa1e41fff3408eacf2f33e646b6c4efce7a374df69d6cbb3"
+    },
+    "toktrail/_db/runs.py": {
+      "sha256": "3b27b95ad4c2ae20aa1e41fff3408eacf2f33e646b6c4efce7a374df69d6cbb3"
+    },
+    "toktrail/_db/schema.py": {
+      "sha256": "3b27b95ad4c2ae20aa1e41fff3408eacf2f33e646b6c4efce7a374df69d6cbb3"
+    },
+    "toktrail/_db/source_sessions.py": {
+      "sha256": "3b27b95ad4c2ae20aa1e41fff3408eacf2f33e646b6c4efce7a374df69d6cbb3"
+    },
+    "toktrail/_db/usage_events.py": {
+      "sha256": "3b27b95ad4c2ae20aa1e41fff3408eacf2f33e646b6c4efce7a374df69d6cbb3"
+    },
+    "toktrail/adapters/__init__.py": {
+      "sha256": "285cdd6162023770c6c9d24baf375a62f2451bca8194e8d1427cf315a9f0aaa3"
+    },
+    "toktrail/adapters/amp.py": {
+      "sha256": "7479647a53e9ef2719c334960c794642cc780515755d75a52699aff98628b674"
+    },
+    "toktrail/adapters/base.py": {
+      "sha256": "ec4311dd557829a215007f087ff7a41592803604496bb5070cbaf61735bd0420"
+    },
+    "toktrail/adapters/claude.py": {
+      "sha256": "293626adf1dfb9db6a352f6a814342a632cee00309b4759ee66956264881868e"
+    },
+    "toktrail/adapters/code.py": {
+      "sha256": "140c32a1add520a517f869e216ad119078642b9adde156b3443eca579ed41f31"
+    },
+    "toktrail/adapters/codex.py": {
+      "sha256": "1c5874efa120ec401dbe9f41a7d412eaaeabed00ddc8bfce405e7715257ac0fd"
+    },
+    "toktrail/adapters/copilot.py": {
+      "sha256": "6399f8629b5384b0eb1408641ef47c85909f882761b27cad907295715b96028b"
+    },
+    "toktrail/adapters/droid.py": {
+      "sha256": "3bbdb99962ddc0dfa095e27a8c73457b59febe1f3d726814154da103a520dab8"
+    },
+    "toktrail/adapters/goose.py": {
+      "sha256": "52b6e48f850bc086f2ad193fb67fd388830f2a6ccd1896406e840c611b37c263"
+    },
+    "toktrail/adapters/harnessbridge.py": {
+      "sha256": "7feef4c11b687b16526e258232bd51d4120a2c23f9a054241f9c5dc567ad8a93"
+    },
+    "toktrail/adapters/opencode.py": {
+      "sha256": "5fa2faaf45cc60dfcc1a385c53409184a8d80c905c71ac3e2f129dfb66453b0e"
+    },
+    "toktrail/adapters/pi.py": {
+      "sha256": "9fc742f94eac82753d8dc8bc6cb15105f1afac7158c4beb01aff5ad310d51ccd"
+    },
+    "toktrail/adapters/registry.py": {
+      "sha256": "2db97c7b4c11d7e9822d872d6c67bd37009d4c347510669c3188e05931ffe66e"
+    },
+    "toktrail/adapters/summary.py": {
+      "sha256": "9dc1f61ebf62c4af11bcadd433c27878cb7d11c7e13c6619e2f904136d341f22"
+    },
+    "toktrail/adapters/vibe.py": {
+      "sha256": "2cff5846b91c86a60909767665bec16b0ec36255b27c24858b868681c2e8d3e4"
+    },
+    "toktrail/analysis.py": {
+      "sha256": "18fd4552c3beeb065c4d67303b8e99d695143748120765f8eaba607157b47039"
+    },
+    "toktrail/api/__init__.py": {
+      "sha256": "425d8416e53077b8c80445467dbb946f8a5578167b088af532b433e34a9b4ba2"
+    },
+    "toktrail/api/_common.py": {
+      "sha256": "824af21c5e5211ca1ce1d78335aa3f1e737466d06b385e614265bf4b08aaa391"
+    },
+    "toktrail/api/_conversions.py": {
+      "sha256": "419593482584ef64f28063c054922f7a20e1798ae1452526d60f855eb579cf35"
+    },
+    "toktrail/api/_files.py": {
+      "sha256": "6fb36c32cf7b5dc1ea28900e4ee1911ddd3d6f95efd9f02114062e0ba264300b"
+    },
+    "toktrail/api/analysis.py": {
+      "sha256": "9fde3e74d839b795294bb27c43e950716699b37cd82ee97ed6e4b2fe3d940ce9"
+    },
+    "toktrail/api/areas.py": {
+      "sha256": "e13b935d9367223d76283d1e29017e8324746b1e7ccc78e090a193f1c1f3e15b"
+    },
+    "toktrail/api/config.py": {
+      "sha256": "587c6548e6a49ba8b2ceab7250ae39d5460b5e146098d15e1dfc6911586d57e8"
+    },
+    "toktrail/api/environment.py": {
+      "sha256": "62e50d1fac4d304d46ef7ad154eb2b070c224becfaed421274839c48d37c1214"
+    },
+    "toktrail/api/events.py": {
+      "sha256": "4944ed573a8050ff11680a5aeb1ba8865c9e31042454f931e64c881c75e8cd98"
+    },
+    "toktrail/api/harnesses.py": {
+      "sha256": "59ab4df95596160eb65c43b90982278f3a71c2decfd91eaf56372bfce49ec856"
+    },
+    "toktrail/api/imports.py": {
+      "sha256": "51b78297a489b6c61d15169c4e5c555f137674c5e4f8353f76b0ca67af975b0d"
+    },
+    "toktrail/api/machines.py": {
+      "sha256": "6ecbe07854b21f212dae9bcf6ee03bdac433bb16a62d306788925cc79e0abe13"
+    },
+    "toktrail/api/model_parts/__init__.py": {
+      "sha256": "716bfc28dc34e0a74f515e0c49d7a30b2d5afc6cb06979b9e043990f392be5ac"
+    },
+    "toktrail/api/model_parts/areas.py": {
+      "sha256": "f4faf6a61b1b8913c91c4e69c9dd8eedfbd71a8b0be01e42a0fe147c10227a0b"
+    },
+    "toktrail/api/model_parts/cache_analysis.py": {
+      "sha256": "21d3be9b2143ae8936eb2c86e35779b6492e2aa6247903c85f7b60fca2ac7406"
+    },
+    "toktrail/api/model_parts/core_models.py": {
+      "sha256": "566bf8bac93742c8b1fe350d390854a4a2eb3ec8c2910133fc325c3ffe5f26d8"
+    },
+    "toktrail/api/model_parts/legacy_models.py": {
+      "sha256": "91f184d70e24e4cd3e557d272136321488d6023b2af4c15030bdd694090da0bc"
+    },
+    "toktrail/api/model_parts/reports.py": {
+      "sha256": "360fae2f0a26265d32c9ac3a9b10c563b6f26d94fcaf4af19ce940fb9a3705df"
+    },
+    "toktrail/api/model_parts/runs.py": {
+      "sha256": "87025ac842a85bd010fc3a4e6fabb38020193fae5cd0eda6ef0880b02379b484"
+    },
+    "toktrail/api/model_parts/statusline.py": {
+      "sha256": "183e9609e2b7a0e027e19b2f58162e7b585fde219d6c6ee4f4e4ed96480614dd"
+    },
+    "toktrail/api/model_parts/subscriptions.py": {
+      "sha256": "375c819bd55c6fc4cbebe2d4f71238c973ad29c62689a2423ec1e5848a73ae3f"
+    },
+    "toktrail/api/model_parts/sync.py": {
+      "sha256": "21a4798da5e67886bd29a88456461ae37bf932226b9e9ecbae7c3f2a3156e1f1"
+    },
+    "toktrail/api/model_parts/tokens.py": {
+      "sha256": "414e89d60398011f436bb122d0b530227599901884c94e8ec5173cbd674f228c"
+    },
+    "toktrail/api/model_parts/usage.py": {
+      "sha256": "60b1f1a75913331eb3d1db01a9aa042cebc14493b2b69cb7599051c8a460a0f3"
+    },
+    "toktrail/api/models.py": {
+      "sha256": "a4ad0aaf131047e871cbe04c33bac829cbdcbef5de506a7d71b5c225c48275f7"
+    },
+    "toktrail/api/paths.py": {
+      "sha256": "0d8ef6113dc8e5c30383d13a6722c708e765f2847cb42232d4eea3418cb89529"
+    },
+    "toktrail/api/prices.py": {
+      "sha256": "e6150babfcf3146fda3643a323d645bfb179492f75f2e24b9b0d112b693ea7cd"
+    },
+    "toktrail/api/reports.py": {
+      "sha256": "7b958a6e5be1c70b63bf2311825cb627e02b059b14608823b676190230128943"
+    },
+    "toktrail/api/sessions.py": {
+      "sha256": "93e598058554850fa9ecd571f78410913246d1313afabb63d3d893c84d094eeb"
+    },
+    "toktrail/api/sources.py": {
+      "sha256": "b77b33c859fed020264bd2b945496ba6fb36246838355dcfef1fd582f3582433"
+    },
+    "toktrail/api/statusline.py": {
+      "sha256": "6439ff38d17a9f4b38343e33bf0d08e4354e6df57715541c6db53df99080e7d5"
+    },
+    "toktrail/api/sync.py": {
+      "sha256": "c9cc27ca3fc7319c58feb272c221b45e150a76e0815f5d6e03e94f61393526b4"
+    },
+    "toktrail/api/workflow.py": {
+      "sha256": "62c4fd1265dbb51799ed68396837a7b256587944a9ef07b9a88959e7573529d4"
+    },
+    "toktrail/cache.py": {
+      "sha256": "2db388b70186e3b44d722184fc461c4138eb91bd6200f7b96330a591475bf45b"
+    },
+    "toktrail/cli.py": {
+      "sha256": "a6aa3be01bfe4499b1b3b96e25a55789affd32712c63dd5391b26ee2c1ed67be"
+    },
+    "toktrail/cli_parts/__init__.py": {
+      "sha256": "f06df77b4f5d515bb589430bca0666791b7a27e24b07a520056459dfe2da4292"
+    },
+    "toktrail/cli_parts/app.py": {
+      "sha256": "cee2fe5caff483d1bc4ed8aca07395b37dcaccf241932ca1d05c566e60a7fd7a"
+    },
+    "toktrail/cli_parts/area.py": {
+      "sha256": "117c40be534d8d9c3770af8ce60a95be0f797541780f58ed36faf1df9ce8ce33"
+    },
+    "toktrail/cli_parts/config.py": {
+      "sha256": "117c40be534d8d9c3770af8ce60a95be0f797541780f58ed36faf1df9ce8ce33"
+    },
+    "toktrail/cli_parts/copilot.py": {
+      "sha256": "117c40be534d8d9c3770af8ce60a95be0f797541780f58ed36faf1df9ce8ce33"
+    },
+    "toktrail/cli_parts/filters.py": {
+      "sha256": "6a801378a9ee5ea229d49588dd64ffe7f8d8b55cac6f63341a922c6d3b3eaf1e"
+    },
+    "toktrail/cli_parts/formatting.py": {
+      "sha256": "9e3bdf3e206326417ac7af476bab51bba88a9363544ef639f0c1177fcbc585d0"
+    },
+    "toktrail/cli_parts/machines.py": {
+      "sha256": "1264cc93e4c9379362def755246e70caba5eb37fbe097b05017825fe946a79cc"
+    },
+    "toktrail/cli_parts/main_cli.py": {
+      "sha256": "8517aa0554acdb66dc69c3b6961ed83a57b52d806e739993ac0f5c97cc8efa3d"
+    },
+    "toktrail/cli_parts/prices.py": {
+      "sha256": "117c40be534d8d9c3770af8ce60a95be0f797541780f58ed36faf1df9ce8ce33"
+    },
+    "toktrail/cli_parts/refresh.py": {
+      "sha256": "117c40be534d8d9c3770af8ce60a95be0f797541780f58ed36faf1df9ce8ce33"
+    },
+    "toktrail/cli_parts/run.py": {
+      "sha256": "117c40be534d8d9c3770af8ce60a95be0f797541780f58ed36faf1df9ce8ce33"
+    },
+    "toktrail/cli_parts/sources.py": {
+      "sha256": "117c40be534d8d9c3770af8ce60a95be0f797541780f58ed36faf1df9ce8ce33"
+    },
+    "toktrail/cli_parts/statusline.py": {
+      "sha256": "117c40be534d8d9c3770af8ce60a95be0f797541780f58ed36faf1df9ce8ce33"
+    },
+    "toktrail/cli_parts/subscriptions.py": {
+      "sha256": "117c40be534d8d9c3770af8ce60a95be0f797541780f58ed36faf1df9ce8ce33"
+    },
+    "toktrail/cli_parts/table.py": {
+      "sha256": "8118ccf89b20f7c6648c96a48923b94d13835c475f23a2e53f6bf652d256945b"
+    },
+    "toktrail/cli_parts/types.py": {
+      "sha256": "4177450bbf3e1fe8f76faca9c7ee2ddab9563be2afe8484f3506a8da1b756a5b"
+    },
+    "toktrail/cli_parts/usage.py": {
+      "sha256": "117c40be534d8d9c3770af8ce60a95be0f797541780f58ed36faf1df9ce8ce33"
+    },
+    "toktrail/cli_parts/watch.py": {
+      "sha256": "117c40be534d8d9c3770af8ce60a95be0f797541780f58ed36faf1df9ce8ce33"
+    },
+    "toktrail/cli_sync.py": {
+      "sha256": "ab4567cba34813939354fecc601217695cf0ca3c7a10d52017727c3dd05a1ba1"
+    },
+    "toktrail/config.py": {
+      "sha256": "75e30679cda50df13d535246605c6d5edec1e56c89689be9c8cec6fa41e9d766"
+    },
+    "toktrail/config_parts/__init__.py": {
+      "sha256": "7dd68234532d8da1f739066fe0829221c3c90c44ce2aacbd9f4103d65a633770"
+    },
+    "toktrail/config_parts/core_config.py": {
+      "sha256": "f2a283f04d2d9d11f4dd949d5f0b2a6094db13906f613a7dd8bd96e16bfdf882"
+    },
+    "toktrail/config_parts/defaults.py": {
+      "sha256": "035fc5326d692a7c6fb92b9d8d1c84ec65dbfdf540cc08ffe1e5e9db518cc665"
+    },
+    "toktrail/config_parts/legacy_config.py": {
+      "sha256": "74c1e4c2f521208cadc5c28897a2e12fda8e824f50fe5c6481e8453770ab59e6"
+    },
+    "toktrail/config_parts/load.py": {
+      "sha256": "035fc5326d692a7c6fb92b9d8d1c84ec65dbfdf540cc08ffe1e5e9db518cc665"
+    },
+    "toktrail/config_parts/models.py": {
+      "sha256": "035fc5326d692a7c6fb92b9d8d1c84ec65dbfdf540cc08ffe1e5e9db518cc665"
+    },
+    "toktrail/config_parts/parse_areas.py": {
+      "sha256": "035fc5326d692a7c6fb92b9d8d1c84ec65dbfdf540cc08ffe1e5e9db518cc665"
+    },
+    "toktrail/config_parts/parse_pricing.py": {
+      "sha256": "035fc5326d692a7c6fb92b9d8d1c84ec65dbfdf540cc08ffe1e5e9db518cc665"
+    },
+    "toktrail/config_parts/parse_runtime.py": {
+      "sha256": "035fc5326d692a7c6fb92b9d8d1c84ec65dbfdf540cc08ffe1e5e9db518cc665"
+    },
+    "toktrail/config_parts/parse_statusline.py": {
+      "sha256": "035fc5326d692a7c6fb92b9d8d1c84ec65dbfdf540cc08ffe1e5e9db518cc665"
+    },
+    "toktrail/config_parts/parse_subscriptions.py": {
+      "sha256": "035fc5326d692a7c6fb92b9d8d1c84ec65dbfdf540cc08ffe1e5e9db518cc665"
+    },
+    "toktrail/config_parts/parse_sync.py": {
+      "sha256": "035fc5326d692a7c6fb92b9d8d1c84ec65dbfdf540cc08ffe1e5e9db518cc665"
+    },
+    "toktrail/costing.py": {
+      "sha256": "a96a990739fe3e172dcbff9a68679412fe460534f1b992bd401a0917bd6eedef"
+    },
+    "toktrail/db.py": {
+      "sha256": "c1bd44021409d0089ee942c50a049eba2f982055f1211a0119b53e55c03194e6"
+    },
+    "toktrail/errors.py": {
+      "sha256": "414da3a7154fde841e78b362c565e96d53466aeb7ddbe786341746f7665aab1f"
+    },
+    "toktrail/formatting.py": {
+      "sha256": "60a1a1592e3a9efe17cb189a2edd4fbf23e21547e1c0014787182e1a86db9f8c"
+    },
+    "toktrail/git_sync.py": {
+      "sha256": "10c4eb599d57adb33e2d8f460e31f320375b85eb3482f67c0292f3b4d870b464"
+    },
+    "toktrail/git_sync_parts/__init__.py": {
+      "sha256": "a6ea47cb61bf6eb2504e9d285784efd5fa04e5a310028309735af17e142c75dd"
+    },
+    "toktrail/git_sync_parts/core.py": {
+      "sha256": "eb97ec691ba165bdc3fbc5311e993d6844cb750ddf86221e405d641147d0a568"
+    },
+    "toktrail/models.py": {
+      "sha256": "67b8585f831dbb5a410dbba5bd4e552bb578376da144dc68a768484dfdc8d211"
+    },
+    "toktrail/paths.py": {
+      "sha256": "70d4f22dfe01d64e50f8ffc2ad4c25df4aab6e7bfe406946b4d1f5378c84d3ca"
+    },
+    "toktrail/periods.py": {
+      "sha256": "812d9134bebe57ff803b0294f02f68a7ab6de773d0781aedfcf8b2d74f5ca72b"
+    },
+    "toktrail/price_parser.py": {
+      "sha256": "80a04cd9722e9afe474cdc24e23a53c7fcdc3bd7382515dc21a577a16aabf3cc"
+    },
+    "toktrail/provider_identity.py": {
+      "sha256": "b2e39df75d97918124d94cc8fb20b39ae649f8bb40f1a6e2c78cf7037ae1ac9a"
+    },
+    "toktrail/reporting.py": {
+      "sha256": "d0e71f9db431587b740f5e271060719e9552ad6c85b1eba7f0b602012c6efa49"
+    },
+    "toktrail/scanner.py": {
+      "sha256": "586a72ded3fb7152a9b8c3019107bd2f95c4ec27599dd87801fcb3ad3807cb5f"
+    },
+    "toktrail/statusline.py": {
+      "sha256": "bec345cbe60781193f042e4d676ea4aa3175c61ba47a05b9956b4735650325ce"
+    },
+    "toktrail/sync.py": {
+      "sha256": "4687f4089c9769f5521c7053f90bc3cc140ec548919cc31cdd7593092f0a63b0"
+    },
+    "toktrail/sync_parts/__init__.py": {
+      "sha256": "3f1ab7769f65b09b5d63198d690215862695262edcfe7aede5b5ff992822989f"
+    },
+    "toktrail/sync_parts/core.py": {
+      "sha256": "5ca2bf929235c17b97933a15d4878e130e379a4b0a6e871d22e674950bbca169"
+    },
+    "toktrail/tui/__init__.py": {
+      "sha256": "7846189315f91f3f70a1754e049d87dbf090a048a1d2f1fa9d1b77b07d99f2ff"
+    },
+    "toktrail/tui/app.py": {
+      "sha256": "b16145a7b7ebc51f9f3db9b13741cb1a67a9c157fd4aab6fb9edd111b1ef6127"
+    },
+    "toktrail/tui/formatting.py": {
+      "sha256": "cafb63aaf48ffae753e0c1014155dcd3883fd9eb51d9b10e0946cf3708b3ce88"
+    },
+    "toktrail/tui/layout.py": {
+      "sha256": "6f9d2150e8f35a2ebd60baf1146fd65dc2ec69906b81f7da0fcd829e4903a647"
+    },
+    "toktrail/tui/panes/__init__.py": {
+      "sha256": "c6464e052e160f587808e9b78f7ccbc3be044f794c1c1dc21acf1d1c43c415a0"
+    },
+    "toktrail/tui/panes/areas.py": {
+      "sha256": "02ba8c69895ab42277df19f9a64a7aedfb5cce355e5ef6de86d8161e8317bac7"
+    },
+    "toktrail/tui/panes/config.py": {
+      "sha256": "550e4cd7b7038bf58b0e3b28cc10f1aa702150173bad1c3edfe245d399d5e6ce"
+    },
+    "toktrail/tui/panes/dashboard.py": {
+      "sha256": "1fac659938ee53ae6829c38f71ee92f6b2d2688c2fcb144b0d2a113e19a436ca"
+    },
+    "toktrail/tui/panes/exportable.py": {
+      "sha256": "d71028de6133b77f5f3b8d7257af559e60498d292d9f1c811c49071399a13878"
+    },
+    "toktrail/tui/panes/prices.py": {
+      "sha256": "2860488d227d765529dbb1dde8b18e8f6550814c368e71c26c5723c7dc841245"
+    },
+    "toktrail/tui/panes/sessions.py": {
+      "sha256": "78e77f64b59bfc9f2ce612791318d736b8764c70b80816442c2dc77e67a52df1"
+    },
+    "toktrail/tui/panes/subscriptions.py": {
+      "sha256": "6b2b6f764033121b57c2dcc7a4c4fcc6fea3ea2014cd560a2bd5b8dfcab68d6f"
+    },
+    "toktrail/tui/screens/__init__.py": {
+      "sha256": "f89338193e9c8a54bb35c02b57a4755d9757b990f0b388e19641c3a57d27bc1e"
+    },
+    "toktrail/tui/screens/area_form.py": {
+      "sha256": "66c9a2294731fb52d5c20f6ac8665258791aca603fc3bfdf8ee9c6a42487d413"
+    },
+    "toktrail/tui/screens/confirm.py": {
+      "sha256": "92a2627cb7fc6e3124f6f76b3f0b02757b30f7eff716c9524f487c5b16147569"
+    },
+    "toktrail/tui/screens/price_form.py": {
+      "sha256": "6abe8dc4254335a4d87e5889ea8abde6391f18ecafc55913aeb4c14376c9fdb2"
+    },
+    "toktrail/tui/services.py": {
+      "sha256": "92a70022b789c8a75d0aa9953bf8c8c9c76ef939739da9bf11d37350acd4a4ca"
+    },
+    "toktrail/tui/state.py": {
+      "sha256": "407c5406ddfcda1ad03122f7df725ed65dc14ced2d1508b3e212e097d3e44150"
+    }
+  },
+  "project_name": "toktrail",
+  "project_uuid": "9d65c430-24c4-4665-a72a-f807a5273e15",
+  "reason": "Initial arc42 architecture documentation",
+  "scanner": {
+    "exclude": [
+      ".git/**",
+      ".venv/**",
+      "**/__pycache__/**",
+      ".mypy_cache/**",
+      ".pytest_cache/**",
+      ".ruff_cache/**",
+      "dist/**",
+      "build/**"
+    ],
+    "hash_algorithm": "sha256",
+    "hash_content": "utf8-surrogateescape-lf-normalized",
+    "include": [
+      "**/*.py",
+      "**/*.toml",
+      "**/*.md",
+      "**/*.adoc",
+      "**/*.rst",
+      "**/*.j2",
+      "**/*.yaml",
+      "**/*.yml",
+      "**/*.json"
+    ],
+    "max_file_bytes": 1000000,
+    "mode": "auto",
+    "used": "git"
+  },
+  "schema": "archledger.source-state.v2",
+  "updated_at": "2026-05-23T06:05:25Z"
+}
