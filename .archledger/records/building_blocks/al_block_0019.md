@@ -20,7 +20,7 @@ updated_at: "2026-05-23T05:59:24Z"
 source_refs:
   - toktrail/cli.py
   - path: toktrail/cli_parts/
-    reason: "Directory-wide ownership"
+    reason: "Directory-wide ownership: app, area, config, copilot, filters, formatting, machines, main_cli, prices, refresh, run, sources, statusline, subscriptions, table, types, usage, watch"
 ---
 
 ## Purpose
@@ -43,13 +43,17 @@ reporting, source inspection, pricing, and machine/area management.
 - `prices list/parse` — pricing management
 - `area create/list/use/assign` — area management
 - `machine status/list/set-name` — machine identity
+- `sync push/pull/status` — git-backed multi-machine sync
+- `subscription list` — subscription quota tracking
+- `statusline` — shell statusline output
 - `tui` — launch Textual TUI
 
 ## Source
 
 - `toktrail/cli.py` — facade
 - `toktrail/cli_parts/main_cli.py` — implementation (~7800 lines)
-- `toktrail/cli_parts/` — extracted CLI sub-modules
+- `toktrail/cli_parts/` — extracted CLI sub-modules (18 modules)
+- `toktrail/cli_sync.py` — sync CLI commands (~1180 lines)
 
 source_refs:
 

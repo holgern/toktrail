@@ -29,3 +29,7 @@ updated_at: "2026-05-22T20:27:22Z"
 | **Dedup key**        | A stable hash that uniquely identifies a source event to prevent duplicate imports.                                                               |
 | **Fingerprint hash** | A hash of accounting-relevant fields that changes when source content drifts.                                                                     |
 | **Costing**          | Computing actual and virtual costs from user-defined pricing configuration.                                                                       |
+| **Statusline**       | A compact single-line summary of current usage, burn rate, cache stats, and quota for shell prompt embedding.                                     |
+| **Sync**             | Git-backed multi-machine state synchronization: push local state to a remote, pull and merge remote state into local database.                    |
+| **Subscription**     | A user-defined quota definition with token allowances and billing periods, tracked against actual usage.                                          |
+| **Cache analysis**   | Analysis of cache hit/miss rates, warm-up curves, and per-session cache efficiency for imported events.                                           |

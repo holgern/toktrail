@@ -40,3 +40,17 @@ Same as import, but runs in a loop with configurable interval.
 5. CLI renders human or JSON output.
 
 See diagram record al_diagram_0038 for the visual import flow.
+See diagram record al_diagram_0038 for the visual import flow.
+
+### Statusline flow
+
+1. Shell prompt invokes `toktrail statusline`.
+2. Statusline module queries recent usage, cache stats, and subscription data from SQLite.
+3. Renders compact single-line summary for prompt embedding.
+
+### Sync flow
+
+1. User invokes `toktrail sync push` or `toktrail sync pull`.
+2. Git sync module commits local state changes and pushes to remote, or pulls and merges remote state.
+3. Worktree-based merge ensures conflict-free integration of append-only event data.
+4. Archive export/import alternative for air-gapped machines.

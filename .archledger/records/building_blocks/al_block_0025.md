@@ -20,6 +20,9 @@ updated_at: "2026-05-23T05:59:26Z"
 source_refs:
   - path: toktrail/api/
     reason: "Directory-wide ownership"
+  - toktrail/api/models.py
+  - path: toktrail/api/model_parts/
+    reason: "Internal model implementations"
 ---
 
 ## Purpose
@@ -39,6 +42,13 @@ session management capabilities. Intended for integration by other tools and scr
 - `toktrail/api/prices.py` — pricing management
 - `toktrail/api/events.py` — event queries
 - `toktrail/api/areas.py` — area management
+- `toktrail/api/analysis.py` — cache efficiency analysis
+- `toktrail/api/sync.py` — state synchronization
+- `toktrail/api/machines.py` — machine identity
+- `toktrail/api/statusline.py` — statusline data
+- `toktrail/api/config.py` — configuration
+- `toktrail/api/paths.py` — path resolution
+- `toktrail/api/_conversions.py` — shared type conversions
 
 ## Source
 

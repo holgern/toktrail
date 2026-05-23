@@ -44,10 +44,10 @@ updated_at: "2026-05-23T05:59:51Z"
     │ (SQLite)│ │ (JSONL) │ │ (JSONL) │ │ (JSONL) │ │ (SQLite)│
     └─────────┘ └─────────┘ └─────────┘ └─────────┘ └─────────┘
          ...       ...         ...         ...         ...
-    ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐
-    │  Droid  │ │   Amp   │ │ Claude  │ │  Vibe   │ │  Code   │
-    │  (JSON) │ │  (JSON) │ │ (JSONL) │ │  (dir)  │ │ (JSONL) │
-    └─────────┘ └─────────┘ └─────────┘ └─────────┘ └─────────┘
+    ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────────┐
+    │  Droid  │ │   Amp   │ │ Claude  │ │  Vibe   │ │  Code   │ │Harnessbridge│
+    │  (JSON) │ │  (JSON) │ │ (JSONL) │ │  (dir)  │ │ (JSONL) │ │   (JSONL)   │
+    └─────────┘ └─────────┘ └─────────┘ └─────────┘ └─────────┘ └─────────────┘
 ```
 
-toktrail reads from 11 harness sources (left) and presents data to the developer (top) via CLI, TUI, and shell statusline. All source access is read-only.
+toktrail reads from 11 harness sources and presents data to the developer via CLI, TUI, shell statusline, and git-backed sync. All source access is read-only.

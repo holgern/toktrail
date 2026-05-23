@@ -12,7 +12,7 @@ created_at: "2026-05-22T20:27:22Z"
 updated_at: "2026-05-22T20:27:22Z"
 ---
 
-The system is decomposed into seven primary building blocks. See child records for details.
+The system is decomposed into ten primary building blocks. See child records for details.
 
 - **al_block_0019 CLI Layer** — Typer-based command-line interface
 - **al_block_0020 Adapter Layer** — Per-harness parsers and scanners
@@ -21,3 +21,6 @@ The system is decomposed into seven primary building blocks. See child records f
 - **al_block_0023 Scanner & Discovery** — Source path discovery and fingerprinting
 - **al_block_0024 TUI** — Optional Textual terminal UI
 - **al_block_0025 API Facade** — Stable public API for programmatic access
+- **al_block_0039 Statusline** — Shell prompt integration for live usage display
+- **al_block_0040 Source Cache & Analysis** — File caching and cache efficiency analysis
+- **al_block_0041 Sync & State Sharing** — Git-backed multi-machine state sync and archive import/export

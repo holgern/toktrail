@@ -42,3 +42,25 @@ TOML-based config in `~/.config/toktrail/config.toml` with layered resolution: d
 ### Machine identity
 
 Each installation generates a machine UUID stored in `machine.toml`. Events carry `origin_machine_id` for multi-machine tracking.
+
+### State synchronization
+
+Multi-machine sync uses git-backed repositories. Local state is committed and pushed to a configured remote;
+remote state is pulled and merged via worktree-based conflict-free merge. Archive import/export provides an offline alternative.
+See `toktrail/git_sync_parts/core.py` and `toktrail/cli_sync.py`.
+
+### Source file caching
+
+The source file cache (`toktrail/cache.py`) avoids reparsing large event files on repeated imports.
+Cache is keyed by harness, path, parser version, and fingerprint. Invalidated on any mismatch.
+
+### Error handling
+
+Public error types in `toktrail/errors.py` provide stable exit codes and error messages for CLI and API consumers.
+
+### Time periods
+
+`toktrail/periods.py` defines time period boundaries (daily, weekly, monthly) used across usage reports,
+statusline, and subscription tracking. Timezone-aware via the configured local timezone.
+
+Each installation generates a machine UUID stored in `machine.toml`. Events carry `origin_machine_id` for multi-machine tracking.

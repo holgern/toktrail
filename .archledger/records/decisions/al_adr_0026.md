@@ -7,7 +7,7 @@ status: proposed
 section: architecture_decisions
 order: 10
 date: "2026-05-23"
-deciders: []
+deciders: ["project-author"]
 supersedes: []
 related: []
 tags: []

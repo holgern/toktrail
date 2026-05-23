@@ -32,6 +32,16 @@ pip install "toktrail[rich]"      # with Rich-enhanced output
 
 Path overrides: `TOKTRAIL_DB`, `TOKTRAIL_CONFIG`, `TOKTRAIL_MACHINE_CONFIG`, `TOKTRAIL_PRICES`, `TOKTRAIL_SUBSCRIPTIONS`.
 
+### Sync deployment
+
+Git-backed sync uses a bare repository as the shared state store:
+
+```
+~/.local/state/toktrail/sync.git/      # Git repo for state sync (default)
+```
+
+Configured via `config.toml` sync section or `TOKTRAIL_SYNC_REPO`.
+
 ### Dependencies
 
 - Runtime: `typer`, `PyYAML`, `tzdata`, `tomli` (Python <3.11)
@@ -44,4 +54,5 @@ Path overrides: `TOKTRAIL_DB`, `TOKTRAIL_CONFIG`, `TOKTRAIL_MACHINE_CONFIG`, `TO
 toktrail = "toktrail.cli:cli_main"
 ```
 
-Single-node, single-user deployment. No server component.
+Single-node, single-user deployment by default. Multi-machine via git-backed sync (al_block_0041).
+No server component.

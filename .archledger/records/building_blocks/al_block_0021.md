@@ -20,8 +20,19 @@ updated_at: "2026-05-23T05:59:25Z"
 source_refs:
   - toktrail/db.py
   - toktrail/_db/core_db.py
-  - path: toktrail/_db/
-    reason: "Directory-wide ownership"
+  - toktrail/_db/schema.py
+  - toktrail/_db/connection.py
+  - toktrail/_db/migrations.py
+  - toktrail/_db/usage_events.py
+  - toktrail/_db/runs.py
+  - toktrail/_db/areas.py
+  - toktrail/_db/source_sessions.py
+  - toktrail/_db/reports_usage.py
+  - toktrail/_db/reports_sessions.py
+  - toktrail/_db/reports_runs.py
+  - toktrail/_db/reports_areas.py
+  - toktrail/_db/reports_series.py
+  - toktrail/_db/reports_subscriptions.py
 ---
 
 ## Purpose

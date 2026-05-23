@@ -23,3 +23,11 @@ updated_at: "2026-05-22T20:27:22Z"
 5. **Stable CLI and API facades**: `toktrail/cli.py`, `toktrail/db.py`, `toktrail/config.py`, and `toktrail/api/models.py` are stable entry points; implementation lives in `cli_parts/`, `_db/`, `config_parts/`, and `api/model_parts/`.
 
 6. **Optional TUI**: Textual-based dashboard (`toktrail/tui/`) for interactive browsing, gated behind `[tui]` optional dependency.
+
+7. **Shell statusline** (`toktrail/statusline.py`): compact single-line usage summaries for embedding in terminal prompts.
+
+8. **Cache analysis** (`toktrail/analysis.py`, `toktrail/cache.py`): source file caching to avoid reparsing, and cache efficiency analytics for imported events.
+
+9. **Git-backed sync** (`toktrail/git_sync_parts/core.py`, `toktrail/cli_sync.py`): multi-machine state synchronization via git repositories and archive import/export.
+
+10. **Subscription tracking**: user-defined subscription quotas in TOML (`subscriptions.toml`) with consumption reporting against token allowances.
