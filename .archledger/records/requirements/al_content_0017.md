@@ -1,0 +1,37 @@
+---
+schema_version: 2
+id: al_content_0017
+type: requirement
+title: "CLI and TUI reporting interfaces"
+status: proposed
+section: introduction_and_goals
+order: 50
+date: "2026-05-23"
+source: ""
+priority: must
+stakeholders: []
+quality_goals: []
+body_format: markdown
+created_at: "2026-05-23T05:54:27Z"
+updated_at: "2026-05-23T05:54:27Z"
+---
+
+## Requirement
+
+toktrail must provide both a CLI (`toktrail` Typer app) and an optional TUI (Textual)
+for inspecting token usage, costs, and session breakdowns.
+
+## Rationale
+
+- CLI is the primary interface for automation and scripting.
+- TUI provides interactive browsing for exploratory analysis.
+- Both must show the same underlying data from the SQLite database.
+
+## Source
+
+- `toktrail/cli_parts/main_cli.py` — CLI commands
+- `toktrail/tui/app.py` — Textual TUI application
+
+## Priority
+
+should

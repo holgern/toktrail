@@ -1,0 +1,52 @@
+---
+schema_version: 2
+id: al_block_0020
+type: black_box
+title: "Adapter Layer"
+status: proposed
+section: building_block_view
+level: 1
+parent: al_block_0018
+order: 20
+date: "2026-05-23"
+interfaces: []
+location: []
+fulfilled_requirements: []
+risks: []
+tags: []
+body_format: markdown
+created_at: "2026-05-23T05:59:25Z"
+updated_at: "2026-05-23T05:59:25Z"
+source_refs:
+  - toktrail/adapters/base.py
+  - toktrail/adapters/registry.py
+  - path: toktrail/adapters/
+    reason: "Directory-wide ownership"
+---
+
+## Purpose
+
+Per-harness adapters that read source data (SQLite, JSONL, JSON, directory) and produce
+canonical `UsageEvent` objects. Each adapter implements the `HarnessAdapter` protocol.
+
+## Registered harnesses
+
+amp, opencode, pi, copilot, codex, code, goose, harnessbridge, droid, claude, vibe
+
+## Interfaces
+
+- `scan(source_path, ...) -> ScanResult` — read source and produce events
+- `parse(source_path) -> list[UsageEvent]` — parse without scan state
+- `list_sessions(source_path) -> list[SourceSessionSummary]` — enumerate sessions
+
+## Source
+
+- `toktrail/adapters/base.py` — protocol and shared types
+- `toktrail/adapters/registry.py` — `HARNESS_REGISTRY` and discovery
+- `toktrail/adapters/<name>.py` — per-harness implementation
+
+source_refs:
+
+- toktrail/adapters/base.py
+- toktrail/adapters/registry.py
+- toktrail/adapters/

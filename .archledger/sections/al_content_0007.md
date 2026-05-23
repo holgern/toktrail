@@ -1,0 +1,47 @@
+---
+schema_version: 2
+id: al_content_0007
+type: section
+section: deployment_view
+title: Deployment View
+order: 70
+status: accepted
+date: "2026-05-22"
+body_format: markdown
+created_at: "2026-05-22T20:27:22Z"
+updated_at: "2026-05-22T20:27:22Z"
+---
+
+### Installation
+
+```bash
+pip install toktrail              # core CLI
+pip install "toktrail[tui]"       # with Textual TUI
+pip install "toktrail[rich]"      # with Rich-enhanced output
+```
+
+### File layout
+
+```
+~/.local/state/toktrail/toktrail.db    # SQLite state database (default)
+~/.config/toktrail/config.toml         # User configuration
+~/.config/toktrail/machine.toml        # Machine identity
+~/.config/toktrail/prices.toml         # Pricing definitions
+~/.config/toktrail/subscriptions.toml  # Subscription tracking
+```
+
+Path overrides: `TOKTRAIL_DB`, `TOKTRAIL_CONFIG`, `TOKTRAIL_MACHINE_CONFIG`, `TOKTRAIL_PRICES`, `TOKTRAIL_SUBSCRIPTIONS`.
+
+### Dependencies
+
+- Runtime: `typer`, `PyYAML`, `tzdata`, `tomli` (Python <3.11)
+- Optional: `textual>=3,<4`, `tomlkit`, `rich`
+- Dev: `pytest`, `ruff`, `mypy`, `build`, `twine`
+
+### Entrypoint
+
+```
+toktrail = "toktrail.cli:cli_main"
+```
+
+Single-node, single-user deployment. No server component.

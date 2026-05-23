@@ -157,50 +157,50 @@ toktrail reads from 11 harness sources (left) and presents data to the developer
 
 The system is decomposed into seven primary building blocks. See child records for details.
 
-- **al_0019 CLI Layer** — Typer-based command-line interface
-- **al_0020 Adapter Layer** — Per-harness parsers and scanners
-- **al_0021 Database Layer** — SQLite schema, migrations, CRUD, aggregation
-- **al_0022 Reporting & Costing** — Cost computation and report generation
-- **al_0023 Scanner & Discovery** — Source path discovery and fingerprinting
-- **al_0024 TUI** — Optional Textual terminal UI
-- **al_0025 API Facade** — Stable public API for programmatic access
+- **al_block_0019 CLI Layer** — Typer-based command-line interface
+- **al_block_0020 Adapter Layer** — Per-harness parsers and scanners
+- **al_block_0021 Database Layer** — SQLite schema, migrations, CRUD, aggregation
+- **al_block_0022 Reporting & Costing** — Cost computation and report generation
+- **al_block_0023 Scanner & Discovery** — Source path discovery and fingerprinting
+- **al_block_0024 TUI** — Optional Textual terminal UI
+- **al_block_0025 API Facade** — Stable public API for programmatic access
 
 ## Building block decomposition
 
 ```textdiagram
 toktrail
-├── CLI Layer (al_0019)
+├── CLI Layer (al_block_0019)
 │   ├── toktrail/cli_parts/main_cli.py    — commands, import/watch flows
 │   ├── toktrail/cli_parts/watch.py       — watch loop
 │   ├── toktrail/cli_parts/formatting.py  — human output
 │   └── toktrail/cli_parts/table.py       — table rendering
 │
-├── API Facade (al_0025)
+├── API Facade (al_block_0025)
 │   ├── toktrail/api/workflow.py          — run lifecycle
 │   ├── toktrail/api/imports.py           — import operations
 │   ├── toktrail/api/reports.py           — report generation
 │   └── toktrail/api/model_parts/         — internal models
 │
-├── Adapter Layer (al_0020)
+├── Adapter Layer (al_block_0020)
 │   ├── toktrail/adapters/base.py         — HarnessAdapter protocol
 │   ├── toktrail/adapters/registry.py     — HARNESS_REGISTRY
 │   └── toktrail/adapters/<name>.py       — per-harness parsers
 │
-├── Database Layer (al_0021)
+├── Database Layer (al_block_0021)
 │   ├── toktrail/_db/core_db.py           — schema, CRUD, aggregation
 │   ├── toktrail/_db/migrations.py        — schema migrations
 │   └── toktrail/_db/usage_events.py      — event insertion
 │
-├── Reporting & Costing (al_0022)
+├── Reporting & Costing (al_block_0022)
 │   ├── toktrail/reporting.py             — report dataclasses
 │   ├── toktrail/costing.py               — cost computation
 │   └── toktrail/config_parts/            — config parsing
 │
-├── Scanner & Discovery (al_0023)
+├── Scanner & Discovery (al_block_0023)
 │   ├── toktrail/scanner.py               — source discovery
 │   └── toktrail/paths.py                 — path resolution
 │
-└── TUI (al_0024)  [optional]
+└── TUI (al_block_0024)  [optional]
     ├── toktrail/tui/app.py               — Textual app
     ├── toktrail/tui/panes/               — UI panes
     └── toktrail/tui/screens/             — forms
@@ -218,13 +218,13 @@ in a local SQLite database, and provides CLI and TUI interfaces for reporting.
 
 ## Components
 
-- **al_0019 CLI Layer** — Typer-based command interface
-- **al_0020 Adapter Layer** — Harness-specific parsers
-- **al_0021 Database Layer** — SQLite state management
-- **al_0022 Reporting & Costing** — Aggregation and cost computation
-- **al_0023 Scanner & Discovery** — Source file discovery
-- **al_0024 TUI** — Optional Textual terminal UI
-- **al_0025 API Facade** — Stable public API
+- **al_block_0019 CLI Layer** — Typer-based command interface
+- **al_block_0020 Adapter Layer** — Harness-specific parsers
+- **al_block_0021 Database Layer** — SQLite state management
+- **al_block_0022 Reporting & Costing** — Aggregation and cost computation
+- **al_block_0023 Scanner & Discovery** — Source file discovery
+- **al_block_0024 TUI** — Optional Textual terminal UI
+- **al_block_0025 API Facade** — Stable public API
 
 ## Source
 
@@ -235,7 +235,7 @@ in a local SQLite database, and provides CLI and TUI interfaces for reporting.
 
 #### CLI Layer
 
-**Parent:** al_0018
+**Parent:** al_block_0018
 **Interfaces:**
 **Location:**
 
@@ -274,7 +274,7 @@ source_refs:
 
 #### Adapter Layer
 
-**Parent:** al_0018
+**Parent:** al_block_0018
 **Interfaces:**
 **Location:**
 
@@ -307,7 +307,7 @@ source_refs:
 
 #### Database Layer
 
-**Parent:** al_0018
+**Parent:** al_block_0018
 **Interfaces:**
 **Location:**
 
@@ -351,7 +351,7 @@ source_refs:
 
 #### Reporting & Costing
 
-**Parent:** al_0018
+**Parent:** al_block_0018
 **Interfaces:**
 **Location:**
 
@@ -384,7 +384,7 @@ source_refs:
 
 #### Scanner & Discovery
 
-**Parent:** al_0018
+**Parent:** al_block_0018
 **Interfaces:**
 **Location:**
 
@@ -416,7 +416,7 @@ source_refs:
 
 #### TUI
 
-**Parent:** al_0018
+**Parent:** al_block_0018
 **Interfaces:**
 **Location:**
 
@@ -447,7 +447,7 @@ source_refs:
 
 #### API Facade
 
-**Parent:** al_0018
+**Parent:** al_block_0018
 **Interfaces:**
 **Location:**
 
@@ -506,7 +506,7 @@ Same as import, but runs in a loop with configurable interval.
 4. Reporting dataclasses shape the response.
 5. CLI renders human or JSON output.
 
-See diagram record al_0038 for the visual import flow.
+See diagram record al_diagram_0038 for the visual import flow.
 
 ## Import runtime flow
 
@@ -615,10 +615,10 @@ Each installation generates a machine UUID stored in `machine.toml`. Events carr
 
 Key architecture decisions documented as ADR records:
 
-- **al_0026**: SQLite as sole state backend
-- **al_0027**: Adapter protocol for harness normalization
-- **al_0028**: Global dedup key for import idempotence
-- **al_0029**: Facade modules during staged refactor
+- **al_adr_0026**: SQLite as sole state backend
+- **al_adr_0027**: Adapter protocol for harness normalization
+- **al_adr_0028**: Global dedup key for import idempotence
+- **al_adr_0029**: Facade modules during staged refactor
 
 ## SQLite as sole state backend
 
@@ -759,10 +759,10 @@ Facades use `__getattr__` for lazy re-export. Public imports remain stable.
 
 Quality requirements documented as child records:
 
-- **al_0030**: Import idempotence — repeated imports must not duplicate accounting
-- **al_0031**: Token accounting accuracy — counts must match source data exactly
-- **al_0032**: Source read-only guarantee — never mutate harness source data
-- **al_0033**: Local-only privacy — no telemetry, no network calls
+- **al_quality_0030**: Import idempotence — repeated imports must not duplicate accounting
+- **al_quality_0031**: Token accounting accuracy — counts must match source data exactly
+- **al_quality_0032**: Source read-only guarantee — never mutate harness source data
+- **al_quality_0033**: Local-only privacy — no telemetry, no network calls
 
 ## Quality Requirements Overview
 

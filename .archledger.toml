@@ -1,11 +1,39 @@
 # Project-local archledger configuration.
 # This file lives in the source project root.
-config_version = 5
+config_version = 7
 archledger_dir = ".archledger"
 
 # Stable project identity. Commit this with your source tree.
 project_uuid = "9d65c430-24c4-4665-a72a-f807a5273e15"
 project_name = "toktrail"
+
+[ids]
+prefix = "al"
+width = 4
+segment_mode = "type"
+default_segment = "content"
+
+[ids.segment_map]
+adr = "adr"
+archive_tombstone = "archive"
+black_box = "block"
+concept = "concept"
+constraint = "constraint"
+context_interface = "context"
+diagram = "diagram"
+glossary_term = "glossary"
+infrastructure = "deploy"
+interface = "block"
+quality_goal = "quality"
+quality_requirement = "quality"
+quality_scenario = "quality"
+requirement = "content"
+risk = "risk"
+runtime_scenario = "runtime"
+section = "content"
+stakeholder = "content"
+strategy_item = "strategy"
+white_box = "block"
 
 [source]
 format = "markdown"

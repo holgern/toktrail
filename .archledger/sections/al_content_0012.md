@@ -1,0 +1,31 @@
+---
+schema_version: 2
+id: al_content_0012
+type: section
+section: glossary
+title: Glossary
+order: 120
+status: accepted
+date: "2026-05-22"
+body_format: markdown
+created_at: "2026-05-22T20:27:22Z"
+updated_at: "2026-05-22T20:27:22Z"
+---
+
+| Term                 | Definition                                                                                                                                        |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Harness**          | An AI coding tool that produces token-usage data (e.g., OpenCode, Pi, Copilot, Codex, Goose, Droid, Amp, Claude Code, Vibe, Code, Harnessbridge). |
+| **Run**              | A named tracking window with start/end timestamps. Replaces the earlier "tracking session" concept.                                               |
+| **Source session**   | A session within a harness's source data (e.g., one OpenCode database session, one Pi JSONL file).                                                |
+| **UsageEvent**       | The canonical normalized record of one billable model response, including token counts, model, provider, dedup keys, and optional raw JSON.       |
+| **Adapter**          | A module that reads a specific harness's source format and produces `UsageEvent` objects.                                                         |
+| **Scan**             | The process of reading source files and producing `ScanResult` with events.                                                                       |
+| **Import**           | Inserting scanned events into the SQLite database with deduplication.                                                                             |
+| **Watch**            | Continuous repeated import at a configurable interval.                                                                                            |
+| **Area**             | A named grouping of source sessions for organizational purposes (project, workspace, etc.).                                                       |
+| **Machine**          | A unique installation identity for multi-machine tracking.                                                                                        |
+| **Provider**         | The AI model provider (e.g., `anthropic`, `openai`, `google`). Inferred from model ID when not in source data.                                    |
+| **Thinking level**   | A model's reasoning mode (e.g., `low`, `medium`, `high`).                                                                                         |
+| **Dedup key**        | A stable hash that uniquely identifies a source event to prevent duplicate imports.                                                               |
+| **Fingerprint hash** | A hash of accounting-relevant fields that changes when source content drifts.                                                                     |
+| **Costing**          | Computing actual and virtual costs from user-defined pricing configuration.                                                                       |

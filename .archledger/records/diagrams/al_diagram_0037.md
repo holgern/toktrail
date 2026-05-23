@@ -1,0 +1,58 @@
+---
+schema_version: 2
+id: al_diagram_0037
+type: diagram
+title: "Building block decomposition"
+status: proposed
+section: building_block_view
+order: 20
+date: "2026-05-23"
+diagram_type: "text"
+caption: "Building block decomposition"
+
+related_records: []
+
+tags: []
+body_format: markdown
+created_at: "2026-05-23T05:59:51Z"
+updated_at: "2026-05-23T05:59:51Z"
+---
+
+```textdiagram
+toktrail
+├── CLI Layer (al_block_0019)
+│   ├── toktrail/cli_parts/main_cli.py    — commands, import/watch flows
+│   ├── toktrail/cli_parts/watch.py       — watch loop
+│   ├── toktrail/cli_parts/formatting.py  — human output
+│   └── toktrail/cli_parts/table.py       — table rendering
+│
+├── API Facade (al_block_0025)
+│   ├── toktrail/api/workflow.py          — run lifecycle
+│   ├── toktrail/api/imports.py           — import operations
+│   ├── toktrail/api/reports.py           — report generation
+│   └── toktrail/api/model_parts/         — internal models
+│
+├── Adapter Layer (al_block_0020)
+│   ├── toktrail/adapters/base.py         — HarnessAdapter protocol
+│   ├── toktrail/adapters/registry.py     — HARNESS_REGISTRY
+│   └── toktrail/adapters/<name>.py       — per-harness parsers
+│
+├── Database Layer (al_block_0021)
+│   ├── toktrail/_db/core_db.py           — schema, CRUD, aggregation
+│   ├── toktrail/_db/migrations.py        — schema migrations
+│   └── toktrail/_db/usage_events.py      — event insertion
+│
+├── Reporting & Costing (al_block_0022)
+│   ├── toktrail/reporting.py             — report dataclasses
+│   ├── toktrail/costing.py               — cost computation
+│   └── toktrail/config_parts/            — config parsing
+│
+├── Scanner & Discovery (al_block_0023)
+│   ├── toktrail/scanner.py               — source discovery
+│   └── toktrail/paths.py                 — path resolution
+│
+└── TUI (al_block_0024)  [optional]
+    ├── toktrail/tui/app.py               — Textual app
+    ├── toktrail/tui/panes/               — UI panes
+    └── toktrail/tui/screens/             — forms
+```
