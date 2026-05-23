@@ -30,15 +30,15 @@ See child records for individual requirements.
 
 ## Requirements Overview
 
-| Title | Priority | Source | Stakeholders | Quality goals |
-| --- | --- | --- | --- | --- |
-| Local-first token usage tracking | must |  |  |  |
-| Read-only multi-harness source ingestion | must |  |  |  |
-| Idempotent imports with stable dedup | must |  |  |  |
-| Cost estimation from configurable pricing | must |  |  |  |
-| CLI and TUI reporting interfaces | must |  |  |  |
-| Multi-machine tracking | must |  |  |  |
-| Area-based session grouping | must |  |  |  |
+| Title                                     | Priority | Source | Stakeholders | Quality goals |
+| ----------------------------------------- | -------- | ------ | ------------ | ------------- |
+| Local-first token usage tracking          | must     |        |              |               |
+| Read-only multi-harness source ingestion  | must     |        |              |               |
+| Idempotent imports with stable dedup      | must     |        |              |               |
+| Cost estimation from configurable pricing | must     |        |              |               |
+| CLI and TUI reporting interfaces          | must     |        |              |               |
+| Multi-machine tracking                    | must     |        |              |               |
+| Area-based session grouping               | must     |        |              |               |
 
 ## Quality Goals
 
@@ -68,19 +68,19 @@ formats) and the developer (who needs a unified view of token consumption and co
 
 ### External systems (data sources)
 
-| System | Format | Default path |
-|--------|--------|-------------|
-| OpenCode | SQLite | `~/.local/share/opencode/opencode*.db` |
-| Pi | JSONL | `~/.pi/agent/sessions` |
-| GitHub Copilot CLI | OTEL JSONL | `~/.copilot/otel` |
-| Codex | JSONL | `~/.codex/sessions` |
-| Goose | SQLite | `~/.local/share/goose/sessions/sessions.db` |
-| Droid | JSON | `~/.factory/sessions` |
-| Amp | JSON | `~/.local/share/amp/threads` |
-| Claude Code | JSONL | `~/.claude/projects` |
-| Vibe | directory | `~/.vibe/logs/session` |
-| Code | JSONL | `~/.code/sessions` |
-| Harnessbridge | JSONL | `~/.harnessbridge/sessions` |
+| System             | Format     | Default path                                |
+| ------------------ | ---------- | ------------------------------------------- |
+| OpenCode           | SQLite     | `~/.local/share/opencode/opencode*.db`      |
+| Pi                 | JSONL      | `~/.pi/agent/sessions`                      |
+| GitHub Copilot CLI | OTEL JSONL | `~/.copilot/otel`                           |
+| Codex              | JSONL      | `~/.codex/sessions`                         |
+| Goose              | SQLite     | `~/.local/share/goose/sessions/sessions.db` |
+| Droid              | JSON       | `~/.factory/sessions`                       |
+| Amp                | JSON       | `~/.local/share/amp/threads`                |
+| Claude Code        | JSONL      | `~/.claude/projects`                        |
+| Vibe               | directory  | `~/.vibe/logs/session`                      |
+| Code               | JSONL      | `~/.code/sessions`                          |
+| Harnessbridge      | JSONL      | `~/.harnessbridge/sessions`                 |
 
 ### Users
 
@@ -236,8 +236,8 @@ in a local SQLite database, and provides CLI and TUI interfaces for reporting.
 #### CLI Layer
 
 **Parent:** al_0018
-**Interfaces:** 
-**Location:** 
+**Interfaces:**
+**Location:**
 
 ## Purpose
 
@@ -268,14 +268,15 @@ reporting, source inspection, pricing, and machine/area management.
 - `toktrail/cli_parts/` — extracted CLI sub-modules
 
 source_refs:
-  - toktrail/cli.py
-  - toktrail/cli_parts/
+
+- toktrail/cli.py
+- toktrail/cli_parts/
 
 #### Adapter Layer
 
 **Parent:** al_0018
-**Interfaces:** 
-**Location:** 
+**Interfaces:**
+**Location:**
 
 ## Purpose
 
@@ -299,15 +300,16 @@ amp, opencode, pi, copilot, codex, code, goose, harnessbridge, droid, claude, vi
 - `toktrail/adapters/<name>.py` — per-harness implementation
 
 source_refs:
-  - toktrail/adapters/base.py
-  - toktrail/adapters/registry.py
-  - toktrail/adapters/
+
+- toktrail/adapters/base.py
+- toktrail/adapters/registry.py
+- toktrail/adapters/
 
 #### Database Layer
 
 **Parent:** al_0018
-**Interfaces:** 
-**Location:** 
+**Interfaces:**
+**Location:**
 
 ## Purpose
 
@@ -342,15 +344,16 @@ queries, and cost computation. Current schema version is 15.
 - `toktrail/_db/core_db.py` — implementation (~6600 lines)
 
 source_refs:
-  - toktrail/db.py
-  - toktrail/_db/core_db.py
-  - toktrail/_db/
+
+- toktrail/db.py
+- toktrail/\_db/core_db.py
+- toktrail/\_db/
 
 #### Reporting & Costing
 
 **Parent:** al_0018
-**Interfaces:** 
-**Location:** 
+**Interfaces:**
+**Location:**
 
 ## Purpose
 
@@ -374,15 +377,16 @@ actual/virtual costs from user-defined pricing.
 ## Source
 
 source_refs:
-  - toktrail/reporting.py
-  - toktrail/costing.py
-  - toktrail/config_parts/parse_pricing.py
+
+- toktrail/reporting.py
+- toktrail/costing.py
+- toktrail/config_parts/parse_pricing.py
 
 #### Scanner & Discovery
 
 **Parent:** al_0018
-**Interfaces:** 
-**Location:** 
+**Interfaces:**
+**Location:**
 
 ## Purpose
 
@@ -405,15 +409,16 @@ import and caching.
 ## Source
 
 source_refs:
-  - toktrail/scanner.py
-  - toktrail/paths.py
-  - toktrail/adapters/registry.py
+
+- toktrail/scanner.py
+- toktrail/paths.py
+- toktrail/adapters/registry.py
 
 #### TUI
 
 **Parent:** al_0018
-**Interfaces:** 
-**Location:** 
+**Interfaces:**
+**Location:**
 
 ## Purpose
 
@@ -437,13 +442,14 @@ Gated behind `[tui]` optional dependency (`textual>=3,<4`, `tomlkit>=0.13`).
 ## Source
 
 source_refs:
-  - toktrail/tui/
+
+- toktrail/tui/
 
 #### API Facade
 
 **Parent:** al_0018
-**Interfaces:** 
-**Location:** 
+**Interfaces:**
+**Location:**
 
 ## Purpose
 
@@ -466,9 +472,10 @@ session management capabilities. Intended for integration by other tools and scr
 ## Source
 
 source_refs:
-  - toktrail/api/
-  - toktrail/api/models.py
-  - toktrail/api/model_parts/
+
+- toktrail/api/
+- toktrail/api/models.py
+- toktrail/api/model_parts/
 
 # Runtime View
 
@@ -567,8 +574,6 @@ toktrail = "toktrail.cli:cli_main"
 
 Single-node, single-user deployment. No server component.
 
-
-
 <!-- archledger: no accepted records for this section yet -->
 
 # Cross-cutting Concepts
@@ -577,14 +582,14 @@ Single-node, single-user deployment. No server component.
 
 All token accounting uses the canonical `TokenBreakdown` dataclass (`toktrail/models.py`):
 
-| Field | Meaning |
-|-------|---------|
-| `input` | Non-cached prompt tokens |
-| `output` | Generated response tokens |
-| `reasoning` | Reasoning tokens |
-| `cache_read` | Cached input reused |
-| `cache_write` | Input written to cache |
-| `cache_output` | Cached output tokens |
+| Field          | Meaning                   |
+| -------------- | ------------------------- |
+| `input`        | Non-cached prompt tokens  |
+| `output`       | Generated response tokens |
+| `reasoning`    | Reasoning tokens          |
+| `cache_read`   | Cached input reused       |
+| `cache_write`  | Input written to cache    |
+| `cache_output` | Cached output tokens      |
 
 Computed totals: `total = input + output`, `prompt_total = input + cache_read + cache_write`, `accounting_total` = sum of all six.
 
@@ -604,8 +609,6 @@ TOML-based config in `~/.config/toktrail/config.toml` with layered resolution: d
 
 Each installation generates a machine UUID stored in `machine.toml`. Events carry `origin_machine_id` for multi-machine tracking.
 
-
-
 <!-- archledger: no accepted records for this section yet -->
 
 # Architecture Decisions
@@ -617,14 +620,13 @@ Key architecture decisions documented as ADR records:
 - **al_0028**: Global dedup key for import idempotence
 - **al_0029**: Facade modules during staged refactor
 
-
 ## SQLite as sole state backend
 
 **Status:** proposed
 **Date:** 2026-05-23
-**Deciders:** 
-**Supersedes:** 
-**Related:** 
+**Deciders:**
+**Supersedes:**
+**Related:**
 
 ## Context
 
@@ -650,14 +652,13 @@ with WAL journal mode and NORMAL synchronous mode.
 - `toktrail/_db/core_db.py` — `connect()`, `migrate()`, schema definitions
 - `toktrail/paths.py` — `resolve_toktrail_db_path()`
 
-
 ## Adapter protocol for harness normalization
 
 **Status:** proposed
 **Date:** 2026-05-23
-**Deciders:** 
-**Supersedes:** 
-**Related:** 
+**Deciders:**
+**Supersedes:**
+**Related:**
 
 ## Context
 
@@ -686,14 +687,13 @@ under `toktrail/adapters/`. A central `HARNESS_REGISTRY` maps harness names to
 - `toktrail/adapters/base.py:HarnessAdapter`
 - `toktrail/adapters/registry.py:HARNESS_REGISTRY`
 
-
 ## Global dedup key for import idempotence
 
 **Status:** proposed
 **Date:** 2026-05-23
-**Deciders:** 
-**Supersedes:** 
-**Related:** 
+**Deciders:**
+**Supersedes:**
+**Related:**
 
 ## Context
 
@@ -719,14 +719,13 @@ source record, and `fingerprint_hash` detects content drift.
 - `toktrail/models.py:UsageEvent.global_dedup_key`
 - `toktrail/_db/core_db.py:insert_usage_events()`
 
-
 ## Facade modules during staged refactor
 
 **Status:** proposed
 **Date:** 2026-05-23
-**Deciders:** 
-**Supersedes:** 
-**Related:** 
+**Deciders:**
+**Supersedes:**
+**Related:**
 
 ## Context
 
@@ -736,6 +735,7 @@ grew into very large modules. A direct split would break public imports.
 ## Decision
 
 Use facade modules that re-export from internal packages:
+
 - `toktrail/db.py` → `toktrail/_db/core_db.py`
 - `toktrail/config.py` → `toktrail/config_parts/core_config.py`
 - `toktrail/cli.py` → `toktrail/cli_parts/`
@@ -764,16 +764,14 @@ Quality requirements documented as child records:
 - **al_0032**: Source read-only guarantee — never mutate harness source data
 - **al_0033**: Local-only privacy — no telemetry, no network calls
 
-
-
 ## Quality Requirements Overview
 
-| Title | Category | Measure | Scenarios |
-| --- | --- | --- | --- |
-| Import idempotence | reliability |  |  |
-| Token accounting accuracy | reliability |  |  |
-| Source read-only guarantee | reliability |  |  |
-| Local-only privacy | reliability |  |  |
+| Title                      | Category    | Measure | Scenarios |
+| -------------------------- | ----------- | ------- | --------- |
+| Import idempotence         | reliability |         |           |
+| Token accounting accuracy  | reliability |         |           |
+| Source read-only guarantee | reliability |         |           |
+| Local-only privacy         | reliability |         |           |
 
 ## Quality Scenarios
 
@@ -800,22 +798,22 @@ Quality requirements documented as child records:
 
 # Glossary
 
-| Term | Definition |
-|------|-----------|
-| **Harness** | An AI coding tool that produces token-usage data (e.g., OpenCode, Pi, Copilot, Codex, Goose, Droid, Amp, Claude Code, Vibe, Code, Harnessbridge). |
-| **Run** | A named tracking window with start/end timestamps. Replaces the earlier "tracking session" concept. |
-| **Source session** | A session within a harness's source data (e.g., one OpenCode database session, one Pi JSONL file). |
-| **UsageEvent** | The canonical normalized record of one billable model response, including token counts, model, provider, dedup keys, and optional raw JSON. |
-| **Adapter** | A module that reads a specific harness's source format and produces `UsageEvent` objects. |
-| **Scan** | The process of reading source files and producing `ScanResult` with events. |
-| **Import** | Inserting scanned events into the SQLite database with deduplication. |
-| **Watch** | Continuous repeated import at a configurable interval. |
-| **Area** | A named grouping of source sessions for organizational purposes (project, workspace, etc.). |
-| **Machine** | A unique installation identity for multi-machine tracking. |
-| **Provider** | The AI model provider (e.g., `anthropic`, `openai`, `google`). Inferred from model ID when not in source data. |
-| **Thinking level** | A model's reasoning mode (e.g., `low`, `medium`, `high`). |
-| **Dedup key** | A stable hash that uniquely identifies a source event to prevent duplicate imports. |
-| **Fingerprint hash** | A hash of accounting-relevant fields that changes when source content drifts. |
-| **Costing** | Computing actual and virtual costs from user-defined pricing configuration. |
+| Term                 | Definition                                                                                                                                        |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Harness**          | An AI coding tool that produces token-usage data (e.g., OpenCode, Pi, Copilot, Codex, Goose, Droid, Amp, Claude Code, Vibe, Code, Harnessbridge). |
+| **Run**              | A named tracking window with start/end timestamps. Replaces the earlier "tracking session" concept.                                               |
+| **Source session**   | A session within a harness's source data (e.g., one OpenCode database session, one Pi JSONL file).                                                |
+| **UsageEvent**       | The canonical normalized record of one billable model response, including token counts, model, provider, dedup keys, and optional raw JSON.       |
+| **Adapter**          | A module that reads a specific harness's source format and produces `UsageEvent` objects.                                                         |
+| **Scan**             | The process of reading source files and producing `ScanResult` with events.                                                                       |
+| **Import**           | Inserting scanned events into the SQLite database with deduplication.                                                                             |
+| **Watch**            | Continuous repeated import at a configurable interval.                                                                                            |
+| **Area**             | A named grouping of source sessions for organizational purposes (project, workspace, etc.).                                                       |
+| **Machine**          | A unique installation identity for multi-machine tracking.                                                                                        |
+| **Provider**         | The AI model provider (e.g., `anthropic`, `openai`, `google`). Inferred from model ID when not in source data.                                    |
+| **Thinking level**   | A model's reasoning mode (e.g., `low`, `medium`, `high`).                                                                                         |
+| **Dedup key**        | A stable hash that uniquely identifies a source event to prevent duplicate imports.                                                               |
+| **Fingerprint hash** | A hash of accounting-relevant fields that changes when source content drifts.                                                                     |
+| **Costing**          | Computing actual and virtual costs from user-defined pricing configuration.                                                                       |
 
 <!-- archledger: no accepted records for this section yet -->
