@@ -218,6 +218,8 @@ repo = "{_toml_path_value(repo)}"
     assert status_result.exit_code == 0, status_result.output
     assert "Git sync status" in status_result.output
     assert "pending imports:" in status_result.output
+    assert "  config files:" in status_result.output
+    assert "    track: none" in status_result.output
     assert (repo / "meta" / "format.json").exists()
 
 
@@ -787,6 +789,132 @@ track = ["prices", "provider-prices", "subscriptions"]
     assert "config/prices.toml" in tracked
     assert "config/subscriptions.toml" in tracked
     assert "config/prices/openai.toml" in tracked
+
+
+@pytest.mark.skipif(not HAS_GIT, reason="git executable is required")
+def test_cli_sync_git_status_shows_tracked_costing_files(tmp_path: Path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    config_path = tmp_path / "config.toml"
+    repo = tmp_path / "toktrail-state"
+    remote = tmp_path / "remote.git"
+    _run_git(tmp_path, "init", "--bare", str(remote))
+    config_path.write_text(
+        f"""
+config_version = 1
+
+[sync.git]
+repo = "{_toml_path_value(repo)}"
+remote = "origin"
+branch = "main"
+track = ["prices", "provider-prices", "subscriptions"]
+""".strip(),
+        encoding="utf-8",
+    )
+
+    init_result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "--config",
+            str(config_path),
+            "sync",
+            "git",
+            "init",
+            "--remote",
+            str(remote),
+            "--branch",
+            "main",
+            "--no-hooks",
+        ],
+    )
+    assert init_result.exit_code == 0, init_result.output
+    _configure_git_identity(repo)
+
+    (repo / "config" / "prices").mkdir(parents=True, exist_ok=True)
+    (repo / "config" / "prices.toml").write_text(
+        "config_version = 1\n", encoding="utf-8"
+    )
+    (repo / "config" / "subscriptions.toml").write_text(
+        "config_version = 1\n", encoding="utf-8"
+    )
+    (repo / "config" / "prices" / "openai.toml").write_text(
+        "config_version = 1\n", encoding="utf-8"
+    )
+    _run_git(repo, "add", "config")
+    _run_git(repo, "commit", "-m", "add costing config")
+
+    # --- Human output ---
+    result = runner.invoke(
+        app,
+        ["--db", str(state_db), "--config", str(config_path), "sync", "git", "status"],
+    )
+    assert result.exit_code == 0, result.output
+    assert "track: prices, provider-prices, subscriptions" in result.output
+    assert "prices: source git, git yes, exists yes, tracked yes" in result.output
+    assert (
+        "provider prices: source git, git yes, exists yes, tracked yes, files 1"
+        in result.output
+    )
+    assert (
+        "subscriptions: source git, git yes, exists yes, tracked yes" in result.output
+    )
+
+    # --- JSON output ---
+    json_result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "--config",
+            str(config_path),
+            "sync",
+            "git",
+            "status",
+            "--json",
+        ],
+    )
+    assert json_result.exit_code == 0, json_result.output
+    payload = json.loads(json_result.output)
+    assert payload["config_files"]["track"] == [
+        "prices",
+        "provider-prices",
+        "subscriptions",
+    ]
+    assert payload["config_files"]["prices"]["git_backed"] is True
+    assert payload["config_files"]["prices"]["git_tracked"] is True
+    assert payload["config_files"]["subscriptions"]["git_backed"] is True
+    assert (
+        payload["config_files"]["subscriptions"]["repo_path"]
+        == "config/subscriptions.toml"
+    )
+
+    # --- Override test: local subscriptions override Git-backed ---
+    local_subscriptions = tmp_path / "local-subscriptions.toml"
+    local_subscriptions.write_text("config_version = 1\n", encoding="utf-8")
+    override_result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "--config",
+            str(config_path),
+            "--subscriptions",
+            str(local_subscriptions),
+            "sync",
+            "git",
+            "status",
+            "--json",
+        ],
+    )
+    assert override_result.exit_code == 0, override_result.output
+    override_payload = json.loads(override_result.output)
+    assert override_payload["config_files"]["subscriptions"]["source"] == "override"
+    assert override_payload["config_files"]["subscriptions"]["git_backed"] is False
+    assert override_payload["config_files"]["subscriptions"]["path"] == str(
+        local_subscriptions
+    )
 
 
 @pytest.mark.skipif(not HAS_GIT, reason="git executable is required")

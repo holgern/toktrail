@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import os
 import shlex
+import subprocess
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Annotated, cast
 
@@ -149,6 +151,161 @@ def _tracked_config_paths(loaded: LoadedToktrailConfig) -> tuple[Path, ...]:
     if "subscriptions" in track:
         paths.append(loaded.subscriptions_path)
     return tuple(paths)
+
+
+def _repo_relpath_or_none(
+    repo_path: Path, path: Path, *, directory: bool = False
+) -> str | None:
+    repo = repo_path.expanduser().resolve()
+    resolved = path.expanduser().resolve()
+    if resolved != repo and repo not in resolved.parents:
+        return None
+    relpath = resolved.relative_to(repo).as_posix()
+    if directory:
+        return f"{relpath.rstrip('/')}/"
+    return relpath
+
+
+def _git_path_is_tracked(repo_path: Path, relpath: str) -> bool:
+    if relpath.endswith("/"):
+        result = subprocess.run(
+            ["git", "ls-files", relpath],
+            cwd=repo_path,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        return bool((result.stdout or "").strip())
+    result = subprocess.run(
+        ["git", "ls-files", "--error-unmatch", relpath],
+        cwd=repo_path,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    return result.returncode == 0
+
+
+def _config_file_status(
+    *,
+    loaded: LoadedToktrailConfig,
+    repo_path: Path,
+    track_key: str,
+    path: Path,
+    expected_relpath: str,
+    exists: bool,
+    file_count: int | None = None,
+) -> dict[str, object]:
+    track = set(loaded.runtime.sync_git.track)
+    repo_relpath = _repo_relpath_or_none(
+        repo_path,
+        path,
+        directory=expected_relpath.endswith("/"),
+    )
+    git_backed = track_key in track and repo_relpath == expected_relpath
+    if git_backed:
+        source = "git"
+    elif track_key in track:
+        source = "override"
+    else:
+        source = "local"
+
+    payload: dict[str, object] = {
+        "source": source,
+        "git_backed": git_backed,
+        "exists": exists,
+        "git_tracked": bool(
+            repo_relpath and _git_path_is_tracked(repo_path, repo_relpath)
+        ),
+        "path": str(path),
+        "repo_path": repo_relpath,
+    }
+    if file_count is not None:
+        payload["file_count"] = file_count
+    return payload
+
+
+def _git_status_config_files_payload(
+    loaded: LoadedToktrailConfig,
+    repo_path: Path,
+) -> dict[str, object]:
+    provider_file_count = (
+        len(tuple(loaded.prices_dir.glob("*.toml")))
+        if loaded.prices_dir.is_dir()
+        else 0
+    )
+    return {
+        "track": list(loaded.runtime.sync_git.track),
+        "prices": _config_file_status(
+            loaded=loaded,
+            repo_path=repo_path,
+            track_key="prices",
+            path=loaded.prices_path,
+            expected_relpath="config/prices.toml",
+            exists=loaded.manual_prices_exists,
+        ),
+        "provider_prices": _config_file_status(
+            loaded=loaded,
+            repo_path=repo_path,
+            track_key="provider-prices",
+            path=loaded.prices_dir,
+            expected_relpath="config/prices/",
+            exists=loaded.provider_prices_exists,
+            file_count=provider_file_count,
+        ),
+        "subscriptions": _config_file_status(
+            loaded=loaded,
+            repo_path=repo_path,
+            track_key="subscriptions",
+            path=loaded.subscriptions_path,
+            expected_relpath="config/subscriptions.toml",
+            exists=loaded.subscriptions_exists,
+        ),
+    }
+
+
+def _yes_no(value: object) -> str:
+    return "yes" if bool(value) else "no"
+
+
+def _format_track(values: object) -> str:
+    if not isinstance(values, list) or not values:
+        return "none"
+    return ", ".join(str(item) for item in values)
+
+
+def _format_config_path(item: Mapping[str, object]) -> str:
+    repo_path = item.get("repo_path")
+    if isinstance(repo_path, str) and repo_path:
+        return repo_path
+    return str(item.get("path") or "")
+
+
+def _print_config_item(label: str, item: Mapping[str, object]) -> None:
+    parts = [
+        f"source {item.get('source')}",
+        f"git {_yes_no(item.get('git_backed'))}",
+        f"exists {_yes_no(item.get('exists'))}",
+        f"tracked {_yes_no(item.get('git_tracked'))}",
+    ]
+    if "file_count" in item:
+        parts.append(f"files {item['file_count']}")
+    parts.append(f"path {_format_config_path(item)}")
+    typer.echo(f"    {label}: " + ", ".join(parts))
+
+
+def _print_git_status_config_files(config_files: Mapping[str, object]) -> None:
+    typer.echo("  config files:")
+    typer.echo(f"    track: {_format_track(config_files.get('track'))}")
+    prices = config_files.get("prices")
+    provider_prices = config_files.get("provider_prices")
+    subscriptions = config_files.get("subscriptions")
+    if isinstance(prices, Mapping):
+        _print_config_item("prices", prices)
+    if isinstance(provider_prices, Mapping):
+        _print_config_item("provider prices", provider_prices)
+    if isinstance(subscriptions, Mapping):
+        _print_config_item("subscriptions", subscriptions)
 
 
 def _exit_with_error(message: str) -> None:
@@ -548,8 +705,12 @@ def sync_git_status(
     except (OSError, ValueError) as exc:
         _exit_with_error(str(exc))
 
+    config_files = _git_status_config_files_payload(loaded, status.repo_path)
+
     if json_output:
-        typer.echo(json.dumps(status.as_dict(), indent=2))
+        payload = status.as_dict()
+        payload["config_files"] = config_files
+        typer.echo(json.dumps(payload, indent=2))
         return
 
     typer.echo("Git sync status")
@@ -566,6 +727,7 @@ def sync_git_status(
         typer.echo("  warning: live sqlite files found in repo:")
         for relpath in status.state_db_paths:
             typer.echo(f"    - {relpath}")
+    _print_git_status_config_files(config_files)
 
 
 @sync_git_app.command("cleanup")
