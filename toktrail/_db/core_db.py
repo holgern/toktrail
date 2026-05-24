@@ -54,6 +54,9 @@ from toktrail.reporting import (
     ModelSummaryRow,
     ProviderSummaryRow,
     RunReport,
+    SessionDigest,
+    SessionDigestSummary,
+    SessionToolHealth,
     SessionTotals,
     SimulationSummaryRow,
     SubscriptionBillingPeriod,
@@ -75,7 +78,7 @@ from toktrail.reporting import (
     UsageSessionsReport,
 )
 
-SCHEMA_VERSION = 15
+SCHEMA_VERSION = 16
 _PERIOD_SORT: dict[str, int] = {
     "5h": 0,
     "daily": 1,
@@ -336,6 +339,9 @@ def migrate(conn: sqlite3.Connection) -> None:
     if current_version == 14:
         _migrate_v14_to_v15(conn)
         current_version = 15
+    if current_version == 15:
+        _migrate_v15_to_v16(conn)
+        current_version = 16
 
     _ensure_machine_id(conn)
     conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
@@ -646,6 +652,35 @@ def _create_schema(conn: sqlite3.Connection) -> None:
 
         CREATE INDEX IF NOT EXISTS idx_source_session_metadata_source_dir
         ON source_session_metadata(source_dir);
+
+        CREATE TABLE IF NOT EXISTS source_session_digests (
+            origin_machine_id TEXT NOT NULL,
+            harness TEXT NOT NULL,
+            source_session_id TEXT NOT NULL,
+            schema_version INTEGER NOT NULL,
+            generator TEXT NOT NULL,
+            generated_at_ms INTEGER NOT NULL,
+            source_fingerprint TEXT,
+            one_line TEXT,
+            bullets_json TEXT NOT NULL DEFAULT '[]',
+            confidence TEXT NOT NULL DEFAULT 'low',
+            tool_call_count INTEGER NOT NULL DEFAULT 0,
+            tool_failure_count INTEGER NOT NULL DEFAULT 0,
+            tool_timeout_count INTEGER NOT NULL DEFAULT 0,
+            failed_tools_json TEXT NOT NULL DEFAULT '{}',
+            files_mentioned_json TEXT NOT NULL DEFAULT '[]',
+            commands_mentioned_json TEXT NOT NULL DEFAULT '[]',
+            warnings_json TEXT NOT NULL DEFAULT '[]',
+            contains_raw_transcript INTEGER NOT NULL DEFAULT 0,
+            contains_snippets INTEGER NOT NULL DEFAULT 0,
+            created_at_ms INTEGER NOT NULL,
+            updated_at_ms INTEGER NOT NULL,
+            imported_at_ms INTEGER,
+            PRIMARY KEY (origin_machine_id, harness, source_session_id, generator)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_source_session_digests_harness_session
+        ON source_session_digests(harness, source_session_id);
 
         CREATE TABLE IF NOT EXISTS usage_events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1310,6 +1345,48 @@ def _create_import_source_files_table(conn: sqlite3.Connection) -> None:
 
 def _migrate_v14_to_v15(conn: sqlite3.Connection) -> None:
     _create_import_source_files_table(conn)
+
+
+def _create_source_session_digests_table(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS source_session_digests (
+            origin_machine_id TEXT NOT NULL,
+            harness TEXT NOT NULL,
+            source_session_id TEXT NOT NULL,
+            schema_version INTEGER NOT NULL,
+            generator TEXT NOT NULL,
+            generated_at_ms INTEGER NOT NULL,
+            source_fingerprint TEXT,
+            one_line TEXT,
+            bullets_json TEXT NOT NULL DEFAULT '[]',
+            confidence TEXT NOT NULL DEFAULT 'low',
+            tool_call_count INTEGER NOT NULL DEFAULT 0,
+            tool_failure_count INTEGER NOT NULL DEFAULT 0,
+            tool_timeout_count INTEGER NOT NULL DEFAULT 0,
+            failed_tools_json TEXT NOT NULL DEFAULT '{}',
+            files_mentioned_json TEXT NOT NULL DEFAULT '[]',
+            commands_mentioned_json TEXT NOT NULL DEFAULT '[]',
+            warnings_json TEXT NOT NULL DEFAULT '[]',
+            contains_raw_transcript INTEGER NOT NULL DEFAULT 0,
+            contains_snippets INTEGER NOT NULL DEFAULT 0,
+            created_at_ms INTEGER NOT NULL,
+            updated_at_ms INTEGER NOT NULL,
+            imported_at_ms INTEGER,
+            PRIMARY KEY (origin_machine_id, harness, source_session_id, generator)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_source_session_digests_harness_session
+        ON source_session_digests(harness, source_session_id)
+        """
+    )
+
+
+def _migrate_v15_to_v16(conn: sqlite3.Connection) -> None:
+    _create_source_session_digests_table(conn)
 
 
 def _create_machine_active_areas_table(conn: sqlite3.Connection) -> None:
@@ -3162,6 +3239,183 @@ def list_source_session_metadata(
             last_seen_ms=_optional_int(row["last_seen_ms"]),
         )
         for row in rows
+    )
+
+
+def upsert_source_session_digest(
+    conn: sqlite3.Connection,
+    digest: SessionDigest,
+) -> None:
+    if digest.origin_machine_id is None:
+        msg = "Session digest requires origin_machine_id for persistence."
+        raise ValueError(msg)
+    now_ms = _now_ms()
+    generated_at_ms = digest.generated_at_ms or now_ms
+    existing = conn.execute(
+        """
+        SELECT created_at_ms
+        FROM source_session_digests
+        WHERE origin_machine_id = ?
+          AND harness = ?
+          AND source_session_id = ?
+          AND generator = ?
+        """,
+        (
+            digest.origin_machine_id,
+            digest.harness,
+            digest.source_session_id,
+            digest.summary.generator,
+        ),
+    ).fetchone()
+    created_at_ms = _required_int(existing["created_at_ms"]) if existing else now_ms
+    conn.execute(
+        """
+        INSERT INTO source_session_digests (
+            origin_machine_id, harness, source_session_id, schema_version, generator,
+            generated_at_ms, source_fingerprint, one_line, bullets_json, confidence,
+            tool_call_count, tool_failure_count, tool_timeout_count, failed_tools_json,
+            files_mentioned_json, commands_mentioned_json, warnings_json,
+            contains_raw_transcript, contains_snippets, created_at_ms, updated_at_ms,
+            imported_at_ms
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(origin_machine_id, harness, source_session_id, generator)
+        DO UPDATE SET
+            schema_version = excluded.schema_version,
+            generated_at_ms = excluded.generated_at_ms,
+            source_fingerprint = excluded.source_fingerprint,
+            one_line = excluded.one_line,
+            bullets_json = excluded.bullets_json,
+            confidence = excluded.confidence,
+            tool_call_count = excluded.tool_call_count,
+            tool_failure_count = excluded.tool_failure_count,
+            tool_timeout_count = excluded.tool_timeout_count,
+            failed_tools_json = excluded.failed_tools_json,
+            files_mentioned_json = excluded.files_mentioned_json,
+            commands_mentioned_json = excluded.commands_mentioned_json,
+            warnings_json = excluded.warnings_json,
+            contains_raw_transcript = excluded.contains_raw_transcript,
+            contains_snippets = excluded.contains_snippets,
+            updated_at_ms = excluded.updated_at_ms,
+            imported_at_ms = excluded.imported_at_ms
+        """,
+        (
+            digest.origin_machine_id,
+            digest.harness,
+            digest.source_session_id,
+            digest.schema_version,
+            digest.summary.generator,
+            generated_at_ms,
+            digest.source_fingerprint,
+            digest.summary.one_line,
+            json.dumps(list(digest.summary.bullets), separators=(",", ":")),
+            digest.summary.confidence,
+            digest.tool_health.tool_call_count,
+            digest.tool_health.tool_failure_count,
+            digest.tool_health.tool_timeout_count,
+            json.dumps(digest.tool_health.failed_tools, separators=(",", ":")),
+            json.dumps(list(digest.files_mentioned), separators=(",", ":")),
+            json.dumps(list(digest.commands_mentioned), separators=(",", ":")),
+            json.dumps(list(digest.tool_health.warnings), separators=(",", ":")),
+            1 if digest.contains_raw_transcript else 0,
+            1 if digest.contains_snippets else 0,
+            created_at_ms,
+            now_ms,
+            now_ms,
+        ),
+    )
+
+
+def list_source_session_digests(
+    conn: sqlite3.Connection,
+    *,
+    origin_machine_id: str | None = None,
+    harness: str | None = None,
+    source_session_id: str | None = None,
+) -> tuple[SessionDigest, ...]:
+    clauses: list[str] = []
+    params: list[object] = []
+    if origin_machine_id is not None:
+        clauses.append("origin_machine_id = ?")
+        params.append(origin_machine_id)
+    if harness is not None:
+        clauses.append("harness = ?")
+        params.append(harness)
+    if source_session_id is not None:
+        clauses.append("source_session_id = ?")
+        params.append(source_session_id)
+    query = "SELECT * FROM source_session_digests"
+    if clauses:
+        query += " WHERE " + " AND ".join(clauses)
+    query += " ORDER BY generated_at_ms DESC, harness, source_session_id"
+    return tuple(_digest_from_row(row) for row in conn.execute(query, tuple(params)))
+
+
+def get_source_session_digest(
+    conn: sqlite3.Connection,
+    *,
+    origin_machine_id: str,
+    harness: str,
+    source_session_id: str,
+    generator: str = "heuristic:v1",
+) -> SessionDigest | None:
+    rows = list_source_session_digests(
+        conn,
+        origin_machine_id=origin_machine_id,
+        harness=harness,
+        source_session_id=source_session_id,
+    )
+    for row in rows:
+        if row.summary.generator == generator:
+            return row
+    return None
+
+
+def _digest_from_row(row: sqlite3.Row) -> SessionDigest:
+    return SessionDigest(
+        schema_version=_required_int(row["schema_version"]),
+        origin_machine_id=str(row["origin_machine_id"]),
+        machine_label=None,
+        harness=str(row["harness"]),
+        source_session_id=str(row["source_session_id"]),
+        area_path=None,
+        cwd=None,
+        source_dir=None,
+        git_root=None,
+        git_remote=None,
+        session_title=None,
+        started_ms=None,
+        last_seen_ms=None,
+        usage=SessionTotals(tokens=TokenBreakdown(), costs=CostTotals()),
+        message_count=0,
+        summary=SessionDigestSummary(
+            one_line=_optional_str(row["one_line"]),
+            bullets=_json_tuple(_optional_str(row["bullets_json"]) or "[]"),
+            confidence=str(row["confidence"]),
+            generator=str(row["generator"]),
+        ),
+        tool_health=SessionToolHealth(
+            tool_call_count=_required_int(row["tool_call_count"]),
+            tool_failure_count=_required_int(row["tool_failure_count"]),
+            tool_timeout_count=_required_int(row["tool_timeout_count"]),
+            failed_tools={
+                str(key): int(value)
+                for key, value in json.loads(
+                    _optional_str(row["failed_tools_json"]) or "{}"
+                ).items()
+            },
+            warnings=_json_tuple(_optional_str(row["warnings_json"]) or "[]"),
+        ),
+        files_mentioned=_json_tuple(
+            _optional_str(row["files_mentioned_json"]) or "[]"
+        ),
+        commands_mentioned=_json_tuple(
+            _optional_str(row["commands_mentioned_json"]) or "[]"
+        ),
+        contains_raw_transcript=bool(_required_int(row["contains_raw_transcript"])),
+        contains_snippets=bool(_required_int(row["contains_snippets"])),
+        generated_at_ms=_required_int(row["generated_at_ms"]),
+        source_fingerprint=_optional_str(row["source_fingerprint"]),
     )
 
 

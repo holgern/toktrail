@@ -194,6 +194,8 @@ toktrail --config ~/.config/toktrail/config.toml run status --json
 toktrail run status --harness pi --source-session pi_ses_001 --json
 toktrail analyze cache opencode --last
 toktrail analyze cache opencode ses-1 --json
+toktrail analyze session codex --last --json
+toktrail analyze session pi pi_ses_001 --source ~/.pi/agent/sessions --persist
 ```
 
 Show period-based usage across canonical ledger rows, even without an active
@@ -219,6 +221,7 @@ toktrail usage sessions --today --table
 toktrail usage sessions --this-week --harness codex
 toktrail usage daily --rich
 toktrail usage sessions --last
+toktrail usage sessions --with-summary --last
 toktrail usage sessions --order asc --limit 10 --table
 toktrail usage runs --last --limit 5
 toktrail usage runs --archived
@@ -323,6 +326,7 @@ toktrail run start --name <name>
 toktrail refresh
 toktrail run status
 toktrail analyze cache opencode --last
+toktrail analyze session codex --last --persist
 toktrail usage today
 toktrail usage machines
 toktrail run list
@@ -331,6 +335,12 @@ toktrail sync git sync
 toktrail sync export --out toktrail-state.tar.gz
 toktrail run stop
 ```
+
+`toktrail analyze session` creates a deterministic local session digest for
+Codex and Pi source sessions. By default it reads source logs on demand, stores
+only redacted aggregate summary data when `--persist` is used, and does not
+include raw transcript text in human or JSON output. Persisted digests are shown
+in source-session lists with `toktrail usage sessions --with-summary`.
 
 Report commands (`toktrail usage`, `toktrail run status`, and
 `toktrail subscriptions status`) refresh configured sources first by default. Use

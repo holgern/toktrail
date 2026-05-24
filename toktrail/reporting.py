@@ -805,6 +805,115 @@ class UsageSessionsReport:
 
 
 @dataclass(frozen=True)
+class SessionTranscriptEvent:
+    harness: str
+    source_session_id: str
+    created_ms: int | None
+    role: str | None
+    kind: str
+    name: str | None = None
+    text: str | None = None
+    path: str | None = None
+    success: bool | None = None
+    error_text: str | None = None
+    raw_kind: str | None = None
+
+
+@dataclass(frozen=True)
+class SessionToolHealth:
+    tool_call_count: int = 0
+    tool_failure_count: int = 0
+    tool_timeout_count: int = 0
+    failed_tools: dict[str, int] = field(default_factory=dict)
+    warnings: tuple[str, ...] = ()
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "tool_call_count": self.tool_call_count,
+            "tool_failure_count": self.tool_failure_count,
+            "tool_timeout_count": self.tool_timeout_count,
+            "failed_tools": dict(sorted(self.failed_tools.items())),
+            "warnings": list(self.warnings),
+        }
+
+
+@dataclass(frozen=True)
+class SessionDigestSummary:
+    one_line: str | None = None
+    bullets: tuple[str, ...] = ()
+    confidence: str = "low"
+    generator: str = "heuristic:v1"
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "one_line": self.one_line,
+            "bullets": list(self.bullets),
+            "confidence": self.confidence,
+            "generator": self.generator,
+        }
+
+
+@dataclass(frozen=True)
+class SessionDigest:
+    schema_version: int
+    origin_machine_id: str | None
+    machine_label: str | None
+    harness: str
+    source_session_id: str
+    area_path: str | None
+    cwd: str | None
+    source_dir: str | None
+    git_root: str | None
+    git_remote: str | None
+    session_title: str | None
+    started_ms: int | None
+    last_seen_ms: int | None
+    usage: SessionTotals
+    message_count: int
+    summary: SessionDigestSummary
+    tool_health: SessionToolHealth
+    files_mentioned: tuple[str, ...] = ()
+    commands_mentioned: tuple[str, ...] = ()
+    contains_raw_transcript: bool = False
+    contains_snippets: bool = False
+    generated_at_ms: int | None = None
+    source_fingerprint: str | None = None
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "type": "session_digest",
+            "schema_version": self.schema_version,
+            "origin_machine_id": self.origin_machine_id,
+            "machine_label": self.machine_label,
+            "harness": self.harness,
+            "source_session_id": self.source_session_id,
+            "area_path": self.area_path,
+            "cwd": self.cwd,
+            "source_dir": self.source_dir,
+            "git_root": self.git_root,
+            "git_remote": self.git_remote,
+            "session_title": self.session_title,
+            "started_ms": self.started_ms,
+            "last_seen_ms": self.last_seen_ms,
+            "usage": self.usage.as_dict(),
+            "message_count": self.message_count,
+            "summary": self.summary.as_dict(),
+            "tool_health": self.tool_health.as_dict(),
+            "artifacts": {
+                "files_mentioned": list(self.files_mentioned),
+                "commands_mentioned": list(self.commands_mentioned),
+            },
+            "privacy": {
+                "contains_raw_transcript": self.contains_raw_transcript,
+                "contains_snippets": self.contains_snippets,
+                "redacted": True,
+            },
+            "generated_at_ms": self.generated_at_ms,
+            "source_fingerprint": self.source_fingerprint,
+        }
+
+
+@dataclass(frozen=True)
 class UsageRunsFilter:
     tracking_session_id: int | None = None
     machine_id: str | None = None

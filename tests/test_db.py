@@ -51,6 +51,7 @@ from toktrail.db import (
     unassign_area_from_source_session,
     upsert_import_source_file_state,
     upsert_source_session_metadata,
+    SCHEMA_VERSION,
 )
 from toktrail.models import RunScope, TokenBreakdown, UsageEvent
 from toktrail.periods import resolve_fixed_subscription_window
@@ -173,7 +174,7 @@ def test_migrate_creates_tables_and_is_idempotent(tmp_path: Path) -> None:
         "import_source_files",
         "sync_imports",
     } <= table_names
-    assert user_version == 15
+    assert user_version == SCHEMA_VERSION
 
 
 def test_migrate_v3_to_v4_idempotent_with_existing_column(tmp_path: Path) -> None:
@@ -189,7 +190,7 @@ def test_migrate_v3_to_v4_idempotent_with_existing_column(tmp_path: Path) -> Non
     # Re-running migrate must not crash on duplicate column.
     migrate(conn)
 
-    assert int(conn.execute("PRAGMA user_version").fetchone()[0]) == 15
+    assert int(conn.execute("PRAGMA user_version").fetchone()[0]) == SCHEMA_VERSION
 
 
 def test_import_source_file_state_round_trip(tmp_path: Path) -> None:
@@ -3366,3 +3367,17 @@ def test_summarize_usage_series_instance_breakdown_scoping(tmp_path: Path) -> No
         else:
             assert len(inst.buckets[0].by_model) == 1
             assert inst.buckets[0].by_model[0].model_id == "model-b"
+
+
+def test_schema_v16_creates_source_session_digests(tmp_path: Path) -> None:
+    db_path = tmp_path / "state.db"
+    conn = connect(db_path)
+    try:
+        migrate(conn)
+        row = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'source_session_digests'"
+        ).fetchone()
+        assert row is not None
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+    finally:
+        conn.close()

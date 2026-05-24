@@ -45,6 +45,10 @@ from toktrail.paths import (
     resolve_pi_sessions_path,
     resolve_vibe_logs_path,
 )
+from toktrail.session_digests import (
+    extract_codex_session_events,
+    extract_pi_session_events,
+)
 
 
 @dataclass(frozen=True)
@@ -74,6 +78,7 @@ class HarnessDefinition:
     resolve_source_path: Callable[[Path | None], Path | None]
     scan: Callable[..., ScanResult]
     list_sessions: Callable[..., list[SourceSessionSummary]]
+    extract_session_events: Callable[..., object] | None = None
     ignored_patterns: tuple[str, ...] = ()
     source_kind: Literal["json", "jsonl", "sqlite", "directory", "mixed"] = "directory"
     supports_watch: bool = False
@@ -126,6 +131,7 @@ HARNESS_REGISTRY: dict[str, HarnessDefinition] = {
         resolve_source_path=resolve_pi_sessions_path,
         scan=scan_pi_path,
         list_sessions=list_pi_sessions,
+        extract_session_events=extract_pi_session_events,
         supports_watch=True,
         config_key="pi_sessions",
         id_prefix="pi",
@@ -159,6 +165,7 @@ HARNESS_REGISTRY: dict[str, HarnessDefinition] = {
         resolve_source_path=resolve_codex_sessions_path,
         scan=scan_codex_path,
         list_sessions=list_codex_sessions,
+        extract_session_events=extract_codex_session_events,
         supports_watch=True,
         config_key="codex_sessions",
         id_prefix="codex",

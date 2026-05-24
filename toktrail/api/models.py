@@ -6,6 +6,11 @@ from toktrail.api.model_parts.cache_analysis import (
     CacheClusterRow,
     SessionCacheAnalysisReport,
 )
+from toktrail.api.model_parts.core_models import (
+    SessionDigest,
+    SessionDigestSummary,
+    SessionToolHealth,
+)
 from toktrail.api.model_parts.reports import (
     ActivitySummaryRow,
     AreaSummaryRow,
@@ -101,11 +106,14 @@ __all__ = [
     "StateImportConflict",
     "StateImportResult",
     "SessionCacheAnalysisReport",
+    "SessionDigest",
+    "SessionDigestSummary",
     "SubscriptionBillingPeriod",
     "SubscriptionUsagePeriod",
     "SubscriptionUsageReport",
     "SubscriptionUsageRow",
     "TokenBreakdown",
+    "SessionToolHealth",
     "UnconfiguredModelRow",
     "UsageEvent",
     "UsageSeriesBucket",

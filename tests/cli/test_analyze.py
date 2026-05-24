@@ -154,3 +154,115 @@ def test_cli_analyze_session_no_raw_json_in_output(tmp_path: Path) -> None:
     payload = json.loads(result.output)
     assert "raw_json" not in result.output
     assert all("raw_json" not in row for row in payload["calls"])
+
+
+def _write_codex_digest_source(path: Path) -> None:
+    rows = [
+        {
+            "type": "turn_context",
+            "payload": {
+                "working_directory": "/tmp/toktrail",
+                "session_title": "Digest work",
+            },
+        },
+        {
+            "type": "turn.completed",
+            "model": "gpt-5",
+            "usage": {"input_tokens": 10, "output_tokens": 2},
+        },
+        {
+            "type": "event_msg",
+            "payload": {
+                "type": "exec_command",
+                "cmd": "pytest tests/test_codex_session_digest.py",
+                "exit_code": 1,
+                "stderr": "failed",
+                "path": "tests/test_codex_session_digest.py",
+            },
+        },
+    ]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "".join(json.dumps(row) + "\n" for row in rows),
+        encoding="utf-8",
+    )
+
+
+def test_cli_analyze_session_codex_json_and_persisted_usage_summary(
+    tmp_path: Path,
+) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    source_dir = tmp_path / "codex"
+    _write_codex_digest_source(source_dir / "codex_ses_1.jsonl")
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "analyze",
+            "session",
+            "codex",
+            "--source",
+            str(source_dir),
+            "--last",
+            "--persist",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["type"] == "session_digest"
+    assert payload["harness"] == "codex"
+    assert payload["source_session_id"] == "codex_ses_1"
+    assert payload["tool_health"]["tool_call_count"] == 1
+    assert payload["tool_health"]["tool_failure_count"] == 1
+    assert payload["privacy"]["contains_raw_transcript"] is False
+    assert "raw_json" not in result.output
+
+    usage = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "usage",
+            "sessions",
+            "--with-summary",
+            "--no-refresh",
+        ],
+    )
+
+    assert usage.exit_code == 0, usage.output
+    assert "Summary:" in usage.output
+    assert "tool_failures=1" in usage.output
+
+
+def test_cli_analyze_session_rejects_last_and_source_session_id_for_digest(
+    tmp_path: Path,
+) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    source_dir = tmp_path / "codex"
+    _write_codex_digest_source(source_dir / "codex_ses_1.jsonl")
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "analyze",
+            "session",
+            "codex",
+            "codex_ses_1",
+            "--source",
+            str(source_dir),
+            "--last",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "cannot be used together" in result.output

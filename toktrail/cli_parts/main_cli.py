@@ -28,11 +28,13 @@ from toktrail.adapters.summary import (
     summarize_events_by_model,
 )
 from toktrail.api.analysis import session_cache_analysis as session_cache_analysis_api
+from toktrail.api.analysis import session_digest as session_digest_api
 from toktrail.api.environment import prepare_environment as prepare_api_environment
 from toktrail.api.imports import import_configured_usage as import_configured_usage_api
 from toktrail.api.models import (
     ImportUsageResult,
     SessionCacheAnalysisReport,
+    SessionDigest,
     StatuslineCache,
     StatuslineReport,
 )
@@ -2084,6 +2086,13 @@ def usage(  # noqa: C901
     breakdown: BreakdownOption = False,
     compact: Annotated[bool, typer.Option("--compact")] = False,
     table: SessionTableOption = False,
+    with_summary: Annotated[
+        bool,
+        typer.Option(
+            "--with-summary",
+            help="Include persisted session digest summary.",
+        ),
+    ] = False,
     instances: Annotated[bool, typer.Option("--instances")] = False,
     order: Annotated[str, typer.Option("--order")] = "desc",
     locale: Annotated[str | None, typer.Option("--locale")] = None,
@@ -2375,6 +2384,7 @@ def usage(  # noqa: C901
             limit=limit,
             last=last,
             rich_output=rich_output,
+            with_summary=with_summary,
         )
         if json_output:
             if payload is None:
@@ -3043,6 +3053,7 @@ def _usage_sessions(
     limit: int | None,
     last: bool,
     rich_output: bool,
+    with_summary: bool,
 ) -> dict[str, object] | None:
     from toktrail.db import summarize_usage_sessions
     from toktrail.reporting import UsageSessionsFilter
@@ -3098,6 +3109,9 @@ def _usage_sessions(
             ),
             costing_config=costing_config,
         )
+        digest_lookup = (
+            _session_digest_lookup(conn, report.sessions) if with_summary else {}
+        )
     except ValueError as exc:
         _exit_with_error(str(exc))
     finally:
@@ -3105,6 +3119,8 @@ def _usage_sessions(
 
     if json_output:
         payload = report.as_dict()
+        if with_summary:
+            _add_digest_summaries_to_payload(payload, digest_lookup)
         filters = payload.get("filters")
         if not isinstance(filters, dict):
             msg = "Usage sessions payload unexpectedly missing filters."
@@ -3129,8 +3145,79 @@ def _usage_sessions(
         rich_output=rich_output,
         table=table,
         period=resolved_range.period,
+        digest_lookup=digest_lookup,
     )
     return None
+
+
+def _session_digest_lookup(conn, sessions) -> dict[tuple[str, str, str], object]:
+    from toktrail.db import list_source_session_digests
+
+    keys = {
+        (session.origin_machine_id, session.harness, session.source_session_id)
+        for session in sessions
+        if session.origin_machine_id is not None
+    }
+    if not keys:
+        return {}
+    rows = list_source_session_digests(conn)
+    return {
+        (row.origin_machine_id, row.harness, row.source_session_id): row
+        for row in rows
+        if row.origin_machine_id is not None
+        and (row.origin_machine_id, row.harness, row.source_session_id) in keys
+    }
+
+
+def _lookup_session_digest(digest_lookup, session):
+    if digest_lookup is None or session.origin_machine_id is None:
+        return None
+    return digest_lookup.get(
+        (session.origin_machine_id, session.harness, session.source_session_id)
+    )
+
+
+def _digest_one_line(digest_lookup, session) -> str:
+    digest = _lookup_session_digest(digest_lookup, session)
+    if digest is None:
+        return "-"
+    return digest.summary.one_line or "-"
+
+
+def _digest_tool_failures(digest_lookup, session) -> str:
+    digest = _lookup_session_digest(digest_lookup, session)
+    if digest is None:
+        return "-"
+    return _format_int(digest.tool_health.tool_failure_count)
+
+
+def _add_digest_summaries_to_payload(
+    payload: dict[str, object],
+    digest_lookup,
+) -> None:
+    sessions = payload.get("sessions")
+    if not isinstance(sessions, list):
+        return
+    for row in sessions:
+        if not isinstance(row, dict):
+            continue
+        origin = row.get("origin_machine_id")
+        harness = row.get("harness")
+        source_session_id = row.get("source_session_id")
+        if not all(
+            isinstance(value, str)
+            for value in (origin, harness, source_session_id)
+        ):
+            continue
+        digest = digest_lookup.get((origin, harness, source_session_id))
+        if digest is None:
+            continue
+        row["summary"] = {
+            "one_line": digest.summary.one_line,
+            "confidence": digest.summary.confidence,
+            "generator": digest.summary.generator,
+            "tool_failure_count": digest.tool_health.tool_failure_count,
+        }
 
 
 def _print_usage_sessions(
@@ -3142,6 +3229,7 @@ def _print_usage_sessions(
     rich_output: bool,
     table: bool,
     period: str | None,
+    digest_lookup: dict[tuple[str, str, str], object] | None = None,
 ) -> None:
     from toktrail.formatting import format_epoch_ms_compact
     from toktrail.reporting import UsageSessionsReport
@@ -3189,6 +3277,13 @@ def _print_usage_sessions(
             )
             typer.echo(f"   {token_line}")
             typer.echo(f"   {_format_session_cost_line(session.costs)}")
+            digest = _lookup_session_digest(digest_lookup, session)
+            if digest is not None:
+                typer.echo(
+                    "   Summary: "
+                    f"{digest.summary.one_line or '-'} "
+                    f"(tool_failures={_format_int(digest.tool_health.tool_failure_count)})"
+                )
             if breakdown and session.by_model:
                 typer.echo("   Breakdown:")
                 for row in session.by_model:
@@ -3207,6 +3302,39 @@ def _print_usage_sessions(
         return
 
     if compact:
+        columns = [
+            "machine",
+            "session",
+            "area",
+            "last",
+            "msgs",
+            "total",
+            "actual",
+            "virtual",
+            "savings",
+            "models",
+        ]
+        labels = {
+            "machine": "machine",
+            "session": "session",
+            "area": "area",
+            "last": "last",
+            "msgs": "msgs",
+            "total": "total",
+            "actual": "actual",
+            "virtual": "virtual",
+            "savings": "savings",
+            "models": "models",
+        }
+        numeric_columns = {"msgs", "total", "actual", "virtual", "savings"}
+        wrap_columns = {"area", "models"}
+        max_widths = {"area": 36, "models": 48, "session": 48}
+        if digest_lookup is not None:
+            columns.extend(["summary", "tool_failures"])
+            labels.update({"summary": "summary", "tool_failures": "tool_failures"})
+            numeric_columns.add("tool_failures")
+            wrap_columns.add("summary")
+            max_widths["summary"] = 48
         rows = [
             {
                 "machine": session.machine_label,
@@ -3219,41 +3347,84 @@ def _print_usage_sessions(
                 "virtual": _format_cost(session.costs.virtual_cost_usd),
                 "savings": _format_cost(session.costs.savings_usd),
                 "models": _format_model_list(session.models, rich_output=rich_output),
+                "summary": _digest_one_line(digest_lookup, session),
+                "tool_failures": _digest_tool_failures(digest_lookup, session),
             }
             for session in report.sessions
         ]
         _print_table(
             rows,
-            [
-                "machine",
-                "session",
-                "area",
-                "last",
-                "msgs",
-                "total",
-                "actual",
-                "virtual",
-                "savings",
-                "models",
-            ],
-            {
-                "machine": "machine",
-                "session": "session",
-                "area": "area",
-                "last": "last",
-                "msgs": "msgs",
-                "total": "total",
-                "actual": "actual",
-                "virtual": "virtual",
-                "savings": "savings",
-                "models": "models",
-            },
+            columns,
+            labels,
             rich_output=rich_output,
-            numeric_columns={"msgs", "total", "actual", "virtual", "savings"},
-            wrap_columns={"area", "models"},
-            max_widths={"area": 36, "models": 48, "session": 48},
+            numeric_columns=numeric_columns,
+            wrap_columns=wrap_columns,
+            max_widths=max_widths,
         )
     else:
+        columns = [
+            "machine",
+            "session",
+            "area",
+            "last",
+            "msgs",
+            "models",
+            "input",
+            "output",
+            "reasoning",
+            "cache_r",
+            "cache_w",
+            "cache_o",
+            "total",
+            "source",
+            "actual",
+            "virtual",
+            "savings",
+            "unpriced",
+        ]
+        labels = {
+            "machine": "machine",
+            "session": "session",
+            "area": "area",
+            "last": "last",
+            "msgs": "msgs",
+            "models": "models",
+            "input": "input",
+            "output": "output",
+            "reasoning": "reasoning",
+            "cache_r": "cache_r",
+            "cache_w": "cache_w",
+            "cache_o": "cache_o",
+            "total": "total",
+            "source": "source",
+            "actual": "actual",
+            "virtual": "virtual",
+            "savings": "savings",
+            "unpriced": "unpriced",
+        }
+        numeric_columns = {
+            "msgs",
+            "input",
+            "output",
+            "reasoning",
+            "cache_r",
+            "cache_w",
+            "cache_o",
+            "total",
+            "source",
+            "actual",
+            "virtual",
+            "savings",
+            "unpriced",
+        }
+        wrap_columns = {"session", "area", "models"}
+        max_widths = {"session": 48, "area": 36, "models": 48}
+        if digest_lookup is not None:
+            columns.extend(["summary", "tool_failures"])
+            labels.update({"summary": "summary", "tool_failures": "tool_failures"})
+            numeric_columns.add("tool_failures")
+            wrap_columns.add("summary")
+            max_widths["summary"] = 48
         rows = [
             {
                 "machine": session.machine_label,
@@ -3274,69 +3445,19 @@ def _print_usage_sessions(
                 "virtual": _format_cost(session.costs.virtual_cost_usd),
                 "savings": _format_cost(session.costs.savings_usd),
                 "unpriced": _format_int(session.costs.unpriced_count),
+                "summary": _digest_one_line(digest_lookup, session),
+                "tool_failures": _digest_tool_failures(digest_lookup, session),
             }
             for session in report.sessions
         ]
         _print_table(
             rows,
-            [
-                "machine",
-                "session",
-                "area",
-                "last",
-                "msgs",
-                "models",
-                "input",
-                "output",
-                "reasoning",
-                "cache_r",
-                "cache_w",
-                "cache_o",
-                "total",
-                "source",
-                "actual",
-                "virtual",
-                "savings",
-                "unpriced",
-            ],
-            {
-                "machine": "machine",
-                "session": "session",
-                "area": "area",
-                "last": "last",
-                "msgs": "msgs",
-                "models": "models",
-                "input": "input",
-                "output": "output",
-                "reasoning": "reasoning",
-                "cache_r": "cache_r",
-                "cache_w": "cache_w",
-                "cache_o": "cache_o",
-                "total": "total",
-                "source": "source",
-                "actual": "actual",
-                "virtual": "virtual",
-                "savings": "savings",
-                "unpriced": "unpriced",
-            },
+            columns,
+            labels,
             rich_output=rich_output,
-            numeric_columns={
-                "msgs",
-                "input",
-                "output",
-                "reasoning",
-                "cache_r",
-                "cache_w",
-                "cache_o",
-                "total",
-                "source",
-                "actual",
-                "virtual",
-                "savings",
-                "unpriced",
-            },
-            wrap_columns={"session", "area", "models"},
-            max_widths={"session": 48, "area": 36, "models": 48},
+            numeric_columns=numeric_columns,
+            wrap_columns=wrap_columns,
+            max_widths=max_widths,
         )
 
     if breakdown:
@@ -5485,6 +5606,51 @@ def analyze_cache(
     )
 
 
+@analyze_app.command("session")
+def analyze_session(
+    ctx: typer.Context,
+    harness: Annotated[str, typer.Argument(help="Harness name to analyze.")],
+    source_session_id: SourceSessionArgument = None,
+    source_path: SourcePathOption = None,
+    last: LastOption = False,
+    json_output: JsonOption = False,
+    utc: UtcOption = False,
+    refresh: RefreshOption = True,
+    persist: Annotated[
+        bool,
+        typer.Option("--persist/--no-persist", help="Store the generated digest."),
+    ] = False,
+    include_snippets: Annotated[
+        bool,
+        typer.Option(
+            "--include-snippets",
+            help="Reserved for future explicit transcript snippets.",
+        ),
+    ] = False,
+    rich_output: RichOption = False,
+) -> None:
+    try:
+        digest = session_digest_api(
+            db_path=_resolve_state_db(ctx),
+            config_path=_resolve_config_path(ctx),
+            harness=harness,
+            source_session_id=source_session_id,
+            last=last,
+            source_path=source_path,
+            refresh=refresh,
+            persist=persist,
+            include_snippets=include_snippets,
+        )
+    except (ToktrailError, OSError, ValueError) as exc:
+        _exit_with_error(str(exc))
+
+    if json_output:
+        typer.echo(json.dumps(digest.as_dict(), indent=2))
+        return
+
+    _print_session_digest(digest, utc=utc, rich_output=rich_output)
+
+
 @copilot_app.command(
     "run",
     context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
@@ -6748,6 +6914,63 @@ def _print_session_cache_analysis_report(
             wrap_columns={"ordinals"},
             max_widths={"ordinals": 28},
         )
+
+
+def _print_session_digest(
+    digest: SessionDigest,
+    *,
+    utc: bool,
+    rich_output: bool,
+) -> None:
+    typer.echo(f"{digest.harness} source session {digest.source_session_id}")
+    if digest.area_path:
+        typer.echo(f"Area:       {digest.area_path}")
+    if digest.machine_label:
+        typer.echo(f"Machine:    {digest.machine_label}")
+    if digest.cwd or digest.source_dir:
+        typer.echo(f"Where:      {digest.cwd or digest.source_dir}")
+    if digest.git_remote:
+        typer.echo(f"Git:        {digest.git_remote}")
+    if digest.started_ms is not None and digest.last_seen_ms is not None:
+        typer.echo(
+            "When:       "
+            f"{format_epoch_ms_compact(digest.started_ms, utc=utc)}.."
+            f"{format_epoch_ms_compact(digest.last_seen_ms, utc=utc)}"
+        )
+    typer.echo(
+        "Usage:      "
+        f"messages={_format_int(digest.message_count)} "
+        f"tokens={_format_int(digest.usage.tokens.total)} "
+        f"actual={_format_cost(digest.usage.costs.actual_cost_usd)} "
+        f"virtual={_format_cost(digest.usage.costs.virtual_cost_usd)}"
+    )
+    typer.echo("")
+    typer.echo("Summary")
+    typer.echo(f"  {digest.summary.one_line or 'No summary available.'}")
+    for bullet in digest.summary.bullets:
+        typer.echo(f"  - {bullet}")
+    typer.echo("")
+    typer.echo("Tool health")
+    typer.echo(f"  Tool calls:   {_format_int(digest.tool_health.tool_call_count)}")
+    typer.echo(f"  Failures:     {_format_int(digest.tool_health.tool_failure_count)}")
+    if digest.tool_health.failed_tools:
+        failed = ", ".join(
+            f"{name}:{count}"
+            for name, count in sorted(digest.tool_health.failed_tools.items())
+        )
+        typer.echo(f"  Failed tools: {failed}")
+    if digest.tool_health.warnings:
+        typer.echo(f"  Warnings:     {', '.join(digest.tool_health.warnings)}")
+    if digest.files_mentioned:
+        typer.echo("")
+        typer.echo("Files/paths mentioned")
+        for value in digest.files_mentioned[:8]:
+            typer.echo(f"  - {value}")
+    if rich_output and digest.commands_mentioned:
+        typer.echo("")
+        typer.echo("Commands mentioned")
+        for value in digest.commands_mentioned[:8]:
+            typer.echo(f"  - {value}")
 
 
 def _build_statusline_cli(

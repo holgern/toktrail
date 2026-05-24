@@ -33,6 +33,11 @@ from toktrail.errors import (
 from toktrail.models import TokenBreakdown as InternalTokenBreakdown
 from toktrail.models import UsageEvent
 from toktrail.reporting import UsageReportFilter
+from toktrail.session_digests import (
+    build_session_digest,
+    digest_source_fingerprint,
+    public_digest_from_internal,
+)
 
 
 def session_cache_analysis(
@@ -114,6 +119,133 @@ def session_cache_analysis(
         clusters=clusters,
         warnings=analysis.warnings,
     )
+
+
+def session_digest(
+    *,
+    db_path: Path | None = None,
+    config_path: Path | None = None,
+    harness: str,
+    source_session_id: str | None = None,
+    last: bool = False,
+    source_path: Path | None = None,
+    refresh: bool = True,
+    persist: bool = False,
+    include_snippets: bool = False,
+):
+    if include_snippets:
+        msg = "include_snippets is not supported for phase-1 session digests."
+        raise InvalidAPIUsageError(msg)
+    if source_session_id is not None and last:
+        msg = "source_session_id and last=True cannot be used together."
+        raise InvalidAPIUsageError(msg)
+
+    definition = _get_harness(harness)
+    harness_name = definition.name
+    costing_config = _load_costing_config(config_path)
+    if refresh:
+        import_usage(
+            db_path,
+            harness_name,
+            source_path=source_path,
+            source_session_id=source_session_id,
+            use_active_session=False,
+            include_raw_json=False,
+        )
+
+    conn, _ = _open_state_db(db_path)
+    try:
+        usage_session = _resolve_usage_session_for_digest(
+            conn=conn,
+            harness=harness_name,
+            source_session_id=source_session_id,
+            last=last,
+            costing_config=costing_config,
+        )
+        transcript_events = []
+        event_source = _resolve_digest_source_path(
+            definition=definition,
+            source_path=source_path,
+            usage_source_paths=usage_session.source_paths,
+        )
+        if event_source is not None and definition.extract_session_events is not None:
+            transcript_events = list(
+                definition.extract_session_events(
+                    event_source,
+                    source_session_id=usage_session.source_session_id,
+                )
+            )
+        digest = build_session_digest(
+            usage_session=usage_session,
+            transcript_events=transcript_events,
+            source_fingerprint=digest_source_fingerprint(transcript_events),
+        )
+        if persist:
+            db_module.upsert_source_session_digest(conn, digest)
+            conn.commit()
+    except ValueError as exc:
+        raise StateDatabaseError(str(exc)) from exc
+    finally:
+        conn.close()
+    return public_digest_from_internal(digest)
+
+
+def _resolve_usage_session_for_digest(
+    *,
+    conn,
+    harness: str,
+    source_session_id: str | None,
+    last: bool,
+    costing_config: CostingConfig,
+):
+    from toktrail.reporting import UsageSessionsFilter
+
+    report = db_module.summarize_usage_sessions(
+        conn,
+        UsageSessionsFilter(
+            harness=harness,
+            source_session_id=source_session_id,
+            limit=1 if last else None,
+            order="desc",
+        ),
+        costing_config=costing_config,
+    )
+    if source_session_id is not None:
+        if not report.sessions:
+            msg = f"Source session not found for harness {harness}: {source_session_id}"
+            raise SourcePathError(msg)
+        return report.sessions[0]
+    if last:
+        if not report.sessions:
+            msg = f"No usage events found for harness {harness}."
+            raise SourcePathError(msg)
+        return report.sessions[0]
+    if len(report.sessions) == 1:
+        return report.sessions[0]
+    if not report.sessions:
+        msg = f"No usage events found for harness {harness}."
+        raise SourcePathError(msg)
+    candidates = ", ".join(row.source_session_id for row in report.sessions[:10])
+    msg = (
+        f"Multiple source sessions found for harness {harness}: {candidates}. "
+        "Provide source_session_id or use last=True."
+    )
+    raise AmbiguousSourceSessionError(msg)
+
+
+def _resolve_digest_source_path(
+    *,
+    definition,
+    source_path: Path | None,
+    usage_source_paths: tuple[str, ...],
+) -> Path | None:
+    if source_path is not None:
+        return definition.resolve_source_path(source_path)
+    for value in usage_source_paths:
+        path = Path(value).expanduser()
+        if path.exists():
+            return path
+    return definition.resolve_source_path(None)
 
 
 def _load_events_from_state(
