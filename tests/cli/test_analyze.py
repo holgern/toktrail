@@ -309,3 +309,194 @@ def test_cli_analyze_session_rejects_last_and_source_session_id_for_digest(
 
     assert result.exit_code == 1
     assert "cannot be used together" in result.output
+
+
+def _write_codex_bad_tool_calls_source(path: Path) -> None:
+    rows = [
+        {
+            "timestamp": "2026-05-24T05:41:18Z",
+            "type": "event_msg",
+            "payload": {
+                "type": "exec_command",
+                "call_id": "call_ok_1",
+                "command": "echo ok",
+                "exit_code": 0,
+                "duration_ms": 50,
+                "cwd": "/tmp/project",
+            },
+        },
+        {
+            "timestamp": "2026-05-24T05:41:19Z",
+            "type": "event_msg",
+            "payload": {
+                "type": "exec_command",
+                "call_id": "call_bad_1",
+                "command": "rg -n missing toktrail",
+                "exit_code": 2,
+                "duration_ms": 183,
+                "stderr": "No files were searched",
+                "cwd": "/tmp/project",
+            },
+        },
+        {
+            "timestamp": "2026-05-24T05:41:20Z",
+            "type": "turn.completed",
+            "model": "gpt-5",
+            "usage": {"input_tokens": 10, "output_tokens": 2},
+        },
+    ]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "".join(json.dumps(row) + "\n" for row in rows),
+        encoding="utf-8",
+    )
+
+
+def test_cli_analyze_session_codex_bad_calls_human_output(tmp_path: Path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    source_dir = tmp_path / "codex"
+    _write_codex_bad_tool_calls_source(source_dir / "codex_ses_bc.jsonl")
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "analyze",
+            "session",
+            "codex",
+            "--source",
+            str(source_dir),
+            "--last",
+            "--bad-calls",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Bad tool calls: 1 of 2" in result.output
+    assert "exec_command" in result.output
+    assert "FAILED" in result.output or "failed" in result.output
+
+
+def test_cli_analyze_session_codex_bad_calls_json_shape(tmp_path: Path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    source_dir = tmp_path / "codex"
+    _write_codex_bad_tool_calls_source(source_dir / "codex_ses_bc2.jsonl")
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "analyze",
+            "session",
+            "codex",
+            "--source",
+            str(source_dir),
+            "--last",
+            "--bad-calls",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["type"] == "session_tool_calls"
+    assert payload["failure_count"] == 1
+    assert payload["timeout_count"] == 0
+    assert payload["tool_call_count"] == 2
+    assert len(payload["bad_calls"]) >= 1
+    bad = payload["bad_calls"][0]
+    assert bad["tool_name"] == "exec_command"
+    assert bad["status"] == "failed"
+    assert bad["exit_code"] == 2
+
+
+def test_cli_analyze_session_codex_bad_calls_no_raw_json_in_output(
+    tmp_path: Path,
+) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    source_dir = tmp_path / "codex"
+    _write_codex_bad_tool_calls_source(source_dir / "codex_ses_bc3.jsonl")
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "analyze",
+            "session",
+            "codex",
+            "--source",
+            str(source_dir),
+            "--last",
+            "--bad-calls",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "raw_json" not in result.output
+
+
+def test_cli_analyze_session_codex_bad_calls_rejects_raw_tool_json_without_json(
+    tmp_path: Path,
+) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    source_dir = tmp_path / "codex"
+    _write_codex_bad_tool_calls_source(source_dir / "codex_ses_bc4.jsonl")
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "analyze",
+            "session",
+            "codex",
+            "--source",
+            str(source_dir),
+            "--last",
+            "--bad-calls",
+            "--raw-tool-json",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "--raw-tool-json" in result.output or "--json" in result.output
+
+
+def test_cli_analyze_session_without_bad_calls_unaffected(tmp_path: Path) -> None:
+    """Verify analyze session without --bad-calls still shows the compact report."""
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    source_dir = tmp_path / "codex"
+    _write_codex_digest_source(source_dir / "codex_ses_bc5.jsonl")
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "analyze",
+            "session",
+            "codex",
+            "--source",
+            str(source_dir),
+            "--last",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["type"] == "session_compact_report"

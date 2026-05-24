@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from toktrail import db as db_module
@@ -11,6 +12,7 @@ from toktrail.analysis import (
 from toktrail.api._common import (
     _get_harness,
     _load_costing_config,
+    _missing_source_path_message,
     _open_state_db,
     _validate_source_path,
 )
@@ -22,9 +24,11 @@ from toktrail.api.models import (
     SessionCacheAnalysisReport,
     SessionCompactReport,
     SessionDigest,
+    SessionToolCallReport,
     SessionToolHealth,
     SessionTotals,
     TokenBreakdown,
+    ToolCallRow,
 )
 from toktrail.config import CostingConfig
 from toktrail.errors import (
@@ -605,4 +609,150 @@ def _to_public_cluster(value: CacheClusterAnalysis) -> CacheClusterRow:
     )
 
 
-__all__ = ["session_cache_analysis", "session_digest", "session_report"]
+def session_tool_call_analysis(
+    *,
+    harness: str,
+    db_path: Path | None = None,
+    config_path: Path | None = None,
+    source_path: Path | None = None,
+    source_session_id: str | None = None,
+    last: bool = False,
+    bad_only: bool = True,
+    include_output: bool = False,
+    include_raw_json: bool = False,
+    limit: int | None = None,
+    max_snippet_chars: int = 1000,
+) -> SessionToolCallReport:
+    """Analyze tool calls in a source session for failures and diagnostics.
+
+    This is a read-only operation. It does not import or persist any data.
+    Currently only 'codex' harness is supported.
+    """
+    if source_session_id is not None and last:
+        msg = "source_session_id and last=True cannot be used together."
+        raise InvalidAPIUsageError(msg)
+
+    if include_raw_json and not _tool_call_analysis_json_allowed():
+        pass  # raw_json is allowed in API, just documented as JSON-only in CLI
+
+    definition = _get_harness(harness)
+    harness_name = definition.name
+
+    if harness_name != "codex":
+        msg = f"Tool-call analysis is not supported for harness {harness!r}."
+        raise InvalidAPIUsageError(msg)
+
+    # Resolve source path
+    resolved_source = definition.resolve_source_path(source_path)
+    if resolved_source is None or not resolved_source.exists():
+        msg = _missing_source_path_message(
+            harness_name,
+            resolved_source,
+            explicit_source=source_path,
+        )
+        raise SourcePathError(msg)
+
+    # Import the scanner
+    from toktrail.adapters.codex_tool_calls import scan_codex_tool_calls
+
+    # Resolve session
+    selected_session_id = source_session_id
+    if selected_session_id is None:
+        costing_config = _load_costing_config(config_path)
+        try:
+            sessions = definition.list_sessions(
+                resolved_source, costing_config=costing_config
+            )
+        except Exception:
+            sessions = ()
+
+        if last and sessions:
+            selected_session_id = max(
+                sessions,
+                key=lambda s: (s.last_created_ms, s.source_session_id),
+            ).source_session_id
+        elif sessions:
+            selected_session_id = sessions[0].source_session_id
+
+    # Fallback: if no usage sessions found, try newest .jsonl by mtime
+    if selected_session_id is None:
+        if not last:
+            # Need an explicit session or --last
+            if resolved_source.is_file():
+                selected_session_id = resolved_source.stem
+            else:
+                jsonl_files = sorted(
+                    resolved_source.rglob("*.jsonl"),
+                    key=lambda p: p.stat().st_mtime,
+                )
+                if not jsonl_files:
+                    msg = (
+                        f"No source sessions found for harness"
+                        f" {harness_name} at {resolved_source}."
+                    )
+                    raise SourcePathError(msg)
+                selected_session_id = jsonl_files[-1].stem
+
+    scan_result = scan_codex_tool_calls(
+        resolved_source,
+        source_session_id=selected_session_id,
+        include_raw_json=include_raw_json,
+        include_output=include_output,
+        max_snippet_chars=max_snippet_chars,
+    )
+
+    # Convert to public model
+    calls = tuple(
+        ToolCallRow(
+            ordinal=call.ordinal,
+            tool_name=call.tool_name,
+            status=call.status,
+            source_path=str(call.source_path),
+            line_number=call.line_number,
+            created_ms=call.created_ms,
+            completed_ms=call.completed_ms,
+            call_id=call.call_id,
+            cwd=call.cwd,
+            command=call.command,
+            arguments=(
+                json.loads(call.arguments_json) if call.arguments_json else None
+            ),
+            exit_code=call.exit_code,
+            duration_ms=call.duration_ms,
+            error=call.error,
+            stdout_snippet=call.stdout_snippet,
+            stderr_snippet=call.stderr_snippet,
+        )
+        for call in scan_result.calls
+    )
+
+    if bad_only:
+        calls = tuple(c for c in calls if c.is_bad)
+
+    if limit is not None and limit < len(calls):
+        calls = calls[:limit]
+
+    return SessionToolCallReport(
+        harness=harness_name,
+        source_session_id=selected_session_id or "unknown",
+        source_paths=(str(resolved_source),),
+        tool_call_count=scan_result.tool_call_count,
+        failure_count=scan_result.failure_count,
+        timeout_count=scan_result.timeout_count,
+        calls=calls,
+        warnings=scan_result.warnings,
+    )
+
+
+def _tool_call_analysis_json_allowed() -> bool:
+    # Placeholder: in CLI, --raw-tool-json requires --json.
+    # In the API function, raw_json is always allowed (the CLI enforces the constraint).
+    return True
+
+
+__all__ = [
+    "session_cache_analysis",
+    "session_digest",
+    "session_report",
+    "session_tool_call_analysis",
+]

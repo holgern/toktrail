@@ -3375,7 +3375,8 @@ def test_schema_v16_creates_source_session_digests(tmp_path: Path) -> None:
     try:
         migrate(conn)
         row = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'source_session_digests'"
+            "SELECT name FROM sqlite_master "
+            "WHERE type = 'table' AND name = 'source_session_digests'"
         ).fetchone()
         assert row is not None
         assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION

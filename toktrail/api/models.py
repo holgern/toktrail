@@ -56,6 +56,10 @@ from toktrail.api.model_parts.sync import (
     StateImportResult,
 )
 from toktrail.api.model_parts.tokens import TokenBreakdown
+from toktrail.api.model_parts.tool_calls import (
+    SessionToolCallReport,
+    ToolCallRow,
+)
 from toktrail.api.model_parts.usage import (
     HarnessDefinition,
     HarnessEnvironment,
@@ -110,11 +114,13 @@ __all__ = [
     "SessionCompactReport",
     "SessionDigest",
     "SessionDigestSummary",
+    "SessionToolCallReport",
     "SubscriptionBillingPeriod",
     "SubscriptionUsagePeriod",
     "SubscriptionUsageReport",
     "SubscriptionUsageRow",
     "TokenBreakdown",
+    "ToolCallRow",
     "SessionToolHealth",
     "UnconfiguredModelRow",
     "UsageEvent",

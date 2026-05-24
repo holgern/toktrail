@@ -30,6 +30,9 @@ from toktrail.adapters.summary import (
 from toktrail.api.analysis import session_cache_analysis as session_cache_analysis_api
 from toktrail.api.analysis import session_digest as session_digest_api
 from toktrail.api.analysis import session_report as session_report_api
+from toktrail.api.analysis import (
+    session_tool_call_analysis as session_tool_call_analysis_api,
+)
 from toktrail.api.environment import prepare_environment as prepare_api_environment
 from toktrail.api.imports import import_configured_usage as import_configured_usage_api
 from toktrail.api.models import (
@@ -37,6 +40,7 @@ from toktrail.api.models import (
     SessionCacheAnalysisReport,
     SessionCompactReport,
     SessionDigest,
+    SessionToolCallReport,
     StatuslineCache,
     StatuslineReport,
 )
@@ -5614,6 +5618,43 @@ def analyze_session(
     source_session_id: SourceSessionArgument = None,
     source_path: SourcePathOption = None,
     last: LastOption = False,
+    bad_calls: Annotated[
+        bool,
+        typer.Option(
+            "--bad-calls/--no-bad-calls",
+            help="Show failed/timed-out tool calls.",
+        ),
+    ] = False,
+    all_tool_calls: Annotated[
+        bool,
+        typer.Option(
+            "--all-tool-calls", help="Show all tool calls, not only bad calls."
+        ),
+    ] = False,
+    show_output: Annotated[
+        bool,
+        typer.Option("--show-output", help="Include stderr/stdout snippets."),
+    ] = False,
+    show_args: Annotated[
+        bool,
+        typer.Option("--show-args/--hide-args", help="Include command/tool arguments."),
+    ] = True,
+    tool_limit: Annotated[
+        int | None,
+        typer.Option("--limit", min=1, help="Maximum tool calls to print."),
+    ] = None,
+    max_snippet_chars: Annotated[
+        int,
+        typer.Option(
+            "--max-snippet-chars", min=80, help="Max stdout/stderr chars per call."
+        ),
+    ] = 1000,
+    raw_tool_json: Annotated[
+        bool,
+        typer.Option(
+            "--raw-tool-json", help="Include raw tool JSON in JSON output only."
+        ),
+    ] = False,
     json_output: JsonOption = False,
     utc: UtcOption = False,
     refresh: RefreshOption = True,
@@ -5637,6 +5678,47 @@ def analyze_session(
     ] = False,
     rich_output: RichOption = False,
 ) -> None:
+    # --bad-calls: delegate to tool-call analysis.
+    if bad_calls or all_tool_calls:
+        if raw_tool_json and not json_output:
+            _exit_with_error("--raw-tool-json requires --json.")
+
+        try:
+            report = session_tool_call_analysis_api(
+                harness=harness,
+                db_path=_resolve_state_db(ctx),
+                config_path=_resolve_config_path(ctx),
+                source_path=source_path,
+                source_session_id=source_session_id,
+                last=last,
+                bad_only=not all_tool_calls,
+                include_output=show_output,
+                include_raw_json=raw_tool_json,
+                limit=tool_limit,
+                max_snippet_chars=max_snippet_chars,
+            )
+        except (ToktrailError, OSError, ValueError) as exc:
+            _exit_with_error(str(exc))
+
+        if json_output:
+            payload = report.as_dict(
+                include_calls=True,
+                include_output=show_output,
+                include_raw_json=raw_tool_json,
+            )
+            typer.echo(json.dumps(payload, indent=2))
+            return
+
+        _print_session_tool_call_report(
+            report,
+            bad_only=not all_tool_calls,
+            utc=utc,
+            show_output=show_output,
+            rich_output=rich_output,
+        )
+        return
+
+    # Default: show session digest or compact report.
     try:
         if details:
             digest = session_digest_api(
@@ -7056,6 +7138,60 @@ def _print_session_compact_report(
             f"failures={_format_int(report.tool_health.tool_failure_count)} "
             f"timeouts={_format_int(report.tool_health.tool_timeout_count)}"
         )
+
+
+def _print_session_tool_call_report(
+    report: SessionToolCallReport,
+    *,
+    bad_only: bool,
+    utc: bool,
+    show_output: bool,
+    rich_output: bool,
+) -> None:
+    typer.echo(f"{report.harness} source session {report.source_session_id}")
+    call_label = "Bad tool calls" if bad_only else "Tool calls"
+    call_count = len(report.calls)
+    total_label = (
+        f"{call_count} of {report.tool_call_count}"
+        if bad_only
+        else str(report.tool_call_count)
+    )
+    typer.echo(f"{call_label}: {total_label}   timeouts: {report.timeout_count}")
+
+    if report.warnings:
+        typer.echo(f"Warnings: {', '.join(report.warnings)}")
+    typer.echo("")
+
+    for call in report.calls:
+        status_tag = call.status.upper()
+        exit_info = f" exit={call.exit_code}" if call.exit_code is not None else ""
+        duration_info = (
+            f" {_format_int(call.duration_ms)}ms"
+            if call.duration_ms is not None
+            else ""
+        )
+        line_info = f" line={call.line_number}"
+        typer.echo(
+            f"#{call.ordinal}  {status_tag} {call.tool_name}"
+            f"{exit_info}{duration_info}{line_info}"
+        )
+
+        if call.command:
+            cmd_text = call.command
+            if len(cmd_text) > 120:
+                cmd_text = cmd_text[:119] + "\u2026"
+            typer.echo(f"    cmd: {cmd_text}")
+        if call.error:
+            err_text = call.error
+            if len(err_text) > 120:
+                err_text = err_text[:119] + "\u2026"
+            typer.echo(f"    err: {err_text}")
+        if show_output and call.stderr_snippet:
+            typer.echo(f"    stderr: {call.stderr_snippet}")
+        if show_output and call.stdout_snippet:
+            typer.echo(f"    stdout: {call.stdout_snippet}")
+        if call.cwd:
+            typer.echo(f"    cwd: {call.cwd}")
 
 
 def _build_statusline_cli(
