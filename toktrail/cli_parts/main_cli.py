@@ -3207,8 +3207,7 @@ def _add_digest_summaries_to_payload(
         harness = row.get("harness")
         source_session_id = row.get("source_session_id")
         if not all(
-            isinstance(value, str)
-            for value in (origin, harness, source_session_id)
+            isinstance(value, str) for value in (origin, harness, source_session_id)
         ):
             continue
         digest = digest_lookup.get((origin, harness, source_session_id))

@@ -1602,9 +1602,7 @@ class SessionCompactReport:
             "tool_health": (
                 self.tool_health.as_dict()
                 if self.tool_health is not None
-                else SessionToolHealth(
-                    warnings=("no-session-digest",)
-                ).as_dict()
+                else SessionToolHealth(warnings=("no-session-digest",)).as_dict()
             ),
             "digest_available": self.digest_available,
             "privacy": {

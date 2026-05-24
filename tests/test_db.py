@@ -17,6 +17,7 @@ from toktrail.config import (
     SubscriptionWindowConfig,
 )
 from toktrail.db import (
+    SCHEMA_VERSION,
     archive_tracking_session,
     area_stable_sync_id,
     assign_area_to_source_session,
@@ -51,7 +52,6 @@ from toktrail.db import (
     unassign_area_from_source_session,
     upsert_import_source_file_state,
     upsert_source_session_metadata,
-    SCHEMA_VERSION,
 )
 from toktrail.models import RunScope, TokenBreakdown, UsageEvent
 from toktrail.periods import resolve_fixed_subscription_window

@@ -32,9 +32,7 @@ def build_session_digest(
     events = tuple(transcript_events)
     tool_health = summarize_tool_health(events)
     files = _top_values(
-        _redact(value)
-        for event in events
-        for value in _event_file_candidates(event)
+        _redact(value) for event in events for value in _event_file_candidates(event)
     )
     commands = _top_values(
         _redact(event.text or event.name or "")
@@ -129,9 +127,7 @@ def summarize_tool_health(
         if event.kind in {"tool_call", "tool_result", "command", "error"}:
             call_count += 1
         failed = (
-            event.success is False
-            or event.kind == "error"
-            or bool(event.error_text)
+            event.success is False or event.kind == "error" or bool(event.error_text)
         )
         if failed:
             failure_count += 1

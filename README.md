@@ -339,8 +339,7 @@ toktrail run stop
 `toktrail analyze session` is the preferred quick last-session view. It returns
 compact source-session metrics by default: token/cost totals, cache totals,
 models, and tool health, without message rows, per-call rows, command text, or
-file artifacts. Use `--details` for the fuller local digest, and `--details
---rich` when you explicitly want transcript-derived file/command artifacts.
+file artifacts. Use `--details` for the fuller local digest, and `--details --rich` when you explicitly want transcript-derived file/command artifacts.
 Persisted digests are shown in source-session lists with
 `toktrail usage sessions --with-summary`.
 

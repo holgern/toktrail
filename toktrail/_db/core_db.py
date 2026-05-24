@@ -3406,9 +3406,7 @@ def _digest_from_row(row: sqlite3.Row) -> SessionDigest:
             },
             warnings=_json_tuple(_optional_str(row["warnings_json"]) or "[]"),
         ),
-        files_mentioned=_json_tuple(
-            _optional_str(row["files_mentioned_json"]) or "[]"
-        ),
+        files_mentioned=_json_tuple(_optional_str(row["files_mentioned_json"]) or "[]"),
         commands_mentioned=_json_tuple(
             _optional_str(row["commands_mentioned_json"]) or "[]"
         ),
