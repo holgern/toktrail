@@ -1491,8 +1491,8 @@ class SessionDigest:
     generated_at_ms: int | None = None
     source_fingerprint: str | None = None
 
-    def as_dict(self) -> dict[str, object]:
-        return {
+    def as_dict(self, *, include_artifacts: bool = False) -> dict[str, object]:
+        payload: dict[str, object] = {
             "type": "session_digest",
             "schema_version": self.schema_version,
             "origin_machine_id": self.origin_machine_id,
@@ -1511,14 +1511,107 @@ class SessionDigest:
             "message_count": self.message_count,
             "summary": self.summary.as_dict(),
             "tool_health": self.tool_health.as_dict(),
-            "artifacts": {
-                "files_mentioned": list(self.files_mentioned),
-                "commands_mentioned": list(self.commands_mentioned),
-            },
             "privacy": {
                 "contains_raw_transcript": self.contains_raw_transcript,
                 "contains_snippets": self.contains_snippets,
                 "redacted": True,
+                "artifacts_included": include_artifacts,
+            },
+            "generated_at_ms": self.generated_at_ms,
+            "source_fingerprint": self.source_fingerprint,
+        }
+        if include_artifacts:
+            payload["artifacts"] = {
+                "files_mentioned": list(self.files_mentioned),
+                "commands_mentioned": list(self.commands_mentioned),
+            }
+        return payload
+
+
+@dataclass(frozen=True)
+class SessionCompactReport:
+    harness: str
+    source_session_id: str
+    origin_machine_id: str | None
+    machine_label: str | None
+    area_path: str | None
+    cwd: str | None
+    source_dir: str | None
+    git_root: str | None
+    git_remote: str | None
+    session_title: str | None
+    started_ms: int | None
+    last_seen_ms: int | None
+    message_count: int
+    usage: SessionTotals
+    models: tuple[str, ...] = ()
+    providers: tuple[str, ...] = ()
+    summary: SessionDigestSummary | None = None
+    tool_health: SessionToolHealth | None = None
+    digest_available: bool = False
+    generated_at_ms: int | None = None
+    source_fingerprint: str | None = None
+
+    @property
+    def cache_reuse_ratio(self) -> float:
+        tokens = self.usage.tokens
+        return float(tokens.cache_read) / max(tokens.input + tokens.cache_read, 1)
+
+    @property
+    def cache_presence_ratio(self) -> float:
+        tokens = self.usage.tokens
+        return float(tokens.cache_read) / max(tokens.prompt_total, 1)
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "type": "session_compact_report",
+            "harness": self.harness,
+            "source_session_id": self.source_session_id,
+            "origin_machine_id": self.origin_machine_id,
+            "machine_label": self.machine_label,
+            "area_path": self.area_path,
+            "cwd": self.cwd,
+            "source_dir": self.source_dir,
+            "git_root": self.git_root,
+            "git_remote": self.git_remote,
+            "session_title": self.session_title,
+            "started_ms": self.started_ms,
+            "last_seen_ms": self.last_seen_ms,
+            "message_count": self.message_count,
+            "usage": self.usage.as_dict(),
+            "cache": {
+                "cache_read_tokens": self.usage.tokens.cache_read,
+                "cache_write_tokens": self.usage.tokens.cache_write,
+                "cache_output_tokens": self.usage.tokens.cache_output,
+                "prompt_like_tokens": self.usage.tokens.prompt_total,
+                "cache_reuse_ratio": self.cache_reuse_ratio,
+                "cache_presence_ratio": self.cache_presence_ratio,
+            },
+            "models": list(self.models),
+            "providers": list(self.providers),
+            "summary": (
+                self.summary.as_dict()
+                if self.summary is not None
+                else {
+                    "one_line": None,
+                    "bullets": [],
+                    "confidence": "none",
+                    "generator": None,
+                }
+            ),
+            "tool_health": (
+                self.tool_health.as_dict()
+                if self.tool_health is not None
+                else SessionToolHealth(
+                    warnings=("no-session-digest",)
+                ).as_dict()
+            ),
+            "digest_available": self.digest_available,
+            "privacy": {
+                "contains_raw_transcript": False,
+                "contains_snippets": False,
+                "redacted": True,
+                "artifacts_included": False,
             },
             "generated_at_ms": self.generated_at_ms,
             "source_fingerprint": self.source_fingerprint,
@@ -1733,6 +1826,7 @@ __all__ = [
     "StateImportConflict",
     "StateImportResult",
     "SessionCacheAnalysisReport",
+    "SessionCompactReport",
     "SessionDigest",
     "SessionDigestSummary",
     "SubscriptionBillingPeriod",

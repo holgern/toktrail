@@ -7,6 +7,7 @@ from toktrail.api.model_parts.cache_analysis import (
     SessionCacheAnalysisReport,
 )
 from toktrail.api.model_parts.core_models import (
+    SessionCompactReport,
     SessionDigest,
     SessionDigestSummary,
     SessionToolHealth,
@@ -106,6 +107,7 @@ __all__ = [
     "StateImportConflict",
     "StateImportResult",
     "SessionCacheAnalysisReport",
+    "SessionCompactReport",
     "SessionDigest",
     "SessionDigestSummary",
     "SubscriptionBillingPeriod",

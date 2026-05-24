@@ -61,5 +61,12 @@ def test_build_session_digest_redacts_and_aggregates_tool_failures() -> None:
     assert digest.commands_mentioned == ("pytest tests/test_session_digests.py",)
     assert "secret-value" not in str(payload)
     assert "user@example.com" not in str(payload)
+    assert "artifacts" not in payload
     assert payload["privacy"]["contains_raw_transcript"] is False
     assert payload["privacy"]["contains_snippets"] is False
+    assert payload["privacy"]["artifacts_included"] is False
+
+    detailed = digest.as_dict(include_artifacts=True)
+    assert detailed["artifacts"]["commands_mentioned"] == [
+        "pytest tests/test_session_digests.py"
+    ]

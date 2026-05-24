@@ -879,8 +879,8 @@ class SessionDigest:
     generated_at_ms: int | None = None
     source_fingerprint: str | None = None
 
-    def as_dict(self) -> dict[str, object]:
-        return {
+    def as_dict(self, *, include_artifacts: bool = False) -> dict[str, object]:
+        payload: dict[str, object] = {
             "type": "session_digest",
             "schema_version": self.schema_version,
             "origin_machine_id": self.origin_machine_id,
@@ -899,18 +899,21 @@ class SessionDigest:
             "message_count": self.message_count,
             "summary": self.summary.as_dict(),
             "tool_health": self.tool_health.as_dict(),
-            "artifacts": {
-                "files_mentioned": list(self.files_mentioned),
-                "commands_mentioned": list(self.commands_mentioned),
-            },
             "privacy": {
                 "contains_raw_transcript": self.contains_raw_transcript,
                 "contains_snippets": self.contains_snippets,
                 "redacted": True,
+                "artifacts_included": include_artifacts,
             },
             "generated_at_ms": self.generated_at_ms,
             "source_fingerprint": self.source_fingerprint,
         }
+        if include_artifacts:
+            payload["artifacts"] = {
+                "files_mentioned": list(self.files_mentioned),
+                "commands_mentioned": list(self.commands_mentioned),
+            }
+        return payload
 
 
 @dataclass(frozen=True)

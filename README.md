@@ -192,10 +192,11 @@ toktrail run status --split-thinking
 toktrail run status --price-state unpriced --sort tokens --limit 20
 toktrail --config ~/.config/toktrail/config.toml run status --json
 toktrail run status --harness pi --source-session pi_ses_001 --json
-toktrail analyze cache opencode --last
-toktrail analyze cache opencode ses-1 --json
 toktrail analyze session codex --last --json
 toktrail analyze session pi pi_ses_001 --source ~/.pi/agent/sessions --persist
+toktrail analyze session codex --last --details --rich
+toktrail analyze cache opencode --last --no-calls
+toktrail analyze cache opencode ses-1 --json --no-calls
 ```
 
 Show period-based usage across canonical ledger rows, even without an active
@@ -325,7 +326,6 @@ toktrail machine status
 toktrail run start --name <name>
 toktrail refresh
 toktrail run status
-toktrail analyze cache opencode --last
 toktrail analyze session codex --last --persist
 toktrail usage today
 toktrail usage machines
@@ -336,11 +336,16 @@ toktrail sync export --out toktrail-state.tar.gz
 toktrail run stop
 ```
 
-`toktrail analyze session` creates a deterministic local session digest for
-Codex and Pi source sessions. By default it reads source logs on demand, stores
-only redacted aggregate summary data when `--persist` is used, and does not
-include raw transcript text in human or JSON output. Persisted digests are shown
-in source-session lists with `toktrail usage sessions --with-summary`.
+`toktrail analyze session` is the preferred quick last-session view. It returns
+compact source-session metrics by default: token/cost totals, cache totals,
+models, and tool health, without message rows, per-call rows, command text, or
+file artifacts. Use `--details` for the fuller local digest, and `--details
+--rich` when you explicitly want transcript-derived file/command artifacts.
+Persisted digests are shown in source-session lists with
+`toktrail usage sessions --with-summary`.
+
+`toktrail analyze cache` is a lower-level cache/cost diagnostic. Prefer
+`--no-calls` unless you are investigating individual source calls.
 
 Report commands (`toktrail usage`, `toktrail run status`, and
 `toktrail subscriptions status`) refresh configured sources first by default. Use
@@ -363,6 +368,7 @@ Session terminology:
 - `toktrail run list` lists tracking **runs** (start/stop windows).
 - `toktrail sources sessions <h>` lists raw **source sessions** from a specific harness.
 - `toktrail usage sessions` summarizes imported source-session **usage** (tokens, costs, models).
+- `toktrail analyze session <h> --last` gives a compact report for the latest source session.
 - Use `toktrail usage sessions --today` or `--this-week` for bounded source-session lists.
 - Use `toktrail usage sessions --table` for the legacy wide table.
 - `toktrail usage runs` summarizes usage grouped by tracking **run**.

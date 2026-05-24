@@ -20,6 +20,9 @@ from toktrail.api.models import (
     CacheClusterRow,
     CostTotals,
     SessionCacheAnalysisReport,
+    SessionCompactReport,
+    SessionDigest,
+    SessionToolHealth,
     SessionTotals,
     TokenBreakdown,
 )
@@ -32,7 +35,7 @@ from toktrail.errors import (
 )
 from toktrail.models import TokenBreakdown as InternalTokenBreakdown
 from toktrail.models import UsageEvent
-from toktrail.reporting import UsageReportFilter
+from toktrail.reporting import UsageReportFilter, UsageSessionRow
 from toktrail.session_digests import (
     build_session_digest,
     digest_source_fingerprint,
@@ -188,6 +191,145 @@ def session_digest(
     finally:
         conn.close()
     return public_digest_from_internal(digest)
+
+
+def session_report(
+    *,
+    db_path: Path | None = None,
+    config_path: Path | None = None,
+    harness: str,
+    source_session_id: str | None = None,
+    last: bool = False,
+    source_path: Path | None = None,
+    refresh: bool = True,
+    persist: bool = False,
+    include_snippets: bool = False,
+) -> SessionCompactReport:
+    if include_snippets:
+        msg = "include_snippets is not supported for compact session reports."
+        raise InvalidAPIUsageError(msg)
+    if source_session_id is not None and last:
+        msg = "source_session_id and last=True cannot be used together."
+        raise InvalidAPIUsageError(msg)
+
+    definition = _get_harness(harness)
+    harness_name = definition.name
+    costing_config = _load_costing_config(config_path)
+    if refresh:
+        import_usage(
+            db_path,
+            harness_name,
+            source_path=source_path,
+            source_session_id=source_session_id,
+            use_active_session=False,
+            include_raw_json=False,
+        )
+
+    conn, _ = _open_state_db(db_path)
+    try:
+        usage_session = _resolve_usage_session_for_digest(
+            conn=conn,
+            harness=harness_name,
+            source_session_id=source_session_id,
+            last=last,
+            costing_config=costing_config,
+        )
+        digest = _load_or_build_session_digest(
+            conn=conn,
+            definition=definition,
+            source_path=source_path,
+            usage_session=usage_session,
+            persist=persist,
+        )
+    except ValueError as exc:
+        raise StateDatabaseError(str(exc)) from exc
+    finally:
+        conn.close()
+    return _compact_report_from_usage_session(usage_session, digest)
+
+
+def _load_or_build_session_digest(
+    *,
+    conn,
+    definition,
+    source_path: Path | None,
+    usage_session: UsageSessionRow,
+    persist: bool,
+) -> SessionDigest | None:
+    if usage_session.origin_machine_id is not None:
+        persisted = db_module.get_source_session_digest(
+            conn,
+            origin_machine_id=usage_session.origin_machine_id,
+            harness=usage_session.harness,
+            source_session_id=usage_session.source_session_id,
+        )
+        if persisted is not None:
+            return public_digest_from_internal(persisted)
+
+    event_source = _resolve_digest_source_path(
+        definition=definition,
+        source_path=source_path,
+        usage_source_paths=usage_session.source_paths,
+    )
+    transcript_events = []
+    if event_source is not None and definition.extract_session_events is not None:
+        transcript_events = list(
+            definition.extract_session_events(
+                event_source,
+                source_session_id=usage_session.source_session_id,
+            )
+        )
+    digest = build_session_digest(
+        usage_session=usage_session,
+        transcript_events=transcript_events,
+        source_fingerprint=digest_source_fingerprint(transcript_events),
+    )
+    if persist:
+        db_module.upsert_source_session_digest(conn, digest)
+        conn.commit()
+    return public_digest_from_internal(digest)
+
+
+def _compact_report_from_usage_session(
+    usage_session: UsageSessionRow,
+    digest: SessionDigest | None,
+) -> SessionCompactReport:
+    return SessionCompactReport(
+        harness=usage_session.harness,
+        source_session_id=usage_session.source_session_id,
+        origin_machine_id=usage_session.origin_machine_id,
+        machine_label=usage_session.machine_label,
+        area_path=usage_session.area_path,
+        cwd=usage_session.cwd,
+        source_dir=usage_session.source_dir,
+        git_root=usage_session.git_root,
+        git_remote=usage_session.git_remote,
+        session_title=usage_session.session_title,
+        started_ms=usage_session.first_ms,
+        last_seen_ms=usage_session.last_ms,
+        message_count=usage_session.message_count,
+        usage=SessionTotals(
+            tokens=_to_public_tokens(usage_session.tokens),
+            costs=CostTotals(
+                source_cost_usd=usage_session.costs.source_cost_usd,
+                actual_cost_usd=usage_session.costs.actual_cost_usd,
+                virtual_cost_usd=usage_session.costs.virtual_cost_usd,
+                unpriced_count=usage_session.costs.unpriced_count,
+            ),
+            message_count=usage_session.message_count,
+        ),
+        models=usage_session.models,
+        providers=usage_session.providers,
+        summary=digest.summary if digest is not None else None,
+        tool_health=(
+            digest.tool_health
+            if digest is not None
+            else SessionToolHealth(warnings=("no-session-digest",))
+        ),
+        digest_available=digest is not None,
+        generated_at_ms=digest.generated_at_ms if digest is not None else None,
+        source_fingerprint=digest.source_fingerprint if digest is not None else None,
+    )
 
 
 def _resolve_usage_session_for_digest(
@@ -463,4 +605,4 @@ def _to_public_cluster(value: CacheClusterAnalysis) -> CacheClusterRow:
     )
 
 
-__all__ = ["session_cache_analysis"]
+__all__ = ["session_cache_analysis", "session_digest", "session_report"]

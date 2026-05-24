@@ -188,7 +188,7 @@ def _write_codex_digest_source(path: Path) -> None:
     )
 
 
-def test_cli_analyze_session_codex_json_and_persisted_usage_summary(
+def test_cli_analyze_session_codex_json_compact_and_persisted_usage_summary(
     tmp_path: Path,
 ) -> None:
     runner = CliRunner()
@@ -215,13 +215,21 @@ def test_cli_analyze_session_codex_json_and_persisted_usage_summary(
 
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
-    assert payload["type"] == "session_digest"
+    assert payload["type"] == "session_compact_report"
     assert payload["harness"] == "codex"
     assert payload["source_session_id"] == "codex_ses_1"
+    assert payload["message_count"] == 1
+    assert payload["usage"]["total"] == 12
+    assert payload["cache"]["cache_read_tokens"] == 0
     assert payload["tool_health"]["tool_call_count"] == 1
     assert payload["tool_health"]["tool_failure_count"] == 1
+    assert payload["digest_available"] is True
     assert payload["privacy"]["contains_raw_transcript"] is False
+    assert payload["privacy"]["artifacts_included"] is False
+    assert "artifacts" not in payload
     assert "raw_json" not in result.output
+    assert "pytest tests/test_codex_session_digest.py" not in result.output
+    assert "calls" not in payload
 
     usage = runner.invoke(
         app,
@@ -238,6 +246,41 @@ def test_cli_analyze_session_codex_json_and_persisted_usage_summary(
     assert usage.exit_code == 0, usage.output
     assert "Summary:" in usage.output
     assert "tool_failures=1" in usage.output
+
+
+def test_cli_analyze_session_codex_details_json_can_include_artifacts(
+    tmp_path: Path,
+) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    source_dir = tmp_path / "codex"
+    _write_codex_digest_source(source_dir / "codex_ses_1.jsonl")
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "analyze",
+            "session",
+            "codex",
+            "--source",
+            str(source_dir),
+            "--last",
+            "--details",
+            "--rich",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["type"] == "session_digest"
+    assert payload["privacy"]["artifacts_included"] is True
+    assert payload["artifacts"]["files_mentioned"] == [
+        "tests/test_codex_session_digest.py"
+    ]
 
 
 def test_cli_analyze_session_rejects_last_and_source_session_id_for_digest(

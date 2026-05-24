@@ -29,11 +29,13 @@ from toktrail.adapters.summary import (
 )
 from toktrail.api.analysis import session_cache_analysis as session_cache_analysis_api
 from toktrail.api.analysis import session_digest as session_digest_api
+from toktrail.api.analysis import session_report as session_report_api
 from toktrail.api.environment import prepare_environment as prepare_api_environment
 from toktrail.api.imports import import_configured_usage as import_configured_usage_api
 from toktrail.api.models import (
     ImportUsageResult,
     SessionCacheAnalysisReport,
+    SessionCompactReport,
     SessionDigest,
     StatuslineCache,
     StatuslineReport,
@@ -5627,28 +5629,55 @@ def analyze_session(
             help="Reserved for future explicit transcript snippets.",
         ),
     ] = False,
+    details: Annotated[
+        bool,
+        typer.Option(
+            "--details",
+            help="Show the full session digest instead of the compact report.",
+        ),
+    ] = False,
     rich_output: RichOption = False,
 ) -> None:
     try:
-        digest = session_digest_api(
-            db_path=_resolve_state_db(ctx),
-            config_path=_resolve_config_path(ctx),
-            harness=harness,
-            source_session_id=source_session_id,
-            last=last,
-            source_path=source_path,
-            refresh=refresh,
-            persist=persist,
-            include_snippets=include_snippets,
-        )
+        if details:
+            digest = session_digest_api(
+                db_path=_resolve_state_db(ctx),
+                config_path=_resolve_config_path(ctx),
+                harness=harness,
+                source_session_id=source_session_id,
+                last=last,
+                source_path=source_path,
+                refresh=refresh,
+                persist=persist,
+                include_snippets=include_snippets,
+            )
+        else:
+            report = session_report_api(
+                db_path=_resolve_state_db(ctx),
+                config_path=_resolve_config_path(ctx),
+                harness=harness,
+                source_session_id=source_session_id,
+                last=last,
+                source_path=source_path,
+                refresh=refresh,
+                persist=persist,
+                include_snippets=include_snippets,
+            )
     except (ToktrailError, OSError, ValueError) as exc:
         _exit_with_error(str(exc))
 
     if json_output:
-        typer.echo(json.dumps(digest.as_dict(), indent=2))
+        if details:
+            payload = digest.as_dict(include_artifacts=rich_output)
+            typer.echo(json.dumps(payload, indent=2))
+        else:
+            typer.echo(json.dumps(report.as_dict(), indent=2))
         return
 
-    _print_session_digest(digest, utc=utc, rich_output=rich_output)
+    if details:
+        _print_session_digest(digest, utc=utc, rich_output=rich_output)
+    else:
+        _print_session_compact_report(report, utc=utc)
 
 
 @copilot_app.command(
@@ -6971,6 +7000,63 @@ def _print_session_digest(
         typer.echo("Commands mentioned")
         for value in digest.commands_mentioned[:8]:
             typer.echo(f"  - {value}")
+
+
+def _print_session_compact_report(
+    report: SessionCompactReport,
+    *,
+    utc: bool,
+) -> None:
+    typer.echo(f"{report.harness} source session {report.source_session_id}")
+    if report.session_title:
+        typer.echo(f"Title:      {report.session_title}")
+    if report.area_path:
+        typer.echo(f"Area:       {report.area_path}")
+    if report.machine_label:
+        typer.echo(f"Machine:    {report.machine_label}")
+    if report.cwd or report.source_dir:
+        typer.echo(f"Where:      {report.cwd or report.source_dir}")
+    if report.started_ms is not None and report.last_seen_ms is not None:
+        typer.echo(
+            "When:       "
+            f"{format_epoch_ms_compact(report.started_ms, utc=utc)}.."
+            f"{format_epoch_ms_compact(report.last_seen_ms, utc=utc)}"
+        )
+    tokens = report.usage.tokens
+    costs = report.usage.costs
+    typer.echo(
+        "Usage:      "
+        f"messages={_format_int(report.message_count)} "
+        f"total={_format_int(tokens.total)} "
+        f"input={_format_int(tokens.input)} "
+        f"output={_format_int(tokens.output)} "
+        f"reasoning={_format_int(tokens.reasoning)}"
+    )
+    typer.echo(
+        "Cache:      "
+        f"read={_format_int(tokens.cache_read)} "
+        f"write={_format_int(tokens.cache_write)} "
+        f"prompt={_format_int(tokens.prompt_total)} "
+        f"reuse={_format_ratio_percent(report.cache_reuse_ratio)}"
+    )
+    typer.echo(
+        "Cost:       "
+        f"source={_format_cost(costs.source_cost_usd)} "
+        f"actual={_format_cost(costs.actual_cost_usd)} "
+        f"virtual={_format_cost(costs.virtual_cost_usd)} "
+        f"unpriced={_format_int(costs.unpriced_count)}"
+    )
+    if report.models:
+        typer.echo(f"Models:     {', '.join(report.models[:5])}")
+    if report.summary is not None and report.summary.one_line:
+        typer.echo(f"Summary:    {report.summary.one_line}")
+    if report.tool_health is not None:
+        typer.echo(
+            "Health:     "
+            f"tool_calls={_format_int(report.tool_health.tool_call_count)} "
+            f"failures={_format_int(report.tool_health.tool_failure_count)} "
+            f"timeouts={_format_int(report.tool_health.tool_timeout_count)}"
+        )
 
 
 def _build_statusline_cli(
