@@ -2,14 +2,13 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Callable
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Callable, NoReturn
+from typing import TYPE_CHECKING, NoReturn
 
 import typer
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from toktrail.config import CostingConfig, LoadedToktrailConfig
     from toktrail.reporting import UsageSeriesBucket
 
@@ -88,7 +87,9 @@ class UsageRuntime:
     load_costing_config_or_exit: Callable[[typer.Context], CostingConfig]
     open_toktrail_connection: Callable[[typer.Context], sqlite3.Connection]
     resolve_machine_id_or_exit: Callable[[sqlite3.Connection, str | None], str | None]
-    load_resolved_toktrail_config_or_exit: Callable[[typer.Context], LoadedToktrailConfig]
+    load_resolved_toktrail_config_or_exit: Callable[
+        [typer.Context], LoadedToktrailConfig
+    ]
     exit_with_error: Callable[[str], NoReturn]
 
 
@@ -107,7 +108,9 @@ def _runtime() -> UsageRuntime:
     return _RUNTIME
 
 
-def _refresh_before_report(*args: object, **kwargs: object) -> list[ImportExecutionResult]:
+def _refresh_before_report(
+    *args: object, **kwargs: object
+) -> list[ImportExecutionResult]:
     return _runtime().refresh_before_report(*args, **kwargs)
 
 
@@ -145,6 +148,7 @@ def _load_resolved_toktrail_config_or_exit(ctx: typer.Context) -> LoadedToktrail
 
 def _exit_with_error(message: str) -> NoReturn:
     _runtime().exit_with_error(message)
+
 
 def usage(  # noqa: C901
     ctx: typer.Context,
@@ -1150,7 +1154,6 @@ def _usage_sessions(
     rich_output: bool,
     with_summary: bool,
 ) -> dict[str, object] | None:
-    from toktrail.db import summarize_usage_sessions
     from toktrail.reporting import UsageSessionsFilter
 
     if last and limit is not None and limit != 1:
@@ -1647,7 +1650,6 @@ def _usage_runs(
     archived_only: bool,
     rich_output: bool,
 ) -> dict[str, object] | None:
-    from toktrail.db import summarize_usage_runs
     from toktrail.periods import _resolve_timezone, parse_cli_boundary
     from toktrail.reporting import UsageRunsFilter
 
@@ -2603,4 +2605,3 @@ def _print_usage_summary(
         )
     else:
         typer.echo("  (none)")
-

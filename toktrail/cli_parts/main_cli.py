@@ -16,7 +16,7 @@ import typer
 from click.core import ParameterSource
 
 if TYPE_CHECKING:
-    from toktrail.reporting import UsageSeriesBucket
+    pass
 
 from toktrail.adapters.base import SourceSessionSummary
 from toktrail.adapters.registry import get_harness
@@ -24,12 +24,6 @@ from toktrail.adapters.summary import (
     summarize_event_totals,
     summarize_events_by_activity,
     summarize_events_by_model,
-)
-from toktrail.api.analysis import session_cache_analysis as session_cache_analysis_api
-from toktrail.api.analysis import session_digest as session_digest_api
-from toktrail.api.analysis import session_report as session_report_api
-from toktrail.api.analysis import (
-    session_tool_call_analysis as session_tool_call_analysis_api,
 )
 from toktrail.api.environment import prepare_environment as prepare_api_environment
 from toktrail.api.imports import import_configured_usage as import_configured_usage_api
@@ -47,7 +41,6 @@ from toktrail.api.models import (
 )
 from toktrail.api.reports import stats_report as stats_report_api
 from toktrail.api.sessions import list_runs
-from toktrail.api.sources import capture_source_snapshot
 from toktrail.api.statusline import statusline_report as statusline_report_api
 from toktrail.cli_parts import analyze as analyze_parts
 from toktrail.cli_parts import prices as prices_parts
@@ -57,16 +50,13 @@ from toktrail.cli_parts import statusline as statusline_parts
 from toktrail.cli_parts import subscriptions as subscriptions_parts
 from toktrail.cli_parts import usage as usage_parts
 from toktrail.cli_parts import watch as watch_parts
+from toktrail.cli_parts.area import register_area_commands
 from toktrail.cli_parts.filters import (
     _aliases_from_row,
     _as_float_or_none,
     _filter_model_rows,
-    _filter_price_rows,
-    _filter_series_buckets,
     _filter_unconfigured_models,
-    _normalize_price_display_filter,
     _normalize_report_display_filter,
-    _sort_series_buckets,
 )
 from toktrail.cli_parts.formatting import (
     _format_cost,
@@ -79,17 +69,10 @@ from toktrail.cli_parts.formatting import (
     _format_signed_int,
     _format_token_delta,
 )
-from toktrail.cli_parts.area import register_area_commands
 from toktrail.cli_parts.machines import register_machine_commands
 from toktrail.cli_parts.table import (
     _print_model_table,
     _print_table,
-    _print_unconfigured_model_table,
-)
-from toktrail.cli_parts.types import (
-    ImportExecutionResult,
-    WatchDelta,
-    WatchTotals,
 )
 from toktrail.cli_sync import sync_app
 from toktrail.config import (
@@ -111,7 +94,6 @@ from toktrail.config import (
     summarize_costing_config,
 )
 from toktrail.db import (
-    InsertUsageResult,
     apply_local_machine_config,
     archive_tracking_session,
     clear_skipped_sources,
@@ -121,21 +103,17 @@ from toktrail.db import (
     get_active_tracking_session,
     get_state_metadata,
     get_tracking_session,
-    insert_usage_events,
     list_skipped_sources,
     migrate,
-    persist_source_session_metadata,
     resolve_machine_selector,
     summarize_subscription_usage,
     summarize_usage,
-    summarize_usage_areas,
     unarchive_tracking_session,
 )
 from toktrail.errors import InvalidAPIUsageError, ToktrailError
 from toktrail.formatting import format_epoch_ms_compact
 from toktrail.models import (
     RunScope,
-    TokenBreakdown,
     UsageEvent,
     normalize_thinking_level,
 )
@@ -145,24 +123,11 @@ from toktrail.paths import (
     resolve_toktrail_db_path,
     resolve_toktrail_machine_path,
 )
-from toktrail.periods import resolve_time_range
-from toktrail.price_parser import (
-    merge_prices_document,
-    parse_price_document,
-    render_prices_toml,
-)
 from toktrail.reporting import (
-    CostTotals,
-    ModelSummaryRow,
-    ProviderSummaryRow,
     SubscriptionBillingPeriod,
     SubscriptionUsagePeriod,
     SubscriptionUsageReport,
-    UnconfiguredModelRow,
     UsageReportFilter,
-)
-from toktrail.reporting import (
-    RunReport as InternalRunReport,
 )
 from toktrail.statusline import (
     StatuslineRequest,
@@ -1608,9 +1573,10 @@ def usage(  # noqa: C901
     )
 
 
-
 # Usage helpers moved to toktrail.cli_parts.usage.
-_resolve_usage_session_period_or_exit = usage_parts._resolve_usage_session_period_or_exit
+_resolve_usage_session_period_or_exit = (
+    usage_parts._resolve_usage_session_period_or_exit
+)
 _resolve_area_filter_inputs_or_exit = usage_parts._resolve_area_filter_inputs_or_exit
 _usage_series = usage_parts._usage_series
 _print_usage_series = usage_parts._print_usage_series
@@ -1631,6 +1597,8 @@ _format_session_cost_line = usage_parts._format_session_cost_line
 _format_token_usage_line = usage_parts._format_token_usage_line
 _format_model_list = usage_parts._format_model_list
 _print_usage_summary = usage_parts._print_usage_summary
+
+
 def _filter_subscription_usage_report(
     report: SubscriptionUsageReport,
     *,
@@ -2601,7 +2569,6 @@ def cli_main() -> None:
     app()
 
 
-
 # Refresh/watch helpers moved to dedicated modules.
 _refresh_before_report = refresh_parts.refresh_before_report
 _wrap_refresh_json_payload = refresh_parts.wrap_refresh_json_payload
@@ -2626,6 +2593,8 @@ _print_watch_delta = watch_parts.print_watch_delta
 _print_watch_delta_json = watch_parts.print_watch_delta_json
 _print_watch_stop = watch_parts.print_watch_stop
 _watch_configured = watch_parts.watch_configured
+
+
 def _run_source_sessions_command(
     ctx: typer.Context,
     harness_name: str,
@@ -4084,6 +4053,7 @@ def _wrap_refresh_json_payload(
         "refresh": [result.as_dict() for result in refresh_results],
         "report": report_payload,
     }
+
 
 def _resolve_config_path(ctx: typer.Context) -> Path:
     return resolve_toktrail_config_path(_config_cli_path(ctx))

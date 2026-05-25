@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from typing import Callable
+from collections.abc import Callable
 
 import typer
 

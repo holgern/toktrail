@@ -7,7 +7,6 @@ import re
 import string
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
-from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 

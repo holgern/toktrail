@@ -3,19 +3,22 @@ from __future__ import annotations
 import datetime
 import json
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
 
 import typer
 
 from toktrail.api.imports import import_configured_usage as import_configured_usage_api
 from toktrail.cli_parts.types import WatchDelta, WatchTotals
 from toktrail.config import CostingConfig
-from toktrail.db import get_active_tracking_session, get_tracking_session, summarize_usage
+from toktrail.db import (
+    get_active_tracking_session,
+    get_tracking_session,
+    summarize_usage,
+)
 from toktrail.models import TokenBreakdown
-from toktrail.reporting import CostTotals, RunReport
-from toktrail.reporting import UsageReportFilter
+from toktrail.reporting import CostTotals, RunReport, UsageReportFilter
 
 
 @dataclass(frozen=True)

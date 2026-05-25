@@ -1,16 +1,18 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
 
 import typer
 
 
 @dataclass(frozen=True)
 class StatuslineRuntime:
-    build_statusline_cli: Callable[..., tuple[object, tuple[object, ...], dict[str, object], int]]
+    build_statusline_cli: Callable[
+        ..., tuple[object, tuple[object, ...], dict[str, object], int]
+    ]
     wrap_refresh_json_payload: Callable[..., object]
     statusline_install_instructions: Callable[[str], str]
     load_resolved_toktrail_config_or_exit: Callable[[typer.Context], object]

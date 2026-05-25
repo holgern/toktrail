@@ -145,7 +145,9 @@ def register_area_commands(
         if not areas:
             typer.echo("No areas defined.")
             return
-        active_area_id = active_status.area.id if active_status.area is not None else None
+        active_area_id = (
+            active_status.area.id if active_status.area is not None else None
+        )
         if not verbose:
             typer.echo("area")
             for area in areas:
@@ -199,7 +201,9 @@ def register_area_commands(
     ) -> None:
         if ttl is not None and until is not None:
             exit_with_error("Use either --ttl or --until, not both.")
-        expires_at_ms = _parse_area_expiry_or_exit(ttl=ttl, until=until, exit_with_error=exit_with_error)
+        expires_at_ms = _parse_area_expiry_or_exit(
+            ttl=ttl, until=until, exit_with_error=exit_with_error
+        )
         conn = open_toktrail_connection(ctx)
         try:
             area = get_area_by_path(conn, path)
@@ -324,11 +328,15 @@ def register_area_commands(
             area = ensure_area(conn, path)
             if session is not None:
                 selected_machine_id, selected_harness, selected_source_session = (
-                    _resolve_session_key_or_exit(conn, session_key=session, exit_with_error=exit_with_error)
+                    _resolve_session_key_or_exit(
+                        conn, session_key=session, exit_with_error=exit_with_error
+                    )
                 )
             elif last:
                 if source_session_id is not None:
-                    exit_with_error("Use either --last or --source-session-id, not both.")
+                    exit_with_error(
+                        "Use either --last or --source-session-id, not both."
+                    )
                 from toktrail.db import summarize_usage_sessions
                 from toktrail.reporting import UsageSessionsFilter
 
@@ -419,7 +427,9 @@ def register_area_commands(
                         "with --source-session-id."
                     )
                 machine_id, resolved_harness, resolved_source_session = (
-                    _resolve_session_key_or_exit(conn, session_key=session, exit_with_error=exit_with_error)
+                    _resolve_session_key_or_exit(
+                        conn, session_key=session, exit_with_error=exit_with_error
+                    )
                 )
             else:
                 if harness is None or source_session_id is None:
@@ -649,7 +659,9 @@ def register_area_commands(
         if dry_run:
             typer.echo(rendered.strip())
             return
-        existing = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
+        existing = (
+            config_path.read_text(encoding="utf-8") if config_path.exists() else ""
+        )
         updated = existing.rstrip() + ("\n\n" if existing.strip() else "") + rendered
         config_path.parent.mkdir(parents=True, exist_ok=True)
         config_path.write_text(updated, encoding="utf-8")

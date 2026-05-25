@@ -449,7 +449,9 @@ def _can_skip_scan(
     use_recursive_fingerprint: bool,
     selected_session_id: int | None,
     source_state: object | None,
-    pre_scan_fingerprint: tuple[int | None, int | None, int | None, int | None, int | None],
+    pre_scan_fingerprint: tuple[
+        int | None, int | None, int | None, int | None, int | None
+    ],
     scan_since_ms: int | None,
 ) -> bool:
     return bool(
@@ -496,7 +498,9 @@ def _persist_scan(
     resolved_source: Path,
     source_session_id: str | None,
     source_state: object | None,
-    pre_scan_fingerprint: tuple[int | None, int | None, int | None, int | None, int | None],
+    pre_scan_fingerprint: tuple[
+        int | None, int | None, int | None, int | None, int | None
+    ],
     scan: ScanResult,
     filtered_events: list[object],
 ) -> object:
@@ -505,7 +509,9 @@ def _persist_scan(
             conn,
             selected_session_id,
             filtered_events,
-            link_scope=(tracking_session.scope if tracking_session is not None else None),
+            link_scope=(
+                tracking_session.scope if tracking_session is not None else None
+            ),
         )
     except (sqlite3.Error, ValueError) as exc:
         msg = (

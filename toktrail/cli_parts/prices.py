@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Literal, NoReturn, cast
+from typing import Literal, NoReturn, cast
 
 import typer
 
@@ -191,7 +192,9 @@ def pricing_list(
         )
     except ValueError as exc:
         _exit_with_error(str(exc))
-    price_rows = _filter_price_rows(price_rows_fn(loaded.config, filters.table), filters)
+    price_rows = _filter_price_rows(
+        price_rows_fn(loaded.config, filters.table), filters
+    )
     if json_output:
         typer.echo(json.dumps(price_rows, indent=2))
         return
