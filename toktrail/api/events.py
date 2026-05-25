@@ -36,7 +36,7 @@ def _ensure_non_empty(value: str, *, field_name: str) -> str:
 
 def _normalize_identity_or_raise(value: str, *, field_name: str) -> str:
     try:
-        return normalize_identity(value)
+        return normalize_identity(value)  # type: ignore[no-any-return]
     except ValueError as exc:
         msg = f"Invalid {field_name}: {value!r}"
         raise InvalidAPIUsageError(msg) from exc

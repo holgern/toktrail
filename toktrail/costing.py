@@ -299,7 +299,7 @@ def compile_costing_config(config: CostingConfig) -> CostingRuntime:
 
 
 def normalize_price_key(value: str) -> str:
-    return normalize_identity(value)
+    return normalize_identity(value)  # type: ignore[no-any-return]
 
 
 def cost_from_price(tokens: TokenBreakdown, price: Price) -> Decimal:

@@ -255,7 +255,7 @@ def _resolved_provider(provider_name: str | None, model_id: str) -> str:
         except ValueError:
             provider = ""
         if provider:
-            return provider
+            return provider  # type: ignore[no-any-return]
 
     inferred = inferred_provider_from_model(model_id)
     if inferred is not None:

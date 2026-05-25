@@ -56,7 +56,7 @@ def subscriptions_status_impl(
     except ValueError as exc:
         exit_with_error_fn(str(exc))
     finally:
-        conn.close()
+        conn.close()  # type: ignore[attr-defined]
 
     filtered_report = filter_subscription_usage_report_fn(
         report,
@@ -67,7 +67,7 @@ def subscriptions_status_impl(
         typer.echo(
             json.dumps(
                 wrap_refresh_json_payload_fn(
-                    filtered_report.as_dict(),
+                    filtered_report.as_dict(),  # type: ignore[attr-defined]
                     refresh_results=refresh_results,
                     include_refresh=refresh_details,
                 ),

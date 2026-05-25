@@ -6,7 +6,7 @@ from typing import Literal
 try:
     import tomllib  # type: ignore[import-not-found]
 except ModuleNotFoundError:  # pragma: no cover - Python < 3.11
-    import tomli as tomllib
+    import tomli as tomllib  # type: ignore[import-not-found]
 
 from toktrail import config as config_module
 from toktrail.api._files import atomic_write_text

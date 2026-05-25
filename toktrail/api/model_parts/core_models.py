@@ -7,34 +7,6 @@ from pathlib import Path
 from typing import Any, Literal
 
 from toktrail.errors import AmbiguousSourceSessionError, SourcePathError
-from toktrail.models import RunScope as InternalRunScope
-from toktrail.reporting import (
-    AreaSummaryRow as ReportingAreaSummaryRow,
-)
-from toktrail.reporting import (
-    SubscriptionBillingPeriod as ReportingSubscriptionBillingPeriod,
-)
-from toktrail.reporting import (
-    SubscriptionUsagePeriod as ReportingSubscriptionUsagePeriod,
-)
-from toktrail.reporting import (
-    SubscriptionUsageReport as ReportingSubscriptionUsageReport,
-)
-from toktrail.reporting import (
-    SubscriptionUsageRow as ReportingSubscriptionUsageRow,
-)
-from toktrail.reporting import (
-    UnconfiguredModelRow as ReportingUnconfiguredModelRow,
-)
-from toktrail.reporting import (
-    UsageSeriesInstance as ReportingUsageSeriesInstance,
-)
-from toktrail.reporting import (
-    UsageSeriesReport as ReportingUsageSeriesReport,
-)
-from toktrail.reporting import (
-    UsageSessionRow as ReportingUsageSessionRow,
-)
 
 
 def _require_non_negative_int(name: str, value: int) -> None:
@@ -1813,20 +1785,6 @@ class UsageAreasReport:
             "areas": [row.as_dict() for row in self.areas],
             "totals": self.totals.as_dict(),
         }
-
-
-# Canonicalized duplicate model ownership:
-# retain stable API names while reusing internal canonical reporting/models classes.
-RunScope = InternalRunScope
-UnconfiguredModelRow = ReportingUnconfiguredModelRow
-SubscriptionUsagePeriod = ReportingSubscriptionUsagePeriod
-SubscriptionBillingPeriod = ReportingSubscriptionBillingPeriod
-SubscriptionUsageRow = ReportingSubscriptionUsageRow
-SubscriptionUsageReport = ReportingSubscriptionUsageReport
-UsageSeriesInstance = ReportingUsageSeriesInstance
-UsageSeriesReport = ReportingUsageSeriesReport
-UsageSessionRow = ReportingUsageSessionRow
-AreaSummaryRow = ReportingAreaSummaryRow
 
 
 __all__ = [

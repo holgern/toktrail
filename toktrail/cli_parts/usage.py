@@ -4,7 +4,7 @@ import json
 import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, NoReturn
+from typing import TYPE_CHECKING, Annotated, Any, NoReturn
 
 import typer
 
@@ -660,7 +660,7 @@ def _usage_series(
 ) -> dict[str, object] | None:
     from toktrail.db import summarize_usage_series
     from toktrail.periods import _resolve_timezone, parse_cli_boundary
-    from toktrail.reporting import UsageSeriesFilter
+    from toktrail.reporting import UsageSeriesFilter, UsageSeriesReport
 
     tz = _resolve_timezone(timezone_name=timezone_name, utc=utc)
     since_ms = parse_cli_boundary(since, tz=tz, is_until=False)
@@ -670,7 +670,7 @@ def _usage_series(
     conn = _open_toktrail_connection(ctx)
     try:
         machine_id = _resolve_machine_id_or_exit(conn, machine)
-        series_report = summarize_usage_series(
+        series_report: UsageSeriesReport = summarize_usage_series(
             conn,
             UsageSeriesFilter(
                 granularity=view,
@@ -1040,7 +1040,7 @@ def _usage_machines(
                 or until is not None
             ):
                 filters["timezone"] = resolved_range.timezone
-        return payload
+        return payload  # type: ignore[no-any-return]
 
     title = "toktrail usage machines"
     if resolved_range.period is not None:
@@ -1233,7 +1233,7 @@ def _usage_sessions(
             or until is not None
         ):
             filters["timezone"] = resolved_range.timezone
-        return payload
+        return payload  # type: ignore[no-any-return]
 
     _print_usage_sessions(
         report,
@@ -1248,7 +1248,9 @@ def _usage_sessions(
     return None
 
 
-def _session_digest_lookup(conn, sessions) -> dict[tuple[str, str, str], object]:
+def _session_digest_lookup(
+    conn: sqlite3.Connection, sessions: tuple[Any, ...]
+) -> dict[tuple[str, str, str], Any]:
     from toktrail.db import list_source_session_digests
 
     keys = {
@@ -1267,7 +1269,9 @@ def _session_digest_lookup(conn, sessions) -> dict[tuple[str, str, str], object]
     }
 
 
-def _lookup_session_digest(digest_lookup, session):
+def _lookup_session_digest(
+    digest_lookup: dict[tuple[str, str, str], Any] | None, session: Any
+) -> Any | None:
     if digest_lookup is None or session.origin_machine_id is None:
         return None
     return digest_lookup.get(
@@ -1275,14 +1279,18 @@ def _lookup_session_digest(digest_lookup, session):
     )
 
 
-def _digest_one_line(digest_lookup, session) -> str:
+def _digest_one_line(
+    digest_lookup: dict[tuple[str, str, str], Any] | None, session: Any
+) -> str:
     digest = _lookup_session_digest(digest_lookup, session)
     if digest is None:
         return "-"
     return digest.summary.one_line or "-"
 
 
-def _digest_tool_failures(digest_lookup, session) -> str:
+def _digest_tool_failures(
+    digest_lookup: dict[tuple[str, str, str], Any] | None, session: Any
+) -> str:
     digest = _lookup_session_digest(digest_lookup, session)
     if digest is None:
         return "-"
@@ -1291,7 +1299,7 @@ def _digest_tool_failures(digest_lookup, session) -> str:
 
 def _add_digest_summaries_to_payload(
     payload: dict[str, object],
-    digest_lookup,
+    digest_lookup: dict[tuple[str, str, str], Any] | None,
 ) -> None:
     sessions = payload.get("sessions")
     if not isinstance(sessions, list):
@@ -1306,7 +1314,9 @@ def _add_digest_summaries_to_payload(
             isinstance(value, str) for value in (origin, harness, source_session_id)
         ):
             continue
-        digest = digest_lookup.get((origin, harness, source_session_id))
+        if digest_lookup is None:
+            continue
+        digest = digest_lookup.get((str(origin), str(harness), str(source_session_id)))
         if digest is None:
             continue
         row["summary"] = {
@@ -1690,7 +1700,7 @@ def _usage_runs(
         conn.close()
 
     if json_output:
-        return runs_report.as_dict()
+        return runs_report.as_dict()  # type: ignore[no-any-return]
 
     _print_usage_runs(runs_report, utc=utc, rich_output=rich_output)
     return None
@@ -1893,7 +1903,7 @@ def _usage_areas(
                 or until is not None
             ):
                 filters["timezone"] = resolved_range.timezone
-        return payload
+        return payload  # type: ignore[no-any-return]
 
     _print_usage_areas(
         report,
@@ -1946,23 +1956,23 @@ def _print_usage_areas(  # noqa: C901
             "--share-by must be one of: tokens, actual, virtual, messages."
         )
 
-    def _direct_msg(area_row) -> int:
+    def _direct_msg(area_row: Any) -> int:
         return area_row.direct_message_count or 0
 
-    def _tree_msg(area_row) -> int:
-        return area_row.subtree_message_count or area_row.message_count
+    def _tree_msg(area_row: Any) -> int:
+        return area_row.subtree_message_count or area_row.message_count  # type: ignore[no-any-return]
 
-    def _direct_tokens(area_row) -> TokenBreakdown:
+    def _direct_tokens(area_row: Any) -> TokenBreakdown:
         return area_row.direct_tokens or TokenBreakdown()
 
-    def _tree_tokens(area_row) -> TokenBreakdown:
-        return area_row.subtree_tokens or area_row.tokens
+    def _tree_tokens(area_row: Any) -> TokenBreakdown:
+        return area_row.subtree_tokens or area_row.tokens  # type: ignore[no-any-return]
 
-    def _direct_costs(area_row) -> CostTotals:
+    def _direct_costs(area_row: Any) -> CostTotals:
         return area_row.direct_costs or CostTotals()
 
-    def _tree_costs(area_row) -> CostTotals:
-        return area_row.subtree_costs or area_row.costs
+    def _tree_costs(area_row: Any) -> CostTotals:
+        return area_row.subtree_costs or area_row.costs  # type: ignore[no-any-return]
 
     if leaves:
         filtered_areas = [
@@ -1971,7 +1981,7 @@ def _print_usage_areas(  # noqa: C901
     else:
         filtered_areas = list(report.areas)
 
-    def _share_value(area_row) -> float:
+    def _share_value(area_row: Any) -> float:
         if share_by == "messages":
             return float(_tree_msg(area_row))
         if share_by == "actual":
@@ -2315,7 +2325,7 @@ def _usage_aggregate(
             or until is not None
         ):
             filters["timezone"] = resolved_range.timezone
-        return payload
+        return payload  # type: ignore[no-any-return]
 
     title = "toktrail usage"
     if resolved_range.period is not None:

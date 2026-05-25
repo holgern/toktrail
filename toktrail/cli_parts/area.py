@@ -63,7 +63,7 @@ TimezoneOption = Annotated[str | None, typer.Option("--timezone")]
 UtcOption = Annotated[bool, typer.Option("--utc")]
 
 
-def register_area_commands(
+def register_area_commands(  # noqa: C901
     area_app: typer.Typer,
     *,
     open_toktrail_connection: OpenConnection,
@@ -237,7 +237,8 @@ def register_area_commands(
             return
         typer.echo(f"Active area: {area.path}")
         typer.echo(
-            "New source sessions imported on this machine will be assigned to this area."
+            "New source sessions imported on this machine "
+            "will be assigned to this area."
         )
         typer.echo(
             "Existing imported sessions are unchanged; use "
@@ -292,7 +293,8 @@ def register_area_commands(
             return
         expiry_text = format_epoch_ms_compact(status.expires_at_ms, utc=False)
         typer.echo(
-            f"Active area ({status.machine_label}): {active.path}, expires {expiry_text}"
+            f"Active area ({status.machine_label}): "
+            f"{active.path}, expires {expiry_text}"
         )
 
     @area_app.command("assign")
@@ -303,7 +305,9 @@ def register_area_commands(
             str | None,
             typer.Option(
                 "--session",
-                help="Session key machine/harness/source_session_id from usage sessions.",
+                help=(
+                    "Session key machine/harness/source_session_id from usage sessions."
+                ),
             ),
         ] = None,
         harness: HarnessOption = None,
@@ -321,7 +325,8 @@ def register_area_commands(
             harness is not None or source_session_id is not None or last
         ):
             exit_with_error(
-                "Use --session by itself, or use --harness/--source-session-id, or --last."
+                "Use --session by itself, or use "
+                "--harness/--source-session-id, or --last."
             )
         conn = open_toktrail_connection(ctx)
         try:
@@ -372,6 +377,8 @@ def register_area_commands(
                         "Provide --harness and --source-session-id, "
                         "or use --last or --session."
                     )
+                assert harness is not None
+                assert source_session_id is not None
                 selected_machine_id = _resolve_assignment_machine_id_or_exit(
                     conn,
                     harness=harness,
@@ -383,7 +390,7 @@ def register_area_commands(
                 selected_harness = harness
                 selected_source_session = source_session_id
             if selected_machine_id is None:
-                exit_with_error("Source session has no origin machine id.")
+                exit_with_error("Source session has no origin machine id.")  # type: ignore[unreachable]
             assign_area_to_source_session(
                 conn,
                 area_id=area.id,
@@ -408,7 +415,9 @@ def register_area_commands(
             str | None,
             typer.Option(
                 "--session",
-                help="Session key machine/harness/source_session_id from usage sessions.",
+                help=(
+                    "Session key machine/harness/source_session_id from usage sessions."
+                ),
             ),
         ] = None,
         harness: HarnessOption = None,
@@ -436,6 +445,8 @@ def register_area_commands(
                     exit_with_error(
                         "Provide --harness and --source-session-id, or use --session."
                     )
+                assert harness is not None
+                assert source_session_id is not None
                 machine_id = _resolve_assignment_machine_id_or_exit(
                     conn,
                     harness=harness,
@@ -566,7 +577,7 @@ def register_area_commands(
         json_output: JsonOption = False,
     ) -> None:
         loaded = load_resolved_toktrail_config_or_exit(ctx)
-        rules = loaded.config.areas.rules
+        rules = loaded.config.areas.rules  # type: ignore[attr-defined]
         cwd = Path.cwd()
         cwd_text = str(cwd)
         git_remote = _git_remote_origin(cwd)
@@ -645,6 +656,7 @@ def register_area_commands(
         base = _resolve_git_root(Path.cwd()) if git_root else Path.cwd()
         if base is None:
             exit_with_error("Could not resolve git root.")
+            return  # unreachable
         glob = f"{base.expanduser()}/**" if recursive else str(base.expanduser())
         config_path = resolve_config_path(ctx)
         rendered = (
@@ -785,7 +797,8 @@ def register_area_commands(
         finally:
             conn.close()
         typer.echo(
-            f"Moved {old_path} -> {new_path}; reassigned {moved_assignments} assignments "
+            f"Moved {old_path} -> {new_path}; "
+            f"reassigned {moved_assignments} assignments "
             f"and {moved_events} events."
         )
 
@@ -913,6 +926,7 @@ def _resolve_session_key_or_exit(
             if last_error is not None
             else "Invalid machine selector in session key."
         )
+        return "", harness, source_session_id  # unreachable
     return machine_id, harness, source_session_id
 
 

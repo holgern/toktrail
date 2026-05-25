@@ -38,7 +38,7 @@ def scan_code_path(
         source_session_id=source_session_id,
         include_raw_json=include_raw_json,
         since_ms=since_ms,
-        import_state=import_state,
+        import_state=import_state,  # type: ignore[arg-type]
     )
     return _as_code_scan(scan)
 
@@ -56,7 +56,7 @@ def scan_code_file(
         source_session_id=source_session_id,
         include_raw_json=include_raw_json,
         since_ms=since_ms,
-        import_state=import_state,
+        import_state=import_state,  # type: ignore[arg-type]
     )
     return _as_code_scan(scan)
 

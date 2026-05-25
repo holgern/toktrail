@@ -6,6 +6,7 @@ import math
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from decimal import Decimal
+from io import BufferedReader
 from pathlib import Path
 
 from toktrail.adapters._common import (
@@ -158,7 +159,7 @@ def scan_codex_path(
     rows_skipped = 0
     events: list[UsageEvent] = []
     metadata_by_key: dict[tuple[str, str], SourceSessionMetadata] = {}
-    file_states = []
+    file_states: list[ImportSourceFileState] = []
     for file_path in file_paths:
         scan = scan_codex_file(
             file_path,
@@ -243,7 +244,7 @@ def scan_codex_file(
     state = _codex_state_from_file_state(decision.prior_state)
     line_number_offset = _codex_last_line_number(decision.prior_state)
     start_offset = (
-        decision.prior_state.last_file_offset
+        (decision.prior_state.last_file_offset or 0)
         if decision.mode == "resume" and decision.prior_state is not None
         else 0
     )
@@ -323,7 +324,7 @@ def parse_codex_path(path: Path) -> list[UsageEvent]:
 
 
 def _scan_codex_stream(
-    handle,
+    handle: BufferedReader,
     *,
     file_path: Path,
     session_id: str,

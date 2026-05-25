@@ -7,7 +7,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from toktrail import db as db_module
-from toktrail.adapters.base import ImportScanState, ScanResult
+from toktrail._db._impl_db import InsertUsageResult
+from toktrail.adapters.base import ImportScanState, ImportSourceState, ScanResult
+from toktrail.adapters.registry import HarnessDefinition as RegistryHarnessDefinition
 from toktrail.api._common import _get_harness, _open_state_db, _validate_source_path
 from toktrail.api.models import ImportUsageResult
 from toktrail.api.paths import resolve_source_path
@@ -17,6 +19,8 @@ from toktrail.errors import (
     RunNotFoundError,
     UsageImportError,
 )
+from toktrail.models import Run as TrackingSession
+from toktrail.models import UsageEvent
 
 
 @dataclass(frozen=True)
@@ -365,7 +369,7 @@ def _resolve_tracking_session(
     session_id: int | None,
     use_active_session: bool,
     since_start: bool,
-) -> tuple[int | None, object | None]:
+) -> tuple[int | None, TrackingSession | None]:
     selected_session_id = session_id
     tracking_session = None
     if selected_session_id is None and use_active_session:
@@ -384,8 +388,8 @@ def _resolve_tracking_session(
 def _resolve_scan_since_ms(
     *,
     since_ms: int | None,
-    tracking_session: object | None,
-    source_state: object | None,
+    tracking_session: TrackingSession | None,
+    source_state: ImportSourceState | None,
 ) -> tuple[int | None, int | None]:
     effective_since_ms = since_ms
     if tracking_session is not None:
@@ -410,7 +414,7 @@ def _load_import_scan_state(
     harness_name: str,
     resolved_source: Path,
     source_session_id: str | None,
-) -> tuple[object | None, ImportScanState]:
+) -> tuple[ImportSourceState | None, ImportScanState]:
     source_state = db_module.get_import_source_state(
         conn,
         harness=harness_name,
@@ -433,7 +437,7 @@ def _load_import_scan_state(
 
 
 def _source_state_fingerprint_tuple(
-    source_state: object | None,
+    source_state: ImportSourceState | None,
 ) -> tuple[int | None, int | None, int | None, int | None, int | None]:
     return (
         source_state.fingerprint_size if source_state is not None else None,
@@ -448,7 +452,7 @@ def _can_skip_scan(
     *,
     use_recursive_fingerprint: bool,
     selected_session_id: int | None,
-    source_state: object | None,
+    source_state: ImportSourceState | None,
     pre_scan_fingerprint: tuple[
         int | None, int | None, int | None, int | None, int | None
     ],
@@ -473,7 +477,7 @@ def _can_skip_scan(
 
 def _scan_source(
     *,
-    definition: object,
+    definition: RegistryHarnessDefinition,
     resolved_source: Path,
     source_session_id: str | None,
     include_raw_json: bool,
@@ -494,18 +498,18 @@ def _persist_scan(
     conn: sqlite3.Connection,
     definition_name: str,
     selected_session_id: int | None,
-    tracking_session: object | None,
+    tracking_session: TrackingSession | None,
     resolved_source: Path,
     source_session_id: str | None,
-    source_state: object | None,
+    source_state: ImportSourceState | None,
     pre_scan_fingerprint: tuple[
         int | None, int | None, int | None, int | None, int | None
     ],
     scan: ScanResult,
-    filtered_events: list[object],
-) -> object:
+    filtered_events: list[UsageEvent],
+) -> InsertUsageResult:
     try:
-        insert_result = db_module.insert_usage_events(
+        insert_result: InsertUsageResult = db_module.insert_usage_events(
             conn,
             selected_session_id,
             filtered_events,
@@ -582,8 +586,8 @@ def _build_import_result(
     resolved_source: Path,
     source_session_id: str | None,
     scan: ScanResult,
-    filtered_events: list[object],
-    insert_result: object,
+    filtered_events: list[UsageEvent],
+    insert_result: InsertUsageResult,
     effective_since_ms: int | None,
     elapsed_ms: int,
     timing: ImportExecutionTiming,

@@ -62,7 +62,7 @@ def scan_pi_path(
     rows_skipped = 0
     events: list[UsageEvent] = []
     metadata_by_key: dict[tuple[str, str], SourceSessionMetadata] = {}
-    file_states = []
+    file_states: list[ImportSourceFileState] = []
     for file_path in file_paths:
         scan = scan_pi_file(
             file_path,
@@ -150,7 +150,7 @@ def scan_pi_file(
         decision.prior_state
     )
     start_offset = (
-        decision.prior_state.last_file_offset
+        (decision.prior_state.last_file_offset or 0)
         if decision.mode == "resume" and decision.prior_state is not None
         else 0
     )

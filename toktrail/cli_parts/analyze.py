@@ -171,7 +171,7 @@ def analyze_session_impl(
                 include_snippets=include_snippets,
             )
         else:
-            report = session_report_api(
+            report = session_report_api(  # type: ignore[assignment]
                 db_path=_resolve_state_db(ctx),
                 config_path=_resolve_config_path(ctx),
                 harness=harness,
@@ -187,7 +187,7 @@ def analyze_session_impl(
 
     if json_output:
         if details:
-            payload = digest.as_dict(include_artifacts=rich_output)
+            payload = digest.as_dict(include_artifacts=rich_output)  # type: ignore[attr-defined]
             typer.echo(json.dumps(payload, indent=2))
         else:
             typer.echo(json.dumps(report.as_dict(), indent=2))

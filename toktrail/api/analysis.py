@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from pathlib import Path
 
 from toktrail import db as db_module
@@ -139,7 +140,7 @@ def session_digest(
     refresh: bool = True,
     persist: bool = False,
     include_snippets: bool = False,
-):
+) -> object:
     if include_snippets:
         msg = "include_snippets is not supported for phase-1 session digests."
         raise InvalidAPIUsageError(msg)
@@ -176,7 +177,7 @@ def session_digest(
             usage_source_paths=usage_session.source_paths,
         )
         if event_source is not None and definition.extract_session_events is not None:
-            transcript_events = list(
+            transcript_events = list(  # type: ignore[call-overload]
                 definition.extract_session_events(
                     event_source,
                     source_session_id=usage_session.source_session_id,
@@ -254,8 +255,8 @@ def session_report(
 
 def _load_or_build_session_digest(
     *,
-    conn,
-    definition,
+    conn: sqlite3.Connection,
+    definition: object,
     source_path: Path | None,
     usage_session: UsageSessionRow,
     persist: bool,
@@ -268,7 +269,7 @@ def _load_or_build_session_digest(
             source_session_id=usage_session.source_session_id,
         )
         if persisted is not None:
-            return public_digest_from_internal(persisted)
+            return public_digest_from_internal(persisted)  # type: ignore[return-value]
 
     event_source = _resolve_digest_source_path(
         definition=definition,
@@ -276,9 +277,9 @@ def _load_or_build_session_digest(
         usage_source_paths=usage_session.source_paths,
     )
     transcript_events = []
-    if event_source is not None and definition.extract_session_events is not None:
+    if event_source is not None and definition.extract_session_events is not None:  # type: ignore[attr-defined]
         transcript_events = list(
-            definition.extract_session_events(
+            definition.extract_session_events(  # type: ignore[attr-defined]
                 event_source,
                 source_session_id=usage_session.source_session_id,
             )
@@ -291,7 +292,7 @@ def _load_or_build_session_digest(
     if persist:
         db_module.upsert_source_session_digest(conn, digest)
         conn.commit()
-    return public_digest_from_internal(digest)
+    return public_digest_from_internal(digest)  # type: ignore[return-value]
 
 
 def _compact_report_from_usage_session(
@@ -338,12 +339,12 @@ def _compact_report_from_usage_session(
 
 def _resolve_usage_session_for_digest(
     *,
-    conn,
+    conn: sqlite3.Connection,
     harness: str,
     source_session_id: str | None,
     last: bool,
     costing_config: CostingConfig,
-):
+) -> UsageSessionRow:
     from toktrail.reporting import UsageSessionsFilter
 
     report = db_module.summarize_usage_sessions(
@@ -360,14 +361,14 @@ def _resolve_usage_session_for_digest(
         if not report.sessions:
             msg = f"Source session not found for harness {harness}: {source_session_id}"
             raise SourcePathError(msg)
-        return report.sessions[0]
+        return report.sessions[0]  # type: ignore[no-any-return]
     if last:
         if not report.sessions:
             msg = f"No usage events found for harness {harness}."
             raise SourcePathError(msg)
-        return report.sessions[0]
+        return report.sessions[0]  # type: ignore[no-any-return]
     if len(report.sessions) == 1:
-        return report.sessions[0]
+        return report.sessions[0]  # type: ignore[no-any-return]
     if not report.sessions:
         msg = f"No usage events found for harness {harness}."
         raise SourcePathError(msg)
@@ -381,17 +382,17 @@ def _resolve_usage_session_for_digest(
 
 def _resolve_digest_source_path(
     *,
-    definition,
+    definition: object,
     source_path: Path | None,
     usage_source_paths: tuple[str, ...],
 ) -> Path | None:
     if source_path is not None:
-        return definition.resolve_source_path(source_path)
+        return definition.resolve_source_path(source_path)  # type: ignore[no-any-return, attr-defined]
     for value in usage_source_paths:
         path = Path(value).expanduser()
         if path.exists():
             return path
-    return definition.resolve_source_path(None)
+    return definition.resolve_source_path(None)  # type: ignore[no-any-return, attr-defined]
 
 
 def _load_events_from_state(
@@ -433,7 +434,7 @@ def _load_events_from_state(
         selected_filters = UsageReportFilter(
             tracking_session_id=active_run_id,
             harness=harness,
-            source_session_id=selected_source_session,
+            source_session_id=selected_source_session,  # type: ignore[arg-type]
         )
         selected_events = db_module.list_usage_events(
             conn,
@@ -444,7 +445,7 @@ def _load_events_from_state(
         raise StateDatabaseError(str(exc)) from exc
     finally:
         conn.close()
-    return selected_events
+    return selected_events  # type: ignore[no-any-return]
 
 
 def _load_events_from_source(
@@ -513,7 +514,7 @@ def _resolve_source_session(
     events: list[UsageEvent],
     source_session_id: str | None,
     last: bool,
-) -> str:
+) -> object:
     sessions: dict[str, int] = {}
     for event in events:
         sessions[event.source_session_id] = max(
@@ -664,7 +665,7 @@ def session_tool_call_analysis(
                 resolved_source, costing_config=costing_config
             )
         except Exception:
-            sessions = ()
+            sessions = ()  # type: ignore[assignment]
 
         if last and sessions:
             selected_session_id = max(

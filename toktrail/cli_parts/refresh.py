@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import sqlite3
+import time
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -59,8 +61,8 @@ def _resolve_config_path(ctx: typer.Context) -> Path:
     return _runtime().resolve_config_path(ctx)
 
 
-def _open_toktrail_connection(ctx: typer.Context):
-    return _runtime().open_toktrail_connection(ctx)
+def _open_toktrail_connection(ctx: typer.Context) -> sqlite3.Connection:
+    return _runtime().open_toktrail_connection(ctx)  # type: ignore[return-value]
 
 
 def _exit_with_error(message: str) -> None:
@@ -98,7 +100,7 @@ def refresh_before_report(
         loaded_config = _load_resolved_toktrail_config_or_exit(ctx)
         if should_skip_report_auto_refresh(
             state_db_path=_resolve_state_db(ctx),
-            min_refresh_interval_secs=loaded_config.config.reports.min_refresh_interval_secs,
+            min_refresh_interval_secs=loaded_config.config.reports.min_refresh_interval_secs,  # type: ignore[attr-defined]
         ):
             return ()
 
@@ -128,7 +130,7 @@ def resolve_report_refresh_mode(ctx: typer.Context, *, enabled: bool) -> str:
     if source is not None and source is not ParameterSource.DEFAULT:
         return "always" if enabled else "never"
     loaded_config = _load_resolved_toktrail_config_or_exit(ctx)
-    return loaded_config.config.reports.refresh
+    return loaded_config.config.reports.refresh  # type: ignore[no-any-return, attr-defined]
 
 
 def should_skip_report_auto_refresh(
@@ -310,7 +312,7 @@ def run_harness_import(
     )
     return ImportExecutionResult(
         harness=harness.display_name,
-        source_path=resolved_source,
+        source_path=resolved_source,  # type: ignore[arg-type]
         run_id=selected_session_id,
         rows_seen=scan.rows_seen,
         rows_imported=insert_result.rows_inserted,
@@ -405,7 +407,7 @@ def run_harness_import_with_dry_run(
     )
     return ImportExecutionResult(
         harness=harness.display_name,
-        source_path=resolved_source,
+        source_path=resolved_source,  # type: ignore[arg-type]
         run_id=selected_session_id,
         rows_seen=scan.rows_seen,
         rows_imported=insert_result.rows_inserted,

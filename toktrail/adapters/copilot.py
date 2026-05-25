@@ -67,7 +67,7 @@ def scan_copilot_file(
     rows_skipped = 0
     events: list[UsageEvent] = []
     start_offset = (
-        decision.prior_state.last_file_offset
+        (decision.prior_state.last_file_offset or 0)
         if decision.mode == "resume" and decision.prior_state is not None
         else 0
     )
@@ -191,7 +191,7 @@ def scan_copilot_path(
     rows_seen = 0
     rows_skipped = 0
     events: list[UsageEvent] = []
-    file_states = []
+    file_states: list[ImportSourceFileState] = []
     for file_path in file_paths:
         scan = scan_copilot_file(
             file_path,

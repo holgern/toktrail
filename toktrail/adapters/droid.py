@@ -15,6 +15,7 @@ from toktrail.adapters._common import (
 )
 from toktrail.adapters.base import (
     ImportScanState,
+    ImportSourceFileState,
     ScanResult,
     SourceSessionSummary,
     build_import_source_file_state,
@@ -59,7 +60,7 @@ def scan_droid_path(
     rows_seen = 0
     rows_skipped = 0
     events: list[UsageEvent] = []
-    file_states = []
+    file_states: list[ImportSourceFileState] = []
     for file_path in file_paths:
         scan = scan_droid_file(
             file_path,
@@ -305,7 +306,7 @@ def _resolved_provider(provider_lock: str | None, model: str | None) -> str:
         except ValueError:
             provider = ""
         if provider:
-            return provider
+            return provider  # type: ignore[no-any-return]
 
     inferred = inferred_provider_from_model(model or "")
     return inferred or "unknown"

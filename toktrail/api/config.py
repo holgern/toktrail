@@ -70,7 +70,7 @@ def config_summary(config_path: Path | None = None) -> dict[str, object]:
 
 def render_config_template(template: str = "default") -> str:
     try:
-        return config_module.render_config_template(template)
+        return config_module.render_config_template(template)  # type: ignore[no-any-return]
     except ValueError as exc:
         msg = f"Unsupported toktrail config template {template!r}: {exc}"
         raise ConfigurationError(msg) from exc

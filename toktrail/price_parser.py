@@ -13,7 +13,7 @@ from toktrail.config import Price, normalize_identity, parse_pricing_config
 if sys.version_info >= (3, 11):
     import tomllib
 else:  # pragma: no cover - Python < 3.11
-    import tomli as tomllib
+    import tomli as tomllib  # type: ignore[import-not-found]
 
 
 @dataclass(frozen=True)

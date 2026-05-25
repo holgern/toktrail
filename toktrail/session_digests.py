@@ -445,7 +445,7 @@ def _default_tool_name(raw_kind: str | None) -> str | None:
     return None
 
 
-def public_digest_from_internal(digest: SessionDigest):
+def public_digest_from_internal(digest: SessionDigest) -> object:
     from toktrail.api.models import (
         CostTotals as PublicCostTotals,
     )

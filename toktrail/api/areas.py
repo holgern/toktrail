@@ -113,7 +113,7 @@ def _resolve_assignment_machine_id(
     machine: str | None,
 ) -> str:
     if machine is not None:
-        return db_module.resolve_machine_selector(conn, machine).machine_id
+        return db_module.resolve_machine_selector(conn, machine).machine_id  # type: ignore[no-any-return]
     rows = conn.execute(
         """
         SELECT DISTINCT origin_machine_id

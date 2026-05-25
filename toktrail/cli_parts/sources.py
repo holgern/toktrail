@@ -24,8 +24,8 @@ def sources_list_impl(
     print_table_fn: Callable[..., None],
 ) -> None:
     loaded = load_resolved_toktrail_config_or_exit_fn(ctx)
-    selected_harnesses = tuple(harnesses or loaded.config.imports.harnesses)
-    configured_sources = loaded.config.imports.sources or {}
+    selected_harnesses = tuple(harnesses or loaded.config.imports.harnesses)  # type: ignore[attr-defined]
+    configured_sources = loaded.config.imports.sources or {}  # type: ignore[attr-defined]
     if source_path is not None and len(selected_harnesses) != 1:
         exit_with_error_fn("--source can only be used with exactly one --harness.")
 
@@ -41,7 +41,7 @@ def sources_list_impl(
             snapshot = capture_source_snapshot(
                 harness,
                 source_path=selected_source,
-                config_path=loaded.config_path,
+                config_path=loaded.config_path,  # type: ignore[attr-defined]
             )
         except (OSError, ValueError, ToktrailError) as exc:
             rows.append(

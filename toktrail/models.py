@@ -18,7 +18,7 @@ def normalize_thinking_level(value: object) -> str | None:
         return None
     if normalized in {"unknown", "default"}:
         return None
-    return normalized
+    return normalized  # type: ignore[no-any-return]
 
 
 @dataclass(frozen=True)

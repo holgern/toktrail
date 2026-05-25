@@ -16,6 +16,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any, cast
 
 BAD_STATUSES = frozenset({"failed", "timeout", "cancelled"})
 
@@ -214,9 +215,10 @@ def _scan_codex_tool_call_file(
                     continue
                 lines_scanned += 1
 
-                normalized = _normalize_tool_event(entry)
-                if normalized is None:
+                _normalized = _normalize_tool_event(entry)
+                if _normalized is None:
                     continue
+                normalized = cast(dict[str, Any], _normalized)
 
                 if normalized["role"] == "start":
                     call_id = normalized.get("call_id")
@@ -505,9 +507,9 @@ def _merge_call_and_result(
         cwd=cwd,
         command=command,
         arguments_json=prev.arguments_json,
-        exit_code=result.get("exit_code"),
-        duration_ms=result.get("duration_ms"),
-        error=result.get("error"),
+        exit_code=_as_int(result.get("exit_code")),
+        duration_ms=_as_int(result.get("duration_ms")),
+        error=_as_str(result.get("error")),
         stdout_snippet=(
             _snippet(result.get("stdout"), limit=max_snippet_chars)
             if include_output

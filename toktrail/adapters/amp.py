@@ -15,6 +15,7 @@ from toktrail.adapters._common import (
 )
 from toktrail.adapters.base import (
     ImportScanState,
+    ImportSourceFileState,
     ScanResult,
     SourceSessionSummary,
     build_import_source_file_state,
@@ -76,7 +77,7 @@ def scan_amp_path(
     rows_seen = 0
     rows_skipped = 0
     events: list[UsageEvent] = []
-    file_states = []
+    file_states: list[ImportSourceFileState] = []
     for file_path in file_paths:
         scan = scan_amp_file(
             file_path,

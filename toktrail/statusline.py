@@ -708,7 +708,7 @@ def _context_window_limit(
             normalize_identity(window.provider) == normalized_provider
             and normalize_identity(window.model) == normalized_model
         ):
-            return window.tokens
+            return window.tokens  # type: ignore[no-any-return]
     return None
 
 

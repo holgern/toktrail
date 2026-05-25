@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime
 import json
+import sqlite3
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -58,8 +59,8 @@ def _resolve_config_path(ctx: typer.Context) -> Path:
     return _runtime().resolve_config_path(ctx)
 
 
-def _open_toktrail_connection(ctx: typer.Context):
-    return _runtime().open_toktrail_connection(ctx)
+def _open_toktrail_connection(ctx: typer.Context) -> sqlite3.Connection:
+    return _runtime().open_toktrail_connection(ctx)  # type: ignore[return-value]
 
 
 def _load_costing_config_or_exit(ctx: typer.Context) -> CostingConfig:
@@ -142,7 +143,7 @@ def watch_report(
 ) -> RunReport:
     conn = _open_toktrail_connection(ctx)
     try:
-        return summarize_usage(
+        return summarize_usage(  # type: ignore[no-any-return]
             conn,
             UsageReportFilter(tracking_session_id=session_id),
             costing_config=costing_config,
@@ -264,7 +265,7 @@ def print_watch_start(
         harness_names = sorted(set(harnesses))
     else:
         loaded = _load_resolved_toktrail_config_or_exit(ctx)
-        harness_names = sorted(loaded.config.imports.harnesses)
+        harness_names = sorted(loaded.config.imports.harnesses)  # type: ignore[attr-defined]
     typer.echo(f"Sources: {', '.join(harness_names)}")
     typer.echo("")
 

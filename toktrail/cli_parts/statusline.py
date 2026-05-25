@@ -73,7 +73,7 @@ def statusline_impl(
         typer.echo(
             json.dumps(
                 _runtime().wrap_refresh_json_payload(
-                    report.as_dict(),
+                    report.as_dict(),  # type: ignore[attr-defined]
                     refresh_results=refresh_results,
                     include_refresh=refresh_details,
                 ),
@@ -81,7 +81,7 @@ def statusline_impl(
             )
         )
         return
-    typer.echo(report.line)
+    typer.echo(report.line)  # type: ignore[attr-defined]
 
 
 def statusline_test_impl(
@@ -113,19 +113,19 @@ def statusline_test_impl(
     )
     if json_output:
         body = {
-            "line": report.line,
+            "line": report.line,  # type: ignore[attr-defined]
             "elapsed_ms": elapsed_ms,
             "report": payload,
         }
-        body = _runtime().wrap_refresh_json_payload(
+        body = _runtime().wrap_refresh_json_payload(  # type: ignore[assignment]
             body,
             refresh_results=refresh_results,
             include_refresh=refresh_details,
         )
         typer.echo(json.dumps(body, indent=2))
         return
-    typer.echo(f"Source: {report.source_session_id or '(today fallback)'}")
-    typer.echo(f"Model: {(report.provider_id or '-')} / {(report.model_id or '-')}")
+    typer.echo(f"Source: {report.source_session_id or '(today fallback)'}")  # type: ignore[attr-defined]
+    typer.echo(f"Model: {(report.provider_id or '-')} / {(report.model_id or '-')}")  # type: ignore[attr-defined]
     typer.echo(f"Timing: {elapsed_ms}ms")
     typer.echo("Output cache: miss")
     typer.echo(
@@ -137,7 +137,7 @@ def statusline_test_impl(
         typer.echo("Payload:")
         typer.echo(json.dumps(payload, indent=2))
     typer.echo("Line:")
-    typer.echo(report.line)
+    typer.echo(report.line)  # type: ignore[attr-defined]
 
 
 def statusline_install_impl(target: str) -> None:
@@ -146,9 +146,9 @@ def statusline_install_impl(target: str) -> None:
 
 def statusline_config_show_impl(ctx: typer.Context) -> None:
     loaded = _runtime().load_resolved_toktrail_config_or_exit(ctx)
-    statusline_config = loaded.config.statusline
-    typer.echo(f"config path:   {loaded.config_path}")
-    typer.echo(f"config exists: {'yes' if loaded.config_exists else 'no'}")
+    statusline_config = loaded.config.statusline  # type: ignore[attr-defined]
+    typer.echo(f"config path:   {loaded.config_path}")  # type: ignore[attr-defined]
+    typer.echo(f"config exists: {'yes' if loaded.config_exists else 'no'}")  # type: ignore[attr-defined]
     typer.echo(f"default harness: {statusline_config.default_harness}")
     typer.echo(f"basis:         {statusline_config.basis}")
     typer.echo(f"refresh:       {statusline_config.refresh}")
@@ -156,7 +156,7 @@ def statusline_config_show_impl(ctx: typer.Context) -> None:
     typer.echo(f"max width:     {statusline_config.max_width}")
     typer.echo(f"stale after:   {statusline_config.cache.stale_after_secs}")
     typer.echo("elements:      " + ", ".join(statusline_config.elements))
-    typer.echo(f"context windows: {len(loaded.config.context_windows)}")
+    typer.echo(f"context windows: {len(loaded.config.context_windows)}")  # type: ignore[attr-defined]
 
 
 def statusline_config_set_impl(
@@ -167,11 +167,11 @@ def statusline_config_set_impl(
 ) -> None:
     loaded = _runtime().load_resolved_toktrail_config_or_exit(ctx)
     updated = _runtime().statusline_config_with_override(
-        loaded.config.statusline,
+        loaded.config.statusline,  # type: ignore[attr-defined]
         key,
         value,
     )
-    config_path: Path = loaded.config_path
+    config_path: Path = loaded.config_path  # type: ignore[attr-defined]
     existing_text = (
         config_path.read_text(encoding="utf-8")
         if config_path.exists()
@@ -180,7 +180,7 @@ def statusline_config_set_impl(
     stripped = _runtime().strip_statusline_sections(existing_text).strip()
     rendered = _runtime().render_statusline_config_sections(
         updated,
-        context_windows=loaded.config.context_windows,
+        context_windows=loaded.config.context_windows,  # type: ignore[attr-defined]
     )
     output = stripped
     if output:
