@@ -8,6 +8,12 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 
+from toktrail.adapters._common import (
+    as_non_empty_str,
+    file_modified_timestamp_ms,
+    json_object_or_none,
+    parse_rfc3339_ms,
+)
 from toktrail.adapters.base import (
     ImportScanState,
     ScanResult,
@@ -535,20 +541,11 @@ def _amp_source_paths_by_session(source_path: Path) -> dict[str, list[Path]]:
 
 
 def _file_modified_timestamp_ms(path: Path) -> int:
-    try:
-        return int(path.stat().st_mtime * 1000)
-    except OSError:
-        return 0
+    return file_modified_timestamp_ms(path)
 
 
 def _json_loads(data_json: str) -> dict[str, object] | None:
-    try:
-        parsed = json.loads(data_json)
-    except json.JSONDecodeError:
-        return None
-    if not isinstance(parsed, dict):
-        return None
-    return parsed
+    return json_object_or_none(data_json)
 
 
 def _as_mapping(value: object) -> dict[str, object] | None:
@@ -558,10 +555,7 @@ def _as_mapping(value: object) -> dict[str, object] | None:
 
 
 def _as_str(value: object) -> str | None:
-    if not isinstance(value, str):
-        return None
-    stripped = value.strip()
-    return stripped or None
+    return as_non_empty_str(value)
 
 
 def _as_positive_int(value: object) -> int | None:
@@ -602,17 +596,7 @@ def _number_value(value: object) -> float | None:
 
 
 def _parse_rfc3339_ms(value: object) -> int | None:
-    raw = _as_str(value)
-    if raw is None:
-        return None
-    normalized = raw[:-1] + "+00:00" if raw.endswith("Z") else raw
-    try:
-        parsed = datetime.fromisoformat(normalized)
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return int(parsed.timestamp() * 1000)
+    return parse_rfc3339_ms(value)
 
 
 def _make_fingerprint(event: UsageEvent) -> str:

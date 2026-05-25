@@ -1,15 +1,21 @@
-"""Compatibility re-export module for staged refactor."""
+"""Config defaults/template ownership facade."""
 
 from __future__ import annotations
 
-from importlib import import_module
-from typing import Any
+from toktrail.config_parts._config_impl import (
+    COPILOT_TEMPLATE_NAME,
+    DEFAULT_TEMPLATE_NAME,
+    default_costing_config,
+    default_import_config,
+    default_machine_config,
+    default_pricing_config,
+    default_runtime_config,
+    default_subscriptions_config,
+    default_toktrail_config,
+    render_config_template,
+    render_machine_template,
+    render_prices_template,
+    render_subscriptions_template,
+)
 
-_core = import_module("toktrail.config_parts.core_config")
-
-
-def __getattr__(name: str) -> Any:
-    return getattr(_core, name)
-
-
-__all__: list[str] = []
+__all__ = [name for name in globals() if not name.startswith("_")]

@@ -4,10 +4,16 @@ import hashlib
 import json
 import math
 from dataclasses import replace
-from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 
+from toktrail.adapters._common import (
+    as_non_empty_str,
+    file_modified_timestamp_ms,
+    fingerprint_usage_event,
+    json_object_or_none,
+    parse_rfc3339_ms,
+)
 from toktrail.adapters.base import (
     ImportScanState,
     ScanResult,
@@ -381,27 +387,15 @@ def _session_id_from_settings_path(path: Path) -> str:
 
 
 def _file_modified_timestamp_ms(path: Path) -> int:
-    try:
-        return int(path.stat().st_mtime * 1000)
-    except OSError:
-        return 0
+    return file_modified_timestamp_ms(path)
 
 
 def _json_loads(data_json: str) -> dict[str, object] | None:
-    try:
-        value = json.loads(data_json)
-    except json.JSONDecodeError:
-        return None
-    if not isinstance(value, dict):
-        return None
-    return value
+    return json_object_or_none(data_json)
 
 
 def _as_str(value: object) -> str | None:
-    if isinstance(value, str):
-        stripped = value.strip()
-        return stripped or None
-    return None
+    return as_non_empty_str(value)
 
 
 def _as_non_negative_int(value: object, default: int = 0) -> int:
@@ -413,35 +407,8 @@ def _as_non_negative_int(value: object, default: int = 0) -> int:
 
 
 def _parse_rfc3339_ms(value: object) -> int | None:
-    if not isinstance(value, str):
-        return None
-    raw = value.strip()
-    if not raw:
-        return None
-    normalized = raw[:-1] + "+00:00" if raw.endswith("Z") else raw
-    try:
-        parsed = datetime.fromisoformat(normalized)
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return int(parsed.timestamp() * 1000)
+    return parse_rfc3339_ms(value)
 
 
 def _make_fingerprint(event: UsageEvent) -> str:
-    payload = "|".join(
-        [
-            event.harness,
-            event.source_session_id,
-            event.source_dedup_key,
-            event.provider_id,
-            event.model_id,
-            str(event.created_ms),
-            str(event.tokens.input),
-            str(event.tokens.output),
-            str(event.tokens.reasoning),
-            str(event.tokens.cache_read),
-            str(event.tokens.cache_write),
-        ]
-    )
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    return fingerprint_usage_event(event)

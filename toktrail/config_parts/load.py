@@ -1,15 +1,20 @@
-"""Compatibility re-export module for staged refactor."""
+"""Config load/merge ownership facade."""
 
 from __future__ import annotations
 
-from importlib import import_module
-from typing import Any
+from toktrail.config_parts._config_impl import (
+    load_costing_config,
+    load_machine_config,
+    load_pricing_config,
+    load_pricing_configs,
+    load_resolved_costing_config,
+    load_resolved_toktrail_config,
+    load_runtime_config,
+    load_subscriptions_config,
+    load_toktrail_config,
+    merge_configs,
+    merge_pricing_configs,
+    summarize_costing_config,
+)
 
-_core = import_module("toktrail.config_parts.core_config")
-
-
-def __getattr__(name: str) -> Any:
-    return getattr(_core, name)
-
-
-__all__: list[str] = []
+__all__ = [name for name in globals() if not name.startswith("_")]

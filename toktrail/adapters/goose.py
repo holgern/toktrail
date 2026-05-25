@@ -11,6 +11,7 @@ from decimal import Decimal
 from pathlib import Path
 from urllib.parse import quote
 
+from toktrail.adapters._common import as_non_empty_str, fingerprint_usage_event
 from toktrail.adapters.base import ScanResult, SourceSessionSummary
 from toktrail.adapters.summary import summarize_events_by_source_session
 from toktrail.config import CostingConfig, normalize_identity
@@ -283,26 +284,8 @@ def _as_non_negative_int(value: object, default: int | None = 0) -> int | None:
 
 
 def _as_str(value: object) -> str | None:
-    if isinstance(value, str):
-        stripped = value.strip()
-        return stripped or None
-    return None
+    return as_non_empty_str(value)
 
 
 def _make_fingerprint(event: UsageEvent) -> str:
-    payload = "|".join(
-        [
-            event.harness,
-            event.source_session_id,
-            event.source_dedup_key,
-            event.provider_id,
-            event.model_id,
-            str(event.created_ms),
-            str(event.tokens.input),
-            str(event.tokens.output),
-            str(event.tokens.reasoning),
-            str(event.tokens.cache_read),
-            str(event.tokens.cache_write),
-        ]
-    )
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    return fingerprint_usage_event(event)

@@ -1,15 +1,53 @@
-"""Compatibility re-export module for staged refactor."""
+"""Config model ownership facade."""
 
 from __future__ import annotations
 
-from importlib import import_module
-from typing import Any
+from toktrail.config_parts._config_impl import (
+    CONFIG_VERSION,
+    COPILOT_TEMPLATE_NAME,
+    DEFAULT_TEMPLATE_NAME,
+    ActualCostMode,
+    ActualCostRule,
+    AreaRuleConfig,
+    AreasConfig,
+    ContextWindowConfig,
+    CostingConfig,
+    CostingConfigSummary,
+    GitSyncConfig,
+    GitSyncConflictMode,
+    GitSyncRemoteActiveMode,
+    GitSyncTrackedFile,
+    ImportConfig,
+    ImportMissingSourceMode,
+    LoadedCostingConfig,
+    LoadedMachineConfig,
+    LoadedPricingConfig,
+    LoadedRuntimeConfig,
+    LoadedSubscriptionsConfig,
+    LoadedToktrailConfig,
+    MachineConfig,
+    MissingPriceMode,
+    Price,
+    PriceContextBasis,
+    PricingConfig,
+    ReportsConfig,
+    RuntimeConfig,
+    StatuslineCacheConfig,
+    StatuslineColorMode,
+    StatuslineConfig,
+    StatuslineEmptyMode,
+    StatuslineRefreshMode,
+    StatuslineSessionMode,
+    StatuslineThresholdsConfig,
+    SubscriptionConfig,
+    SubscriptionCostBasis,
+    SubscriptionFixedCostPeriod,
+    SubscriptionWindowConfig,
+    SubscriptionWindowPeriod,
+    SubscriptionWindowResetMode,
+    SubscriptionsConfig,
+    ToktrailConfig,
+    VirtualCostMode,
+)
 
-_core = import_module("toktrail.config_parts.core_config")
-
-
-def __getattr__(name: str) -> Any:
-    return getattr(_core, name)
-
-
-__all__: list[str] = []
+__all__ = [name for name in globals() if not name.startswith("_")]

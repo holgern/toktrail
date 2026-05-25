@@ -10,6 +10,7 @@ from decimal import Decimal
 from pathlib import Path
 from urllib.parse import quote
 
+from toktrail.adapters._common import as_non_empty_str, json_object_or_none
 from toktrail.adapters.base import ScanResult, SourceSessionSummary
 from toktrail.adapters.summary import summarize_events_by_source_session
 from toktrail.config import CostingConfig
@@ -253,20 +254,11 @@ def _select_candidate_rows(
 
 
 def _json_loads(data_json: str) -> dict[str, object] | None:
-    try:
-        value = json.loads(data_json)
-    except json.JSONDecodeError:
-        return None
-    if not isinstance(value, dict):
-        return None
-    return value
+    return json_object_or_none(data_json)
 
 
 def _as_str(value: object) -> str | None:
-    if isinstance(value, str):
-        stripped = value.strip()
-        return stripped or None
-    return None
+    return as_non_empty_str(value)
 
 
 def _as_non_negative_int(value: object, default: int = 0) -> int:

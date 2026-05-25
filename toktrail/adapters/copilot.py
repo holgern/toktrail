@@ -8,6 +8,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+from toktrail.adapters._common import as_non_empty_str, file_modified_timestamp_ms
 from toktrail.adapters.base import (
     ImportScanState,
     ImportSourceFileState,
@@ -384,10 +385,7 @@ def _first_non_empty_attr(attributes: dict[str, Any], keys: list[str]) -> str | 
 
 
 def _as_str(value: object) -> str | None:
-    if isinstance(value, str):
-        stripped = value.strip()
-        return stripped or None
-    return None
+    return as_non_empty_str(value)
 
 
 def _value_as_int(value: object) -> int | None:
@@ -418,10 +416,7 @@ def _timestamp_ms_from_value(value: object) -> int | None:
 
 
 def _file_modified_timestamp_ms(path: Path) -> int:
-    try:
-        return int(path.stat().st_mtime * 1000)
-    except OSError:
-        return 0
+    return file_modified_timestamp_ms(path)
 
 
 def _make_fingerprint(event: UsageEvent) -> str:

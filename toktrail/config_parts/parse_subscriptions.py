@@ -1,15 +1,9 @@
-"""Compatibility re-export module for staged refactor."""
+"""Subscription parser ownership facade."""
 
 from __future__ import annotations
 
-from importlib import import_module
-from typing import Any
+from toktrail.config_parts._config_impl import (
+    parse_subscriptions_config,
+)
 
-_core = import_module("toktrail.config_parts.core_config")
-
-
-def __getattr__(name: str) -> Any:
-    return getattr(_core, name)
-
-
-__all__: list[str] = []
+__all__ = [name for name in globals() if not name.startswith("_")]
