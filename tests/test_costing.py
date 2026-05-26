@@ -1,10 +1,17 @@
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import cast
 
 import pytest
 
-from toktrail.config import ActualCostRule, CostingConfig, MissingPriceMode, Price
+from toktrail.config import (
+    ActualCostRule,
+    CostingConfig,
+    MissingPriceMode,
+    Price,
+    ProviderAlias,
+)
 from toktrail.costing import (
     compute_costs,
     cost_from_price,
@@ -513,3 +520,116 @@ def test_compute_costs_exposes_savings() -> None:
     assert float(breakdown.actual_cost_usd) == pytest.approx(0.0001)
     assert float(breakdown.virtual_cost_usd) == pytest.approx(0.0003)
     assert float(breakdown.savings_usd) == pytest.approx(0.0002)
+
+
+def test_resolve_price_matches_provider_alias() -> None:
+    price = make_price(provider="deepseek", model="deepseek-v4-pro")
+    config = CostingConfig(
+        virtual_prices=(price,),
+        provider_aliases=(ProviderAlias(alias="ocgo-launch", provider="deepseek"),),
+    )
+
+    assert resolve_price(
+        "ocgo-launch",
+        "deepseek-v4-pro",
+        config.virtual_prices,
+        config=config,
+    ) == price
+
+
+def test_resolve_price_with_alias_still_falls_back_to_raw() -> None:
+    # If someone has a manual price for the raw provider, it should still work.
+    raw_price = make_price(provider="ocgo-launch", model="deepseek-v4-pro")
+    config = CostingConfig(
+        virtual_prices=(raw_price,),
+        provider_aliases=(ProviderAlias(alias="ocgo-launch", provider="deepseek"),),
+    )
+
+    result = resolve_price(
+        "ocgo-launch",
+        "deepseek-v4-pro",
+        config.virtual_prices,
+        config=config,
+    )
+    assert result == raw_price
+
+
+def test_compute_costs_uses_provider_alias_for_virtual_price() -> None:
+    price = make_price(
+        provider="deepseek",
+        model="deepseek-v4-pro",
+        input_usd_per_1m=1.0,
+        output_usd_per_1m=2.0,
+    )
+    config = CostingConfig(
+        virtual_prices=(price,),
+        provider_aliases=(ProviderAlias(alias="ocgo-launch", provider="deepseek"),),
+    )
+
+    costs = compute_costs(
+        harness="codex",
+        provider_id="ocgo-launch",
+        model_id="deepseek-v4-pro",
+        tokens=TokenBreakdown(input=1_000_000, output=1_000_000),
+        source_cost_usd=Decimal("0"),
+        message_count=1,
+        config=config,
+    )
+
+    assert costs.virtual_cost_usd == Decimal("3.0")
+    assert costs.unpriced_count == 0
+
+
+def test_actual_cost_rule_matches_provider_alias() -> None:
+    config = CostingConfig(
+        default_actual_mode="source",
+        actual_rules=(
+            ActualCostRule(
+                harness="codex",
+                provider="deepseek",
+                model=None,
+                mode="pricing",
+            ),
+        ),
+        provider_aliases=(ProviderAlias(alias="ocgo-launch", provider="deepseek"),),
+    )
+
+    result = resolve_actual_mode(
+        "codex", "ocgo-launch", "deepseek-v4-pro", config
+    )
+    assert result == "pricing"
+
+
+def test_compute_costs_no_alias_stays_strict() -> None:
+    # Without alias config, explicit provider stays strict.
+    price = make_price(provider="deepseek", model="deepseek-v4-pro")
+    config = CostingConfig(
+        virtual_prices=(price,),
+    )
+
+    costs = compute_costs(
+        harness="codex",
+        provider_id="ocgo-launch",
+        model_id="deepseek-v4-pro",
+        tokens=TokenBreakdown(input=1_000_000, output=1_000_000),
+        source_cost_usd=Decimal("0"),
+        message_count=1,
+        config=config,
+    )
+
+    assert costs.virtual_cost_usd == Decimal("0")
+    assert costs.unpriced_count == 1
+
+
+def test_canonical_provider_key_resolves_chain() -> None:
+    from toktrail.costing import canonical_provider_key
+
+    config = CostingConfig(
+        provider_aliases=(
+            ProviderAlias(alias="a", provider="b"),
+            ProviderAlias(alias="b", provider="c"),
+        ),
+    )
+    assert canonical_provider_key("a", config) == "c"
+    assert canonical_provider_key("b", config) == "c"
+    assert canonical_provider_key("c", config) == "c"

@@ -148,6 +148,7 @@ _COSTING_FIELDS = {
     "default_virtual_mode",
     "missing_price",
     "price_profile",
+    "provider_aliases",
 }
 _PRICING_FIELDS = {"virtual", "actual"}
 _STATUSLINE_FIELDS = {
@@ -897,6 +898,11 @@ class SubscriptionConfig:
 
 
 @dataclass(frozen=True)
+class ProviderAlias:
+    alias: str
+    provider: str
+
+@dataclass(frozen=True)
 class CostingConfig:
     config_version: int = CONFIG_VERSION
     default_actual_mode: ActualCostMode = "source"
@@ -907,6 +913,7 @@ class CostingConfig:
     virtual_prices: tuple[Price, ...] = ()
     actual_prices: tuple[Price, ...] = ()
     subscriptions: tuple[SubscriptionConfig, ...] = ()
+    provider_aliases: tuple[ProviderAlias, ...] = ()
 
     def resolve_actual_cost_mode(
         self,
@@ -915,16 +922,30 @@ class CostingConfig:
         provider: str | None,
         model: str | None,
     ) -> ActualCostMode:
+        canonical_provider = self.canonical_provider(provider)
         selected_mode = self.default_actual_mode
         best_specificity = (-1, -1, -1)
         for rule in self.actual_rules:
-            if not rule.matches(harness=harness, provider=provider, model=model):
+            if not rule.matches(
+                harness=harness, provider=canonical_provider, model=model
+            ):
                 continue
             specificity = rule.specificity()
             if specificity > best_specificity:
                 selected_mode = rule.mode
                 best_specificity = specificity
         return selected_mode
+
+    def canonical_provider(self, provider: str | None) -> str | None:
+        if provider is None:
+            return None
+        current = normalize_identity(provider)
+        mapping = {item.alias: item.provider for item in self.provider_aliases}
+        seen: set[str] = set()
+        while current in mapping and current not in seen:
+            seen.add(current)
+            current = mapping[current]
+        return current
 
 
 @dataclass(frozen=True)
@@ -1051,7 +1072,7 @@ class RuntimeConfig:
     statusline: StatuslineConfig = field(default_factory=StatuslineConfig)
     areas: AreasConfig = field(default_factory=AreasConfig)
     context_windows: tuple[ContextWindowConfig, ...] = ()
-
+    provider_aliases: tuple[ProviderAlias, ...] = ()
 
 @dataclass(frozen=True)
 class PricingConfig:
@@ -1160,6 +1181,7 @@ class CostingConfigSummary:
     actual_price_count: int
     virtual_price_count: int
     subscription_count: int
+    provider_alias_count: int
 
 
 def default_costing_config() -> CostingConfig:
@@ -1249,8 +1271,8 @@ def default_runtime_config() -> RuntimeConfig:
         statusline=StatuslineConfig(),
         areas=AreasConfig(),
         context_windows=(),
+        provider_aliases=(),
     )
-
 
 def default_pricing_config() -> PricingConfig:
     return PricingConfig()
@@ -1856,6 +1878,10 @@ def parse_runtime_config(data: object) -> RuntimeConfig:
         data.get("actual_cost"),
         default_config.actual_rules,
     )
+    provider_aliases = _parse_provider_aliases(
+        costing_table.get("provider_aliases"),
+        context="costing.provider_aliases",
+    )
 
     return RuntimeConfig(
         config_version=config_version,
@@ -1876,8 +1902,8 @@ def parse_runtime_config(data: object) -> RuntimeConfig:
             default_config.areas,
         ),
         context_windows=_parse_context_windows(data.get("context_window")),
+        provider_aliases=provider_aliases,
     )
-
 
 def parse_pricing_config(data: object) -> PricingConfig:
     if not isinstance(data, dict):
@@ -1970,6 +1996,7 @@ def merge_configs(
             virtual_prices=pricing.virtual_prices,
             actual_prices=pricing.actual_prices,
             subscriptions=subscriptions.subscriptions,
+            provider_aliases=runtime.provider_aliases,
         ),
         imports=runtime.imports,
         reports=runtime.reports,
@@ -2029,6 +2056,10 @@ def _parse_legacy_costing_config(data: dict[str, object]) -> CostingConfig:
         data.get("actual_cost"),
         default_runtime.actual_rules,
     )
+    provider_aliases = _parse_provider_aliases(
+        costing_table.get("provider_aliases"),
+        context="costing.provider_aliases",
+    )
     pricing_table = _parse_optional_table(data.get("pricing"), context="pricing")
     _validate_allowed_keys(pricing_table, _PRICING_FIELDS, context="pricing")
     virtual_prices = _parse_prices(
@@ -2050,8 +2081,8 @@ def _parse_legacy_costing_config(data: dict[str, object]) -> CostingConfig:
         virtual_prices=virtual_prices,
         actual_prices=actual_prices,
         subscriptions=subscriptions,
+        provider_aliases=provider_aliases,
     )
-
 
 def summarize_costing_config(config: CostingConfig) -> CostingConfigSummary:
     return CostingConfigSummary(
@@ -2064,8 +2095,8 @@ def summarize_costing_config(config: CostingConfig) -> CostingConfigSummary:
         actual_price_count=len(config.actual_prices),
         virtual_price_count=len(config.virtual_prices),
         subscription_count=len(config.subscriptions),
+        provider_alias_count=len(config.provider_aliases),
     )
-
 
 def _parse_subscriptions(value: object) -> tuple[SubscriptionConfig, ...]:
     if value is None:
@@ -2805,6 +2836,49 @@ def _parse_supported_harness(value: object, *, context: str) -> str:
         msg = f"{context} must be one of: {', '.join(sorted(_SUPPORTED_HARNESSES))}."
         raise ValueError(msg)
     return harness
+
+
+def _parse_provider_aliases(
+    value: object, *, context: str,
+) -> tuple[ProviderAlias, ...]:
+    table = _parse_optional_table(value, context=context)
+    if table is None:
+        return ()
+    aliases: list[ProviderAlias] = []
+    seen: set[str] = set()
+
+    for raw_alias, raw_provider in table.items():
+        alias = normalize_identity(str(raw_alias))
+        provider = normalize_identity(
+            _parse_required_identity(raw_provider, context=f"{context}.{raw_alias}")
+        )
+        if alias == provider:
+            msg = f"{context}.{raw_alias} maps provider alias to itself."
+            raise ValueError(msg)
+        if alias in seen:
+            msg = f"{context}.{raw_alias} duplicates provider alias {alias!r}."
+            raise ValueError(msg)
+        seen.add(alias)
+        aliases.append(ProviderAlias(alias=alias, provider=provider))
+
+    _validate_provider_aliases(tuple(aliases), context=context)
+    return tuple(aliases)
+
+
+def _validate_provider_aliases(
+    aliases: tuple[ProviderAlias, ...], *, context: str,
+) -> None:
+    mapping = {item.alias: item.provider for item in aliases}
+    for start in mapping:
+        seen_chain: list[str] = []
+        current = start
+        while current in mapping:
+            if current in seen_chain:
+                cycle = " -> ".join([*seen_chain, current])
+                msg = f"{context} contains provider alias cycle: {cycle}."
+                raise ValueError(msg)
+            seen_chain.append(current)
+            current = mapping[current]
 
 
 def _parse_actual_cost_rules(

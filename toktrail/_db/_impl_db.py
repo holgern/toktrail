@@ -33,6 +33,7 @@ from toktrail.costing import (
     CostingRuntime,
     SimulationTarget,
     UsageCostAtom,
+    canonical_provider_key,
     compile_costing_config,
     resolve_price_resolution,
     simulate_cost,
@@ -4619,6 +4620,8 @@ def summarize_subscription_usage(
         and (
             provider_filter is None
             or provider_filter in _subscription_usage_provider_ids(subscription)
+            or provider_filter
+            in _expanded_subscription_usage_provider_ids(subscription, config=config)
         )
     ]
 
@@ -4631,7 +4634,9 @@ def summarize_subscription_usage(
     request_counter = 0
 
     for subscription in sorted(subscriptions, key=lambda item: item.id):
-        provider_ids = _subscription_usage_provider_ids(subscription)
+        provider_ids = _expanded_subscription_usage_provider_ids(
+            subscription, config=config
+        )
         for window_config in sorted(
             subscription.windows,
             key=lambda item: (_PERIOD_SORT.get(item.period, 99), item.period),
@@ -4772,7 +4777,9 @@ def summarize_subscription_usage(
 
     rows: list[SubscriptionUsageRow] = []
     for subscription in sorted(subscriptions, key=lambda item: item.id):
-        provider_ids = _subscription_usage_provider_ids(subscription)
+        provider_ids = _expanded_subscription_usage_provider_ids(
+            subscription, config=config
+        )
         periods: list[SubscriptionUsagePeriod] = []
         for request_id, detail in sorted(request_details.items()):
             if (
@@ -4898,6 +4905,28 @@ def _subscription_usage_provider_ids(
 ) -> tuple[str, ...]:
     return tuple(subscription.usage_providers)
 
+
+def _expanded_subscription_usage_provider_ids(
+    subscription: SubscriptionConfig,
+    *,
+    config: CostingConfig,
+) -> tuple[str, ...]:
+    configured = tuple(subscription.usage_providers)
+    expanded: list[str] = []
+
+    def add(value: str) -> None:
+        if value not in expanded:
+            expanded.append(value)
+
+    configured_canonical = {canonical_provider_key(p, config) for p in configured}
+    for provider in configured:
+        add(provider)
+        add(canonical_provider_key(provider, config))
+    for alias in config.provider_aliases:
+        if canonical_provider_key(alias.provider, config) in configured_canonical:
+            add(alias.alias)
+
+    return tuple(expanded)
 
 def _select_subscription_cost(costs: CostTotals, *, basis: str) -> Decimal:
     if basis == "source":

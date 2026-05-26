@@ -858,3 +858,83 @@ reset_at = "2026-05-01T00:00:00+00:00"
     # Should show shortened labels
     assert "expired" in result.output
     assert "on next use" in result.output
+
+
+def test_cli_subscriptions_counts_provider_alias_usage(tmp_path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    config_path = tmp_path / "toktrail.toml"
+    config_path.write_text(
+        """
+config_version = 1
+
+[costing.provider_aliases]
+ocgo-launch = "deepseek"
+
+[[pricing.virtual]]
+provider = "deepseek"
+model = "deepseek-v4-pro"
+input_usd_per_1m = 1.0
+output_usd_per_1m = 2.0
+
+[[subscriptions]]
+id = "deepseek-plan"
+usage_providers = ["deepseek"]
+display_name = "DeepSeek Plan"
+timezone = "UTC"
+quota_cost_basis = "virtual"
+
+[[subscriptions.windows]]
+period = "daily"
+limit_usd = 10
+reset_mode = "fixed"
+reset_at = "2025-01-01T00:00:00+00:00"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    conn = connect(state_db)
+    insert_usage_events(
+        conn,
+        None,
+        [
+            UsageEvent(
+                source_row_id="row-1",
+                source_session_id="ses-1",
+                source_message_id=None,
+                source_dedup_key="row-1",
+                global_dedup_key="row-1",
+                fingerprint_hash="fp-1",
+                harness="codex",
+                provider_id="ocgo-launch",
+                model_id="deepseek-v4-pro",
+                agent=None,
+                thinking_level=None,
+                completed_ms=None,
+                tokens=TokenBreakdown(input=100_000, output=10_000),
+                source_cost_usd=Decimal("0"),
+                created_ms=1700000000000,
+                raw_json=None,
+            ),
+        ],
+    )
+    conn.close()
+
+    result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "--config",
+            str(config_path),
+            "subscriptions",
+            "--now-ms",
+            "1700000000000",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Plan: DeepSeek Plan" in result.output
+    # The alias should have been resolved, so virtual cost should be non-zero.
+    assert "$" in result.output

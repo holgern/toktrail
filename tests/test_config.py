@@ -1588,3 +1588,108 @@ output_usd_per_1m = 4.4
 
     assert summary.virtual_price_count == 2
     assert loaded.price_paths == (openai_path, manual_path)
+
+
+def test_load_costing_config_parses_provider_aliases(tmp_path) -> None:
+    config_path = tmp_path / "toktrail.toml"
+    config_path.write_text(
+        """
+config_version = 1
+
+[costing.provider_aliases]
+ocgo-launch = "deepseek"
+"OpenCode_Go" = "github-copilot"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    config = load_costing_config(config_path)
+
+    assert config.provider_aliases[0].alias == "ocgo-launch"
+    assert config.provider_aliases[0].provider == "deepseek"
+    assert config.provider_aliases[1].alias == "opencode-go"
+    assert config.provider_aliases[1].provider == "github-copilot"
+
+
+def test_load_costing_config_empty_provider_aliases(tmp_path) -> None:
+    config_path = tmp_path / "toktrail.toml"
+    config_path.write_text(
+        """
+config_version = 1
+
+[costing]
+default_actual_mode = "source"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    config = load_costing_config(config_path)
+    assert config.provider_aliases == ()
+
+
+def test_load_costing_config_rejects_provider_alias_cycle(tmp_path) -> None:
+    config_path = tmp_path / "toktrail.toml"
+    config_path.write_text(
+        """
+config_version = 1
+
+[costing.provider_aliases]
+a = "b"
+b = "a"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="provider alias cycle"):
+        load_costing_config(config_path)
+
+
+def test_load_costing_config_rejects_provider_alias_to_self(tmp_path) -> None:
+    config_path = tmp_path / "toktrail.toml"
+    config_path.write_text(
+        """
+config_version = 1
+
+[costing.provider_aliases]
+deepseek = "deepseek"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="maps provider alias to itself"):
+        load_costing_config(config_path)
+
+
+def test_load_costing_config_rejects_provider_alias_chain_cycle(tmp_path) -> None:
+    config_path = tmp_path / "toktrail.toml"
+    config_path.write_text(
+        """
+config_version = 1
+
+[costing.provider_aliases]
+a = "b"
+b = "c"
+c = "a"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="provider alias cycle"):
+        load_costing_config(config_path)
+
+
+def test_summarize_costing_config_includes_provider_alias_count(tmp_path) -> None:
+    config_path = tmp_path / "toktrail.toml"
+    config_path.write_text(
+        """
+config_version = 1
+
+[costing.provider_aliases]
+ocgo-launch = "deepseek"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    config = load_costing_config(config_path)
+    summary = summarize_costing_config(config)
+    assert summary.provider_alias_count == 1

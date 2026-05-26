@@ -701,7 +701,10 @@ def _context_window_limit(
         config = load_toktrail_config(config_path)
     except ValueError:
         return None
-    normalized_provider = normalize_identity(provider_id)
+    normalized_provider = (
+        config.costing.canonical_provider(provider_id)
+        or normalize_identity(provider_id)
+    )
     normalized_model = normalize_identity(model_id)
     for window in config.context_windows:
         if (

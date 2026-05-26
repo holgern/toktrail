@@ -4,7 +4,12 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from decimal import Decimal
 
-from toktrail.config import ActualCostMode, CostingConfig, Price, normalize_identity
+from toktrail.config import (
+    ActualCostMode,
+    CostingConfig,
+    Price,
+    normalize_identity,
+)
 from toktrail.models import TokenBreakdown
 from toktrail.provider_identity import inferred_provider_from_model
 
@@ -99,7 +104,7 @@ class CostingRuntime:
     ) -> ActualCostMode:
         key = (
             normalize_price_key(harness),
-            normalize_price_key(provider_id),
+            canonical_provider_key(provider_id, self.config),
             normalize_price_key(model_id),
         )
         cached = self.actual_mode_cache.get(key)
@@ -122,7 +127,9 @@ class CostingRuntime:
         use_actual_prices: bool,
     ) -> CompiledPrice | None:
         normalized_model = normalize_price_key(model_id)
-        provider_candidates = _provider_candidates(provider_id, model_id)
+        provider_candidates = _provider_candidates(
+            provider_id, model_id, config=self.config
+        )
         by_provider_model = (
             self.actual_by_provider_model
             if use_actual_prices
@@ -380,9 +387,10 @@ def resolve_price(
     prices: Sequence[Price],
     *,
     context_tokens: int | None = None,
+    config: CostingConfig | None = None,
 ) -> Price | None:
     normalized_model = normalize_price_key(model_id)
-    provider_candidates = _provider_candidates(provider_id, model_id)
+    provider_candidates = _provider_candidates(provider_id, model_id, config=config)
 
     for normalized_provider in provider_candidates:
         exact_matches: list[Price] = []
@@ -458,6 +466,7 @@ def resolve_price_resolution(
             model_id,
             config.actual_prices,
             context_tokens=effective_context_tokens,
+            config=config,
         )
         missing_actual_price = actual_price is None
 
@@ -469,6 +478,7 @@ def resolve_price_resolution(
             model_id,
             config.virtual_prices,
             context_tokens=effective_context_tokens,
+            config=config,
         )
         missing_virtual_price = virtual_price is None
 
@@ -537,15 +547,39 @@ def compute_costs(
     )
 
 
-def _provider_candidates(provider_id: str, model_id: str) -> tuple[str, ...]:
+def canonical_provider_key(provider_id: str, config: CostingConfig) -> str:
+    current = normalize_price_key(provider_id)
+    mapping = {alias.alias: alias.provider for alias in config.provider_aliases}
+    seen: set[str] = set()
+    while current in mapping and current not in seen:
+        seen.add(current)
+        current = mapping[current]
+    return current
+
+
+def _provider_candidates(
+    provider_id: str,
+    model_id: str,
+    *,
+    config: CostingConfig | None = None,
+) -> tuple[str, ...]:
     normalized_provider = provider_id.strip().lower()
     if normalized_provider and normalized_provider != "unknown":
-        return (normalize_price_key(provider_id),)
+        raw_key = normalize_price_key(provider_id)
+        candidates: list[str] = []
+        if config is not None:
+            canonical_key = canonical_provider_key(provider_id, config)
+            candidates.append(canonical_key)
+        if raw_key not in candidates:
+            candidates.append(raw_key)
+        return tuple(candidates)
 
     candidates: list[str] = []
     inferred_provider = inferred_provider_from_model(model_id)
     if inferred_provider is not None:
         normalized_inferred = normalize_price_key(inferred_provider)
+        if config is not None:
+            normalized_inferred = canonical_provider_key(normalized_inferred, config)
         if normalized_inferred not in candidates:
             candidates.append(normalized_inferred)
     return tuple(candidates)
