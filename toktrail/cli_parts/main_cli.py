@@ -1625,7 +1625,10 @@ def _print_subscription_usage_report(
     rich_output: bool,
     display_timezone_name: str | None,
     display_utc: bool,
+    now_ms: int | None = None,
 ) -> None:
+    if now_ms is None:
+        now_ms = int(time.time() * 1000)
     if not report.subscriptions:
         if provider_filter:
             typer.echo(f"No subscriptions matched provider {provider_filter}.")
@@ -1705,7 +1708,7 @@ def _print_subscription_usage_report(
             rows.append(
                 {
                     "period": period.period,
-                    "status": period.status,
+                    "status": _format_subscription_status(period.status),
                     "window": _format_subscription_window(
                         period.since_ms,
                         period.until_ms,
@@ -1715,10 +1718,9 @@ def _print_subscription_usage_report(
                         last_since_ms=period.last_since_ms,
                         last_until_ms=period.last_until_ms,
                     ),
-                    "resets": _format_subscription_resets(
+                    "reset": _format_subscription_reset(
                         period,
-                        timezone_name=display_timezone_name,
-                        utc=display_utc,
+                        now_ms=now_ms,
                     ),
                     "limit": _format_cost(period.limit_usd),
                     "used": _format_cost(period.used_usd),
@@ -1746,7 +1748,7 @@ def _print_subscription_usage_report(
             [
                 "period",
                 "status",
-                "resets",
+                "reset",
                 "window",
                 "limit",
                 "used",
@@ -1756,7 +1758,7 @@ def _print_subscription_usage_report(
             {
                 "period": "period",
                 "status": "status",
-                "resets": f"resets ({display_tz_label})",
+                "reset": "reset",
                 "window": f"window ({display_tz_label})",
                 "limit": "limit",
                 "used": "used",
@@ -1765,8 +1767,8 @@ def _print_subscription_usage_report(
             },
             rich_output=rich_output,
             numeric_columns={"limit", "used", "left", "used_pct"},
-            wrap_columns={"resets", "window"},
-            max_widths={"resets": 24, "window": 40},
+            wrap_columns={"window"},
+            max_widths={"reset": 14, "window": 32},
         )
         if deduped_warnings:
             typer.echo("")
@@ -1794,6 +1796,38 @@ def _format_break_even(billing: SubscriptionBillingPeriod) -> str:
     return f"reached ({_format_percent(percent)})"
 
 
+def _format_subscription_window_range(
+    since_ms: int,
+    until_ms: int,
+    *,
+    timezone_name: str | None,
+    utc: bool,
+) -> str:
+    from toktrail.periods import resolve_timezone
+
+    tz = resolve_timezone(timezone_name=timezone_name, utc=utc)
+    since_dt = datetime.datetime.fromtimestamp(since_ms / 1000, tz=tz)
+    until_dt = datetime.datetime.fromtimestamp(until_ms / 1000, tz=tz)
+
+    duration_ms = until_ms - since_ms
+    has_time = duration_ms < 24 * 60 * 60 * 1000 or not (
+        since_dt.hour == since_dt.minute == since_dt.second == since_dt.microsecond == 0
+        and until_dt.hour
+        == until_dt.minute
+        == until_dt.second
+        == until_dt.microsecond
+        == 0
+    )
+    if has_time:
+        since_str = since_dt.strftime("%Y-%m-%d %H:%M")
+        if since_dt.date() == until_dt.date():
+            until_str = until_dt.strftime("%H:%M")
+        else:
+            until_str = until_dt.strftime("%Y-%m-%d %H:%M")
+        return f"{since_str}..{until_str}"
+    return f"{since_dt.date().isoformat()}..{until_dt.date().isoformat()}"
+
+
 def _format_subscription_window(
     since_ms: int | None,
     until_ms: int | None,
@@ -1804,54 +1838,27 @@ def _format_subscription_window(
     last_since_ms: int | None = None,
     last_until_ms: int | None = None,
 ) -> str:
-    from toktrail.periods import resolve_timezone
-
-    tz = resolve_timezone(timezone_name=timezone_name, utc=utc)
 
     if since_ms is None or until_ms is None:
         if status == "waiting_for_first_use":
             return "starts on first use"
         if status == "expired_waiting_for_next_use":
             if last_since_ms is not None and last_until_ms is not None:
-                last_since_dt = datetime.datetime.fromtimestamp(
-                    last_since_ms / 1000,
-                    tz=tz,
+                return "last " + _format_subscription_window_range(
+                    last_since_ms,
+                    last_until_ms,
+                    timezone_name=timezone_name,
+                    utc=utc,
                 )
-                last_until_dt = datetime.datetime.fromtimestamp(
-                    last_until_ms / 1000,
-                    tz=tz,
-                )
-                return (
-                    "expired; last "
-                    f"{_format_subscription_dt(last_since_dt, force_time=True)}"
-                    f"..{_format_subscription_dt(last_until_dt, force_time=True)}; "
-                    "next starts on first use"
-                )
-            return "expired; next starts on first use"
-        return "(none)"
+            return "expired"
+        return "-"
 
-    since_dt = datetime.datetime.fromtimestamp(since_ms / 1000, tz=tz)
-    until_dt = datetime.datetime.fromtimestamp(until_ms / 1000, tz=tz)
-
-    duration_ms = until_ms - since_ms
-    force_time = duration_ms < 24 * 60 * 60 * 1000 or not (
-        since_dt.hour == since_dt.minute == since_dt.second == since_dt.microsecond == 0
-        and until_dt.hour
-        == until_dt.minute
-        == until_dt.second
-        == until_dt.microsecond
-        == 0
+    return _format_subscription_window_range(
+        since_ms,
+        until_ms,
+        timezone_name=timezone_name,
+        utc=utc,
     )
-    return (
-        f"{_format_subscription_dt(since_dt, force_time=force_time)}"
-        f"..{_format_subscription_dt(until_dt, force_time=force_time)}"
-    )
-
-
-def _format_subscription_dt(value: datetime.datetime, *, force_time: bool) -> str:
-    if force_time:
-        return value.strftime("%Y-%m-%d %H:%M")
-    return value.date().isoformat()
 
 
 def _display_timezone_label(*, timezone_name: str | None, utc: bool) -> str:
@@ -1863,23 +1870,28 @@ def _display_timezone_label(*, timezone_name: str | None, utc: bool) -> str:
     return getattr(tz, "key", str(tz))
 
 
-def _format_subscription_resets(
+def _format_subscription_reset(
     period: SubscriptionUsagePeriod,
     *,
-    timezone_name: str | None,
-    utc: bool,
+    now_ms: int,
 ) -> str:
-    from toktrail.periods import resolve_timezone
+    from toktrail.formatting import format_duration_seconds
 
     if period.until_ms is not None:
-        tz = resolve_timezone(timezone_name=timezone_name, utc=utc)
-        dt = datetime.datetime.fromtimestamp(period.until_ms / 1000, tz=tz)
-        return dt.strftime("%Y-%m-%d %H:%M")
+        seconds = max(0, (period.until_ms - now_ms) // 1000)
+        return f"in {format_duration_seconds(seconds)}"
     if period.status == "waiting_for_first_use":
         return "on first use"
     if period.status == "expired_waiting_for_next_use":
         return "on next use"
     return "-"
+
+
+def _format_subscription_status(status: str) -> str:
+    return {
+        "waiting_for_first_use": "waiting",
+        "expired_waiting_for_next_use": "expired",
+    }.get(status, status)
 
 
 @config_app.command("path")

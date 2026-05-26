@@ -570,7 +570,7 @@ reset_at = "2026-05-01T00:00:00+08:00"
     assert result.exit_code == 0, result.output
     assert "first_use @" not in result.output
     assert "reset_at" not in result.output
-    assert "resets (Europe/Berlin)" in result.output
+    assert "reset" in result.output
 
 
 def test_cli_subscriptions_display_timezone_converts_first_use_window(tmp_path) -> None:
@@ -652,8 +652,7 @@ reset_at = "2026-05-01T00:00:00+08:00"
     assert result.exit_code == 0, result.output
     assert "Display timezone: Europe/Berlin" in result.output
     assert "plan timezone: Asia/Singapore" in result.output
-    assert "2026-05-05 17:37" in result.output
-    assert "2026-05-05 22:37" in result.output
+    assert "2026-05-05 17:37..22:37" in result.output
     assert "2026-05-05 23:37" not in result.output
 
 
@@ -728,3 +727,134 @@ def test_cli_subscriptions_unknown_provider_filter_is_clear(tmp_path) -> None:
 
     assert result.exit_code == 0, result.output
     assert "No subscriptions matched provider unknown-provider." in result.output
+
+
+def test_cli_subscriptions_active_window_shows_reset_countdown(tmp_path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    config_path = tmp_path / "toktrail.toml"
+    # Fixed 5h window: 08:00..13:00 UTC on 2026-05-03
+    # now = 10:41 UTC => resets in 2h 19m
+    config_path.write_text(
+        """
+config_version = 1
+
+[[subscriptions]]
+id = "test-plan"
+usage_providers = ["zai"]
+display_name = "Test Plan"
+timezone = "UTC"
+quota_cost_basis = "source"
+
+[[subscriptions.windows]]
+period = "5h"
+limit_usd = 10
+reset_mode = "fixed"
+reset_at = "2026-05-03T08:00:00+00:00"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    now_ms = _ms("2026-05-03T10:41:00+00:00")
+    result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "--config",
+            str(config_path),
+            "subscriptions",
+            "--timezone",
+            "UTC",
+            "--now-ms",
+            str(now_ms),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "in 2h 19m" in result.output
+    assert "reset" in result.output
+
+
+def test_cli_subscriptions_expired_first_use_window_is_short(tmp_path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    config_path = tmp_path / "toktrail.toml"
+    # First-use window that has expired. Insert usage to create an expired window.
+    config_path.write_text(
+        """
+config_version = 1
+
+[[subscriptions]]
+id = "test-plan"
+usage_providers = ["zai"]
+display_name = "Test Plan"
+timezone = "UTC"
+quota_cost_basis = "source"
+
+[[subscriptions.windows]]
+period = "5h"
+limit_usd = 10
+reset_mode = "first_use"
+reset_at = "2026-05-01T00:00:00+00:00"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    conn = connect(state_db)
+    try:
+        insert_usage_events(
+            conn,
+            None,
+            [
+                UsageEvent(
+                    harness="opencode",
+                    source_session_id="ses-zai",
+                    source_row_id="row-zai",
+                    source_message_id="msg-zai",
+                    source_dedup_key="dedup-zai",
+                    global_dedup_key="global-zai",
+                    fingerprint_hash="fp-zai",
+                    provider_id="zai",
+                    model_id="test-model",
+                    thinking_level=None,
+                    agent="build",
+                    created_ms=_ms("2026-05-03T08:30:00+00:00"),
+                    completed_ms=_ms("2026-05-03T08:30:01+00:00"),
+                    tokens=TokenBreakdown(input=100_000, output=10_000),
+                    source_cost_usd=Decimal("0"),
+                    raw_json=None,
+                )
+            ],
+        )
+    finally:
+        conn.close()
+
+    # now is well after the window expired
+    now_ms = _ms("2026-05-03T16:00:00+00:00")
+    result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "--config",
+            str(config_path),
+            "subscriptions",
+            "--timezone",
+            "UTC",
+            "--now-ms",
+            str(now_ms),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    # Should show short human status, not the long internal name
+    assert "expired_waiting_for_next_use" not in result.output
+    # Should not show the old long window text
+    assert "expired; last" not in result.output
+    assert "next starts on first use" not in result.output
+    # Should show shortened labels
+    assert "expired" in result.output
+    assert "on next use" in result.output

@@ -82,4 +82,5 @@ def subscriptions_status_impl(
         rich_output=rich_output,
         display_timezone_name=timezone_name,
         display_utc=utc,
+        now_ms=now_ms,
     )

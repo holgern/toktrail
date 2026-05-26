@@ -102,7 +102,7 @@ async def test_subscriptions_compact_uses_reduced_columns(tmp_path) -> None:
         await pilot.pause()
         table = app.query_one("#subscriptions-table")
         labels = [str(column.label) for column in table.ordered_columns]
-        assert labels == ["Plan", "Period", "Status", "Used", "Left", "Tokens"]
+    assert labels == ["Plan", "Period", "Status", "Used", "Left", "Reset"]
 
 
 async def test_subscriptions_micro_uses_reduced_columns(tmp_path) -> None:
@@ -125,6 +125,7 @@ async def test_subscriptions_detail_shows_subscription_info(tmp_path) -> None:
         assert "OpenCode Go" in text
         assert "opencode-go" in text
         assert "Quota basis" in text
+        assert "Resets in:" in text
 
 
 async def test_subscriptions_tab_click(tmp_path) -> None:

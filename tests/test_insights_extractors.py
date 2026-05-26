@@ -87,10 +87,7 @@ class TestInsightSessionMeta:
         s_with_preview = InsightSessionMeta(
             **{**s.as_dict(), "first_prompt_preview": "hello world"},
         )
-        # Note: can't directly construct with as_dict output since types differ
-        # Just test the field is present
-        s2 = _make_session()
-        assert s2.first_prompt_preview is None
+        assert s_with_preview.first_prompt_preview == "hello world"
 
 
 class TestAggregateSessions:

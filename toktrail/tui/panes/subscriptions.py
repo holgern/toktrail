@@ -1,6 +1,7 @@
 # mypy: ignore-errors
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from decimal import Decimal
 
@@ -14,7 +15,7 @@ from toktrail.api.models import (
     SubscriptionUsageRow,
 )
 from toktrail.cli_parts.formatting import _format_cost, _format_int, _format_percent
-from toktrail.formatting import format_epoch_ms_compact
+from toktrail.formatting import format_duration_seconds, format_epoch_ms_compact
 from toktrail.tui.layout import TuiDisplay, resolve_tui_display
 from toktrail.tui.panes.exportable import ExportablePaneMixin
 from toktrail.tui.services import SubscriptionsData
@@ -34,10 +35,22 @@ def _format_left(period: SubscriptionUsagePeriod) -> str:
     return left
 
 
-def _format_reset(period: SubscriptionUsagePeriod) -> str:
-    if period.until_ms is None:
-        return "-"
-    return format_epoch_ms_compact(period.until_ms)
+def _format_reset(period: SubscriptionUsagePeriod, *, now_ms: int) -> str:
+    if period.until_ms is not None:
+        seconds = max(0, (period.until_ms - now_ms) // 1000)
+        return f"in {format_duration_seconds(seconds)}"
+    if period.status == "waiting_for_first_use":
+        return "on first use"
+    if period.status == "expired_waiting_for_next_use":
+        return "on next use"
+    return "-"
+
+
+def _format_status(status: str) -> str:
+    return {
+        "waiting_for_first_use": "waiting",
+        "expired_waiting_for_next_use": "expired",
+    }.get(status, status)
 
 
 def _format_break_even(billing: SubscriptionBillingPeriod) -> str:
@@ -83,6 +96,7 @@ class SubscriptionsPane(ExportablePaneMixin, Vertical):
             None if self.selected_window is None else self.selected_window.key
         )
         first_key: str | None = None
+        now_ms = int(time.time() * 1000)
 
         for subscription in data.subscriptions:
             for index, period in enumerate(subscription.periods):
@@ -91,7 +105,7 @@ class SubscriptionsPane(ExportablePaneMixin, Vertical):
                 self._rows_by_key[key] = view
                 if first_key is None:
                     first_key = key
-                self._add_table_row(table, view)
+                self._add_table_row(table, view, now_ms=now_ms)
 
         selected_key = previous_key if previous_key in self._rows_by_key else first_key
         if selected_key is None:
@@ -100,9 +114,9 @@ class SubscriptionsPane(ExportablePaneMixin, Vertical):
         else:
             self.selected_window = self._rows_by_key[selected_key]
             table.move_cursor(row=table.get_row_index(selected_key), column=0)
-            self._update_detail(self.selected_window)
+            self._update_detail(self.selected_window, now_ms=now_ms)
 
-        self.export_text = self._build_export_text(data)
+        self.export_text = self._build_export_text(data, now_ms=now_ms)
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
         if event.data_table.id != "subscriptions-table":
@@ -112,7 +126,8 @@ class SubscriptionsPane(ExportablePaneMixin, Vertical):
         if view is None:
             return
         self.selected_window = view
-        self._update_detail(view)
+        now_ms = int(time.time() * 1000)
+        self._update_detail(view, now_ms=now_ms)
 
     def _configure_columns(self, table: DataTable) -> None:
         table.clear(columns=True)
@@ -120,7 +135,7 @@ class SubscriptionsPane(ExportablePaneMixin, Vertical):
         if mode == "micro":
             table.add_columns("Plan", "Period", "Used", "Left")
         elif mode == "compact":
-            table.add_columns("Plan", "Period", "Status", "Used", "Left", "Tokens")
+            table.add_columns("Plan", "Period", "Status", "Used", "Left", "Reset")
         else:
             table.add_columns(
                 "Plan",
@@ -136,7 +151,13 @@ class SubscriptionsPane(ExportablePaneMixin, Vertical):
                 "Tokens",
             )
 
-    def _add_table_row(self, table: DataTable, view: _SubscriptionWindowView) -> None:
+    def _add_table_row(
+        self,
+        table: DataTable,
+        view: _SubscriptionWindowView,
+        *,
+        now_ms: int,
+    ) -> None:
         sub = view.subscription
         period = view.period
         plan = sub.display_name
@@ -151,10 +172,10 @@ class SubscriptionsPane(ExportablePaneMixin, Vertical):
             table.add_row(
                 plan,
                 period_label,
-                period.status,
+                _format_status(period.status),
                 used,
                 left,
-                _format_int(period.tokens.total),
+                _format_reset(period, now_ms=now_ms),
                 key=view.key,
             )
         else:
@@ -162,18 +183,18 @@ class SubscriptionsPane(ExportablePaneMixin, Vertical):
                 plan,
                 ",".join(sub.usage_provider_ids),
                 period_label,
-                period.status,
+                _format_status(period.status),
                 used,
                 _format_cost(period.limit_usd),
                 left,
                 _format_percent(period.percent_used),
-                _format_reset(period),
+                _format_reset(period, now_ms=now_ms),
                 _format_int(period.message_count),
                 _format_int(period.tokens.total),
                 key=view.key,
             )
 
-    def _update_detail(self, view: _SubscriptionWindowView) -> None:
+    def _update_detail(self, view: _SubscriptionWindowView, *, now_ms: int) -> None:
         detail = self.query_one("#subscriptions-detail", Static)
         sub = view.subscription
         period = view.period
@@ -182,8 +203,13 @@ class SubscriptionsPane(ExportablePaneMixin, Vertical):
             f"Providers: {', '.join(sub.usage_provider_ids)}",
             f"Quota basis: {sub.quota_cost_basis}",
             f"Timezone: {sub.timezone or '-'}",
-            f"Period: {period.period} ({period.status})",
+            f"Period: {period.period} ({_format_status(period.status)})",
         ]
+        if period.until_ms is not None:
+            seconds = max(0, (period.until_ms - now_ms) // 1000)
+            lines.append(
+                "Resets in: " + format_duration_seconds(seconds, compact=False)
+            )
         if period.since_ms is not None:
             lines.append(f"Window start: {format_epoch_ms_compact(period.since_ms)}")
         if period.until_ms is not None:
@@ -225,7 +251,7 @@ class SubscriptionsPane(ExportablePaneMixin, Vertical):
 
         detail.update("\n".join(lines))
 
-    def _build_export_text(self, data: SubscriptionsData) -> str:
+    def _build_export_text(self, data: SubscriptionsData, *, now_ms: int) -> str:
         lines: list[str] = ["Subscriptions"]
         lines.append(
             "plan\tid\tproviders\tbasis\ttimezone\tperiod\tstatus\tused\tlimit\tleft\tused_pct\tmsgs\ttokens\treset"
@@ -248,7 +274,7 @@ class SubscriptionsPane(ExportablePaneMixin, Vertical):
                             _format_percent(period.percent_used),
                             str(period.message_count),
                             str(period.tokens.total),
-                            _format_reset(period),
+                            _format_reset(period, now_ms=now_ms),
                         ]
                     )
                 )
