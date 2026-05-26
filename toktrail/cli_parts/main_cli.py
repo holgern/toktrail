@@ -43,6 +43,7 @@ from toktrail.api.reports import stats_report as stats_report_api
 from toktrail.api.sessions import list_runs
 from toktrail.api.statusline import statusline_report as statusline_report_api
 from toktrail.cli_parts import analyze as analyze_parts
+from toktrail.cli_parts import insights as insights_parts
 from toktrail.cli_parts import prices as prices_parts
 from toktrail.cli_parts import refresh as refresh_parts
 from toktrail.cli_parts import sources as sources_parts
@@ -158,6 +159,7 @@ analyze_app = typer.Typer(help="Analyze per-call cache and cost behavior.")
 stats_app = typer.Typer(help="Report aggregate usage and session statistics.")
 machine_app = typer.Typer(help="Inspect and configure local machine identity.")
 area_app = typer.Typer(help="Create and manage hierarchical usage areas.")
+insights_cli_app = insights_parts.insights_app
 
 app.add_typer(run_app, name="run")
 app.add_typer(sources_app, name="sources")
@@ -171,6 +173,7 @@ app.add_typer(analyze_app, name="analyze")
 app.add_typer(stats_app, name="stats")
 app.add_typer(machine_app, name="machine")
 app.add_typer(area_app, name="area")
+app.add_typer(insights_cli_app, name="insights")
 app.add_typer(sync_app, name="sync")
 statusline_app.add_typer(statusline_config_app, name="config")
 
@@ -4291,4 +4294,12 @@ register_area_commands(
     load_costing_config_or_exit=_load_costing_config_or_exit,
     load_resolved_toktrail_config_or_exit=_load_resolved_toktrail_config_or_exit,
     resolve_machine_id_or_exit=_resolve_machine_id_or_exit,
+)
+
+insights_parts.configure_insights_runtime(
+    insights_parts.InsightsRuntime(
+        resolve_state_db=_resolve_state_db,
+        resolve_config_path=_resolve_config_path,
+        exit_with_error=_exit_with_error,
+    )
 )
