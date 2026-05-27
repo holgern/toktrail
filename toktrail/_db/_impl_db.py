@@ -24,6 +24,7 @@ from toktrail.config import (
     CostingConfig,
     MachineConfig,
     SubscriptionConfig,
+    SubscriptionScopeConfig,
     SubscriptionWindowConfig,
     default_costing_config,
     normalize_identity,
@@ -61,6 +62,7 @@ from toktrail.reporting import (
     SessionTotals,
     SimulationSummaryRow,
     SubscriptionBillingPeriod,
+    SubscriptionScopeSummary,
     SubscriptionUsagePeriod,
     SubscriptionUsageReport,
     SubscriptionUsageRow,
@@ -4629,7 +4631,9 @@ def summarize_subscription_usage(
 
     request_details: dict[str, dict[str, object]] = {}
     request_items: list[_SubscriptionWindowRequest] = []
-    first_use_cache: dict[tuple[tuple[str, ...], int], list[int]] = {}
+    first_use_cache: dict[
+        tuple[tuple[str, ...], int, tuple[int, ...] | None, bool], list[int]
+    ] = {}
     billing_request_by_subscription: dict[str, str] = {}
     request_counter = 0
 
@@ -4637,6 +4641,7 @@ def summarize_subscription_usage(
         provider_ids = _expanded_subscription_usage_provider_ids(
             subscription, config=config
         )
+        resolved_scope = _resolve_subscription_scope(conn, subscription.scope)
         for window_config in sorted(
             subscription.windows,
             key=lambda item: (_PERIOD_SORT.get(item.period, 99), item.period),
@@ -4665,7 +4670,12 @@ def summarize_subscription_usage(
                     timezone_name=subscription.timezone,
                     now_ms=0,
                 )
-                cache_key = (provider_ids, reset_anchor.since_ms)
+                cache_key = (
+                    provider_ids,
+                    reset_anchor.since_ms,
+                    resolved_scope.area_ids,
+                    resolved_scope.include_unassigned,
+                )
                 usage_timestamps = first_use_cache.get(cache_key)
                 if usage_timestamps is None:
                     usage_timestamps = _provider_usage_timestamps(
@@ -4673,6 +4683,8 @@ def summarize_subscription_usage(
                         provider_ids=provider_ids,
                         since_ms=reset_anchor.since_ms,
                         until_ms=generated_at_ms,
+                        area_ids=resolved_scope.area_ids,
+                        include_unassigned=resolved_scope.include_unassigned,
                     )
                     first_use_cache[cache_key] = usage_timestamps
                 first_use_window = resolve_first_use_subscription_window(
@@ -4704,6 +4716,7 @@ def summarize_subscription_usage(
                 "last_usage_ms": last_usage_ms,
                 "basis": subscription.quota_cost_basis,
                 "provider_ids": provider_ids,
+                "scope": resolved_scope,
             }
             if since_ms is not None and until_ms is not None:
                 request_items.append(
@@ -4716,6 +4729,8 @@ def summarize_subscription_usage(
                         since_ms=since_ms,
                         until_ms=until_ms,
                         quota_cost_basis=subscription.quota_cost_basis,
+                        area_ids=resolved_scope.area_ids,
+                        include_unassigned=resolved_scope.include_unassigned,
                     )
                 )
 
@@ -4754,6 +4769,7 @@ def summarize_subscription_usage(
                 "basis": billing_basis,
                 "provider_ids": provider_ids,
                 "fixed_cost_usd": subscription.fixed_cost_usd,
+                "scope": resolved_scope,
             }
             billing_request_by_subscription[subscription.id] = request_id
             request_items.append(
@@ -4766,6 +4782,8 @@ def summarize_subscription_usage(
                     since_ms=billing_window.since_ms,
                     until_ms=billing_window.until_ms,
                     quota_cost_basis=billing_basis,
+                    area_ids=resolved_scope.area_ids,
+                    include_unassigned=resolved_scope.include_unassigned,
                 )
             )
 
@@ -4780,6 +4798,7 @@ def summarize_subscription_usage(
         provider_ids = _expanded_subscription_usage_provider_ids(
             subscription, config=config
         )
+        resolved_scope = _resolve_subscription_scope(conn, subscription.scope)
         periods: list[SubscriptionUsagePeriod] = []
         for request_id, detail in sorted(request_details.items()):
             if (
@@ -4880,12 +4899,63 @@ def summarize_subscription_usage(
                 usage_provider_ids=provider_ids,
                 quota_cost_basis=subscription.quota_cost_basis,
                 periods=tuple(periods),
+                scope=SubscriptionScopeSummary(
+                    areas=subscription.scope.areas,
+                    include_descendants=subscription.scope.include_descendants,
+                    include_unassigned=subscription.scope.include_unassigned,
+                    label=resolved_scope.label,
+                ),
                 billing=billing,
             )
         )
 
     return SubscriptionUsageReport(
         generated_at_ms=generated_at_ms, subscriptions=tuple(rows)
+    )
+
+
+@dataclass(frozen=True)
+class _ResolvedSubscriptionScope:
+    area_ids: tuple[int, ...] | None
+    include_unassigned: bool
+    label: str
+
+    @property
+    def include_all_areas(self) -> bool:
+        return self.area_ids is None
+
+
+def _resolve_subscription_scope(
+    conn: sqlite3.Connection,
+    scope: SubscriptionScopeConfig,
+) -> _ResolvedSubscriptionScope:
+    if not scope.areas and scope.include_unassigned:
+        return _ResolvedSubscriptionScope(
+            area_ids=None,
+            include_unassigned=True,
+            label="all areas",
+        )
+
+    area_ids: set[int] = set()
+    for selector in scope.areas:
+        selection = resolve_area_filter_selection(
+            conn,
+            selector,
+            include_descendants=scope.include_descendants,
+            mode="auto",
+        )
+        area_ids.update(selection.area_ids)
+
+    parts: list[str] = []
+    if scope.areas:
+        suffix = "/*" if scope.include_descendants else ""
+        parts.append(",".join(f"{area}{suffix}" for area in scope.areas))
+    if scope.include_unassigned:
+        parts.append("unassigned")
+    return _ResolvedSubscriptionScope(
+        area_ids=tuple(sorted(area_ids)),
+        include_unassigned=scope.include_unassigned,
+        label=" + ".join(parts) if parts else "none",
     )
 
 
@@ -4946,10 +5016,27 @@ def _provider_usage_timestamps(
     provider_ids: tuple[str, ...],
     since_ms: int,
     until_ms: int,
+    area_ids: tuple[int, ...] | None = None,
+    include_unassigned: bool = True,
 ) -> list[int]:
     if not provider_ids:
         return []
     placeholders = ", ".join("?" for _ in provider_ids)
+    area_clause = ""
+    params: list[object] = [*provider_ids, since_ms, until_ms]
+    if area_ids is None:
+        area_clause = ""
+    elif area_ids:
+        area_placeholders = ", ".join("?" for _ in area_ids)
+        if include_unassigned:
+            area_clause = f" AND (area_id IN ({area_placeholders}) OR area_id IS NULL)"
+        else:
+            area_clause = f" AND area_id IN ({area_placeholders})"
+        params.extend(area_ids)
+    elif include_unassigned:
+        area_clause = " AND area_id IS NULL"
+    else:
+        return []
     rows = conn.execute(
         f"""
         SELECT created_ms
@@ -4957,9 +5044,10 @@ def _provider_usage_timestamps(
         WHERE provider_id IN ({placeholders})
           AND created_ms >= ?
           AND created_ms <= ?
+          {area_clause}
         ORDER BY created_ms ASC
         """,
-        (*provider_ids, since_ms, until_ms),
+        tuple(params),
     ).fetchall()
     return [_required_int(row["created_ms"]) for row in rows]
 
@@ -4973,7 +5061,8 @@ def _summarize_window_requests(
     if not requests:
         return {}
 
-    value_rows: list[tuple[str, str, int, int]] = []
+    value_rows: list[tuple[str, str, int, int, int, int]] = []
+    area_rows: list[tuple[str, int]] = []
     for request in requests:
         for provider_id in request.provider_ids:
             value_rows.append(
@@ -4982,20 +5071,38 @@ def _summarize_window_requests(
                     provider_id,
                     request.since_ms,
                     request.until_ms,
+                    1 if request.area_ids is None else 0,
+                    1 if request.include_unassigned else 0,
                 )
             )
+        if request.area_ids:
+            for area_id in request.area_ids:
+                area_rows.append((request.request_id, area_id))
     if not value_rows:
         return {request.request_id: _WindowUsageSummary() for request in requests}
 
-    values_sql = ", ".join("(?, ?, ?, ?)" for _ in value_rows)
+    values_sql = ", ".join("(?, ?, ?, ?, ?, ?)" for _ in value_rows)
+    area_values_sql = ", ".join("(?, ?)" for _ in area_rows)
     params: list[object] = []
     for row in value_rows:
+        params.extend(row)
+    for row in area_rows:
         params.extend(row)
 
     rows = conn.execute(
         f"""
-        WITH win(request_id, provider_id, since_ms, until_ms) AS (
+        WITH win(
+            request_id,
+            provider_id,
+            since_ms,
+            until_ms,
+            include_all_areas,
+            include_unassigned
+        ) AS (
             VALUES {values_sql}
+        ),
+        win_area(request_id, area_id) AS (
+            {"VALUES " + area_values_sql if area_rows else "SELECT NULL, NULL WHERE 0"}
         )
         SELECT
             win.request_id AS request_id,
@@ -5018,6 +5125,15 @@ def _summarize_window_requests(
           ON ue.provider_id = win.provider_id
          AND ue.created_ms >= win.since_ms
          AND ue.created_ms < win.until_ms
+        WHERE
+            win.include_all_areas = 1
+            OR (win.include_unassigned = 1 AND ue.area_id IS NULL)
+            OR EXISTS (
+                SELECT 1
+                FROM win_area AS wa
+                WHERE wa.request_id = win.request_id
+                  AND wa.area_id = ue.area_id
+            )
         GROUP BY
             win.request_id,
             ue.harness,
@@ -6597,6 +6713,8 @@ class _SubscriptionWindowRequest:
     since_ms: int
     until_ms: int
     quota_cost_basis: str
+    area_ids: tuple[int, ...] | None = None
+    include_unassigned: bool = True
 
 
 @dataclass

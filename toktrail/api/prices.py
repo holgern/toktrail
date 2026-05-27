@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from typing import Literal
 
-try:
-    import tomllib  # type: ignore[import-not-found]
-except ModuleNotFoundError:  # pragma: no cover - Python < 3.11
-    import tomli as tomllib  # type: ignore[import-not-found]
+if sys.version_info >= (3, 11):
+    import tomllib
+else:  # pragma: no cover - Python < 3.11
+    import tomli as tomllib
 
 from toktrail import config as config_module
 from toktrail.api._files import atomic_write_text

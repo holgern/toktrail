@@ -388,6 +388,10 @@ def build_statusline_report(
         message_count = 0
         stale_seconds = None
 
+    active_area_path = _active_area_path(db_path)
+    session_area_path = (
+        selected_session.area_path if selected_session is not None else None
+    )
     quota = _select_primary_quota(
         db_path,
         config_path=config_path,
@@ -396,6 +400,7 @@ def build_statusline_report(
         )
         or (selected_session.providers if selected_session is not None else ()),
         now_ms=generated_at_ms,
+        area_path=active_area_path or session_area_path,
     )
     burn = _build_burn(quota=quota, now_ms=generated_at_ms)
     context = _build_context(
@@ -411,8 +416,6 @@ def build_statusline_report(
         source_session_id=source_session_id,
         config_path=config_path,
     )
-    active_area_path = _active_area_path(db_path)
-
     report = StatuslineReport(
         line="",
         generated_at_ms=generated_at_ms,
@@ -431,8 +434,7 @@ def build_statusline_report(
         context=context,
         cache=cache,
         stale_seconds=stale_seconds,
-        area_path=active_area_path
-        or (selected_session.area_path if selected_session is not None else None),
+        area_path=active_area_path or session_area_path,
     )
     return StatuslineReport(
         line=render_statusline(
@@ -550,12 +552,50 @@ def _select_model_row(row: UsageSessionRow | None) -> ModelSummaryRow | None:
     )
 
 
+def _normalize_area_path_text(value: str) -> str | None:
+    raw = value.strip()
+    if not raw:
+        return None
+    parts: list[str] = []
+    for segment in raw.split("/"):
+        normalized = normalize_identity(segment.strip())
+        if not normalized:
+            return None
+        parts.append(normalized)
+    return "/".join(parts)
+
+
+def _scope_matches_area_path(row: SubscriptionUsageRow, area_path: str) -> bool:
+    scope = row.scope
+    if scope is None:
+        return True
+    normalized_area = _normalize_area_path_text(area_path)
+    if normalized_area is None:
+        return False
+    if not scope.areas:
+        return False
+    for selector in scope.areas:
+        normalized_selector = _normalize_area_path_text(selector)
+        if normalized_selector is None:
+            continue
+        if scope.include_descendants:
+            if normalized_area == normalized_selector or normalized_area.startswith(
+                f"{normalized_selector}/"
+            ):
+                return True
+            continue
+        if normalized_area == normalized_selector:
+            return True
+    return False
+
+
 def _select_primary_quota(
     db_path: Path | None,
     *,
     config_path: Path | None,
     providers: tuple[str, ...],
     now_ms: int,
+    area_path: str | None = None,
 ) -> StatuslineQuota | None:
     report = subscription_usage_report(
         db_path,
@@ -566,8 +606,8 @@ def _select_primary_quota(
 
     selected_row: SubscriptionUsageRow | None = None
     selected_period = None
-    selected_key: tuple[int, float, float, float]
-    selected_key = (-1, -1.0, float("-inf"), float("-inf"))
+    selected_key: tuple[int, int, float, float, float]
+    selected_key = (-1, -1, -1.0, float("-inf"), float("-inf"))
     provider_filter = set(providers)
     for row in report.subscriptions:
         if provider_filter and not provider_filter.intersection(row.usage_provider_ids):
@@ -582,7 +622,13 @@ def _select_primary_quota(
                 if period.until_ms is not None
                 else float("-inf")
             )
+            scope_score = (
+                1
+                if area_path is not None and _scope_matches_area_path(row, area_path)
+                else 0
+            )
             key = (
+                scope_score,
                 1 if period.over_limit_usd > 0 else 0,
                 float(period.percent_used),
                 -float(period.remaining_usd),

@@ -10,6 +10,7 @@ import datetime
 from decimal import Decimal
 
 from toktrail.insights.models import (
+    DeterministicSuggestion,
     InsightAggregate,
     InsightAnomaly,
     InsightDelta,
@@ -171,9 +172,7 @@ def _render_anomalies(anomalies: tuple[InsightAnomaly, ...]) -> str:
     return "\n".join(lines)
 
 
-def _render_suggestions(
-    suggestions: tuple[dict[str, object], ...],
-) -> str:
+def _render_suggestions(suggestions: tuple[DeterministicSuggestion, ...]) -> str:
     """Render deterministic suggestions section.
 
     Accepts raw suggestion dicts (before DeterministicSuggestion
@@ -184,11 +183,11 @@ def _render_suggestions(
 
     lines = ["## Deterministic suggestions", ""]
     for i, s in enumerate(suggestions, 1):
-        severity = s.get("severity", "info")
+        severity = s.severity
         icon = {"info": "ℹ️", "warning": "⚠️", "critical": "🔴"}.get(severity, "•")
-        title = s.get("title", "")
-        detail = s.get("detail", "")
-        command = s.get("command")
+        title = s.title
+        detail = s.detail
+        command = s.command
         lines.append(f"{i}. {icon} **{title}**")
         lines.append(f"   {detail}")
         if command:
@@ -311,14 +310,7 @@ def render_insights_markdown(report: InsightsReport) -> str:
 
     # Deterministic suggestions
     if report.suggestions:
-        # Accept both DeterministicSuggestion objects and raw dicts
-        suggestion_dicts = []
-        for s in report.suggestions:
-            if isinstance(s, dict):
-                suggestion_dicts.append(s)
-            else:
-                suggestion_dicts.append(s.as_dict())
-        sections.append(_render_suggestions(tuple(suggestion_dicts)))
+        sections.append(_render_suggestions(report.suggestions))
 
     # Sessions to inspect
     if report.sessions_to_inspect:

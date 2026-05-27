@@ -22,6 +22,7 @@ from toktrail.api.models import (
     StateImportConflict,
     StateImportResult,
     SubscriptionBillingPeriod,
+    SubscriptionScopeSummary,
     SubscriptionUsagePeriod,
     SubscriptionUsageReport,
     SubscriptionUsageRow,
@@ -366,6 +367,16 @@ def _to_public_subscription_row(
         quota_cost_basis=value.quota_cost_basis,
         periods=tuple(
             _to_public_subscription_period(period) for period in value.periods
+        ),
+        scope=(
+            None
+            if value.scope is None
+            else SubscriptionScopeSummary(
+                areas=value.scope.areas,
+                include_descendants=value.scope.include_descendants,
+                include_unassigned=value.scope.include_unassigned,
+                label=value.scope.label,
+            )
         ),
         billing=(
             None

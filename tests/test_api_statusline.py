@@ -7,9 +7,11 @@ from pathlib import Path
 from toktrail.api import statusline_report
 from toktrail.cli import _should_skip_statusline_auto_refresh
 from toktrail.db import (
+    assign_area_to_source_session,
     connect,
     create_tracking_session,
     ensure_area,
+    get_local_machine_id,
     insert_usage_events,
     migrate,
     set_active_area,
@@ -205,6 +207,107 @@ reset_at = "2026-05-01T00:00:00+00:00"
     assert report.quota.period == "5h"
     assert report.quota.remaining_usd == Decimal("2.0")
     assert "5h 90%" in report.line
+
+
+def test_statusline_report_prefers_active_area_scoped_subscription(
+    tmp_path: Path,
+) -> None:
+    state_db = tmp_path / "toktrail.db"
+    config_path = tmp_path / "config.toml"
+    conn = connect(state_db)
+    try:
+        migrate(conn)
+        machine_id = get_local_machine_id(conn)
+        work_area = ensure_area(conn, "work/odoo17")
+        private_area = ensure_area(conn, "private/toktrail")
+        set_active_area(conn, work_area.id)
+        insert_usage_events(
+            conn,
+            None,
+            [
+                make_statusline_event(
+                    "work",
+                    harness="codex",
+                    source_session_id="codex/work",
+                    provider_id="codex",
+                    model_id="gpt-5.3-codex",
+                    created_ms=1777801200000,
+                    source_cost_usd="10",
+                ),
+                make_statusline_event(
+                    "private",
+                    harness="codex",
+                    source_session_id="codex/private",
+                    provider_id="codex",
+                    model_id="gpt-5.3-codex",
+                    created_ms=1777801201000,
+                    source_cost_usd="18",
+                ),
+            ],
+        )
+        assign_area_to_source_session(
+            conn,
+            area_id=work_area.id,
+            origin_machine_id=machine_id,
+            harness="codex",
+            source_session_id="codex/work",
+        )
+        assign_area_to_source_session(
+            conn,
+            area_id=private_area.id,
+            origin_machine_id=machine_id,
+            harness="codex",
+            source_session_id="codex/private",
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    config_path.write_text(
+        """
+config_version = 1
+
+[[subscriptions]]
+id = "codex-work"
+usage_providers = ["codex"]
+timezone = "UTC"
+quota_cost_basis = "source"
+[subscriptions.scope]
+areas = ["work"]
+include_descendants = true
+include_unassigned = false
+[[subscriptions.windows]]
+period = "5h"
+limit_usd = 100
+reset_mode = "fixed"
+reset_at = "2026-05-03T08:00:00+00:00"
+
+[[subscriptions]]
+id = "codex-private"
+usage_providers = ["codex"]
+timezone = "UTC"
+quota_cost_basis = "source"
+[subscriptions.scope]
+areas = ["private"]
+include_descendants = true
+include_unassigned = false
+[[subscriptions.windows]]
+period = "5h"
+limit_usd = 20
+reset_mode = "fixed"
+reset_at = "2026-05-03T08:00:00+00:00"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    report = statusline_report(
+        state_db,
+        harness="codex",
+        config_path=config_path,
+        now_ms=1777802400000,
+    )
+
+    assert report.quota is not None
+    assert report.quota.subscription_id == "codex-work"
 
 
 def test_statusline_report_burn_rate_over_limit(tmp_path: Path) -> None:

@@ -90,9 +90,21 @@ async def test_tui_subscriptions_seeded_shows_plan_data(tmp_path) -> None:
         await pilot.pause()
         export = app._subscriptions.get_export_text()
         assert "Subscriptions" in export
+        assert "plan\tid\tproviders\tscope\tbasis" in export
         assert "OpenCode Go" in export
         assert "opencode-go" in export
+        assert "all areas" in export
         assert "Billing" in export
+
+
+async def test_subscriptions_full_mode_includes_scope_column(tmp_path) -> None:
+    app = _make_seeded_app(tmp_path)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.press("5")
+        await pilot.pause()
+        table = app.query_one("#subscriptions-table")
+        labels = [str(column.label) for column in table.ordered_columns]
+    assert "Scope" in labels
 
 
 async def test_subscriptions_compact_uses_reduced_columns(tmp_path) -> None:

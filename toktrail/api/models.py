@@ -46,6 +46,7 @@ from toktrail.api.model_parts.statusline import (
 )
 from toktrail.api.model_parts.subscriptions import (
     SubscriptionBillingPeriod,
+    SubscriptionScopeSummary,
     SubscriptionUsagePeriod,
     SubscriptionUsageReport,
     SubscriptionUsageRow,
@@ -116,6 +117,7 @@ __all__ = [
     "SessionDigestSummary",
     "SessionToolCallReport",
     "SubscriptionBillingPeriod",
+    "SubscriptionScopeSummary",
     "SubscriptionUsagePeriod",
     "SubscriptionUsageReport",
     "SubscriptionUsageRow",

@@ -14,7 +14,10 @@ from tests.cli.helpers import (
 )
 from toktrail.cli import app
 from toktrail.db import (
+    assign_area_to_source_session,
     connect,
+    ensure_area,
+    get_local_machine_id,
     insert_usage_events,
 )
 from toktrail.models import TokenBreakdown, UsageEvent
@@ -310,6 +313,159 @@ reset_at = "2023-11-01T00:00:00+00:00"
     assert "Plan: Zai Coding Plan (zai-coding-plan)" in result.output
     assert "providers: zai" in result.output
     assert "active" in result.output
+
+
+def test_cli_subscriptions_scoped_duplicate_provider_output_and_json(tmp_path) -> None:
+    runner = CliRunner()
+    state_db = tmp_path / "toktrail.db"
+    config_path = tmp_path / "toktrail.toml"
+    config_path.write_text(
+        """
+config_version = 1
+
+[[subscriptions]]
+id = "codex-work"
+usage_providers = ["codex"]
+display_name = "Codex Work"
+timezone = "UTC"
+quota_cost_basis = "source"
+
+[subscriptions.scope]
+areas = ["work"]
+include_descendants = true
+include_unassigned = false
+
+[[subscriptions.windows]]
+period = "5h"
+limit_usd = 100
+reset_mode = "first_use"
+reset_at = "1970-01-01T00:00:00+00:00"
+
+[[subscriptions]]
+id = "codex-private"
+usage_providers = ["codex"]
+display_name = "Codex Private"
+timezone = "UTC"
+quota_cost_basis = "source"
+
+[subscriptions.scope]
+areas = ["private"]
+include_descendants = true
+include_unassigned = false
+
+[[subscriptions.windows]]
+period = "5h"
+limit_usd = 100
+reset_mode = "first_use"
+reset_at = "1970-01-01T00:00:00+00:00"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    runner.invoke(app, ["--db", str(state_db), "init"])
+    conn = connect(state_db)
+    try:
+        machine_id = get_local_machine_id(conn)
+        work = ensure_area(conn, "work/odoo17")
+        private = ensure_area(conn, "private/toktrail")
+        insert_usage_events(
+            conn,
+            None,
+            [
+                UsageEvent(
+                    harness="codex",
+                    source_session_id="work-ses",
+                    source_row_id="row-work",
+                    source_message_id="msg-work",
+                    source_dedup_key="dedup-work",
+                    global_dedup_key="global-work",
+                    fingerprint_hash="fp-work",
+                    provider_id="codex",
+                    model_id="gpt-5.3-codex",
+                    thinking_level=None,
+                    agent="build",
+                    created_ms=2_000,
+                    completed_ms=2_001,
+                    tokens=TokenBreakdown(input=10, output=2),
+                    source_cost_usd=Decimal("0"),
+                    raw_json=None,
+                ),
+                UsageEvent(
+                    harness="codex",
+                    source_session_id="private-ses",
+                    source_row_id="row-private",
+                    source_message_id="msg-private",
+                    source_dedup_key="dedup-private",
+                    global_dedup_key="global-private",
+                    fingerprint_hash="fp-private",
+                    provider_id="codex",
+                    model_id="gpt-5.3-codex",
+                    thinking_level=None,
+                    agent="build",
+                    created_ms=1_000,
+                    completed_ms=1_001,
+                    tokens=TokenBreakdown(input=9, output=3),
+                    source_cost_usd=Decimal("0"),
+                    raw_json=None,
+                ),
+            ],
+        )
+        assign_area_to_source_session(
+            conn,
+            area_id=work.id,
+            origin_machine_id=machine_id,
+            harness="codex",
+            source_session_id="work-ses",
+        )
+        assign_area_to_source_session(
+            conn,
+            area_id=private.id,
+            origin_machine_id=machine_id,
+            harness="codex",
+            source_session_id="private-ses",
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "--config",
+            str(config_path),
+            "subscriptions",
+            "--no-refresh",
+            "--now-ms",
+            "5000",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "Plan: Codex Work (codex-work)" in result.output
+    assert "scope: work/*" in result.output
+    assert "Plan: Codex Private (codex-private)" in result.output
+    assert "scope: private/*" in result.output
+
+    json_result = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "--config",
+            str(config_path),
+            "subscriptions",
+            "--json",
+            "--no-refresh",
+            "--now-ms",
+            "5000",
+        ],
+    )
+    assert json_result.exit_code == 0, json_result.output
+    payload = json.loads(json_result.output)
+    rows = {row["subscription_id"]: row for row in payload["subscriptions"]}
+    assert rows["codex-work"]["scope"]["areas"] == ["work"]
+    assert rows["codex-private"]["scope"]["areas"] == ["private"]
 
 
 def test_cli_subscriptions_deduplicates_zero_cost_warnings_across_windows(

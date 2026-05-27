@@ -787,6 +787,37 @@ enabled = false
     assert subscription.enabled is True
 
 
+def test_load_costing_config_parses_subscription_scope(tmp_path) -> None:
+    config_path = tmp_path / "toktrail.toml"
+    config_path.write_text(
+        """
+config_version = 1
+
+[[subscriptions]]
+id = "codex-work"
+usage_providers = ["codex"]
+
+[subscriptions.scope]
+areas = ["work"]
+include_descendants = true
+include_unassigned = false
+
+[[subscriptions.windows]]
+period = "weekly"
+limit_usd = 50
+reset_at = "2026-05-01"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    config = load_costing_config(config_path)
+
+    subscription = config.subscriptions[0]
+    assert subscription.scope.areas == ("work",)
+    assert subscription.scope.include_descendants is True
+    assert subscription.scope.include_unassigned is False
+
+
 def test_load_costing_config_subscription_defaults_quota_basis_and_enabled(
     tmp_path,
 ) -> None:
@@ -1082,6 +1113,83 @@ usage_providers = ["zai", "zai-enterprise"]
 [[subscriptions.windows]]
 period = "monthly"
 limit_usd = 200
+reset_at = "2026-05-01"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="overlaps enabled usage provider"):
+        load_costing_config(config_path)
+
+
+def test_load_costing_config_allows_duplicate_provider_with_distinct_scopes(
+    tmp_path,
+) -> None:
+    config_path = tmp_path / "toktrail.toml"
+    config_path.write_text(
+        """
+config_version = 1
+
+[[subscriptions]]
+id = "codex-work"
+usage_providers = ["codex"]
+[subscriptions.scope]
+areas = ["work"]
+include_unassigned = false
+[[subscriptions.windows]]
+period = "weekly"
+limit_usd = 50
+reset_at = "2026-05-01"
+
+[[subscriptions]]
+id = "codex-private"
+usage_providers = ["codex"]
+[subscriptions.scope]
+areas = ["private"]
+include_unassigned = false
+[[subscriptions.windows]]
+period = "weekly"
+limit_usd = 50
+reset_at = "2026-05-01"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    config = load_costing_config(config_path)
+
+    assert len(config.subscriptions) == 2
+    assert config.subscriptions[0].usage_providers == ("codex",)
+    assert config.subscriptions[1].usage_providers == ("codex",)
+
+
+def test_load_costing_config_rejects_duplicate_provider_with_same_scope(
+    tmp_path,
+) -> None:
+    config_path = tmp_path / "toktrail.toml"
+    config_path.write_text(
+        """
+config_version = 1
+
+[[subscriptions]]
+id = "codex-work"
+usage_providers = ["codex"]
+[subscriptions.scope]
+areas = ["work"]
+include_unassigned = false
+[[subscriptions.windows]]
+period = "weekly"
+limit_usd = 50
+reset_at = "2026-05-01"
+
+[[subscriptions]]
+id = "codex-work-2"
+usage_providers = ["codex"]
+[subscriptions.scope]
+areas = ["work"]
+include_unassigned = false
+[[subscriptions.windows]]
+period = "weekly"
+limit_usd = 50
 reset_at = "2026-05-01"
 """.strip(),
         encoding="utf-8",

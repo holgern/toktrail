@@ -82,6 +82,7 @@ def test_root_api_exports_documented_models_and_functions() -> None:
         "StateImportResult",
         "SessionCacheAnalysisReport",
         "SubscriptionBillingPeriod",
+        "SubscriptionScopeSummary",
         "SubscriptionUsagePeriod",
         "SubscriptionUsageRow",
         "SubscriptionUsageReport",

@@ -1061,6 +1061,22 @@ class StatuslineReport:
 
 
 @dataclass(frozen=True)
+class SubscriptionScopeSummary:
+    areas: tuple[str, ...] = ()
+    include_descendants: bool = True
+    include_unassigned: bool = True
+    label: str = "all areas"
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "areas": list(self.areas),
+            "include_descendants": self.include_descendants,
+            "include_unassigned": self.include_unassigned,
+            "label": self.label,
+        }
+
+
+@dataclass(frozen=True)
 class SubscriptionUsageRow:
     subscription_id: str
     display_name: str
@@ -1068,6 +1084,7 @@ class SubscriptionUsageRow:
     usage_provider_ids: tuple[str, ...]
     quota_cost_basis: str
     periods: tuple[SubscriptionUsagePeriod, ...]
+    scope: SubscriptionScopeSummary | None = None
     billing: SubscriptionBillingPeriod | None = None
 
     def as_dict(self) -> dict[str, object]:
@@ -1079,6 +1096,8 @@ class SubscriptionUsageRow:
             "quota_cost_basis": self.quota_cost_basis,
             "periods": [period.as_dict() for period in self.periods],
         }
+        if self.scope is not None:
+            payload["scope"] = self.scope.as_dict()
         if self.billing is not None:
             payload["billing"] = self.billing.as_dict()
         return payload

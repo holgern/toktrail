@@ -192,6 +192,7 @@ _SUBSCRIPTION_FIELDS = {
     "display_name",
     "timezone",
     "usage_providers",
+    "scope",
     "quota_cost_basis",
     "fixed_cost_usd",
     "fixed_cost_period",
@@ -206,6 +207,11 @@ _SUBSCRIPTION_WINDOW_FIELDS = {
     "reset_mode",
     "reset_at",
     "enabled",
+}
+_SUBSCRIPTION_SCOPE_FIELDS = {
+    "areas",
+    "include_descendants",
+    "include_unassigned",
 }
 _ROOT_FIELDS = {
     "config_version",
@@ -879,6 +885,17 @@ class SubscriptionWindowConfig:
 
 
 @dataclass(frozen=True)
+class SubscriptionScopeConfig:
+    areas: tuple[str, ...] = ()
+    include_descendants: bool = True
+    include_unassigned: bool = False
+
+    @property
+    def is_unscoped(self) -> bool:
+        return not self.areas and self.include_unassigned
+
+
+@dataclass(frozen=True)
 class SubscriptionConfig:
     id: str
     usage_providers: tuple[str, ...]
@@ -890,6 +907,9 @@ class SubscriptionConfig:
     fixed_cost_reset_at: str | None = None
     fixed_cost_basis: SubscriptionCostBasis | None = None
     windows: tuple[SubscriptionWindowConfig, ...] = ()
+    scope: SubscriptionScopeConfig = field(
+        default_factory=lambda: SubscriptionScopeConfig(include_unassigned=True)
+    )
     enabled: bool = True
 
     @property
@@ -2104,6 +2124,75 @@ def summarize_costing_config(config: CostingConfig) -> CostingConfigSummary:
     )
 
 
+def _normalize_subscription_scope_area(value: str, *, context: str) -> str:
+    raw = value.strip()
+    if not raw:
+        msg = f"{context} must not be empty."
+        raise ValueError(msg)
+    normalized_segments: list[str] = []
+    for index, segment in enumerate(raw.split("/"), start=1):
+        part = segment.strip()
+        if not part:
+            msg = f"{context} contains an empty segment at position {index}."
+            raise ValueError(msg)
+        if part in {".", ".."}:
+            msg = f"{context} contains invalid segment {part!r}."
+            raise ValueError(msg)
+        normalized_segments.append(normalize_identity(part))
+    return "/".join(normalized_segments)
+
+
+def _subscription_scope_key(
+    scope: SubscriptionScopeConfig,
+) -> tuple[tuple[str, ...], bool, bool]:
+    return (
+        tuple(
+            _normalize_subscription_scope_area(
+                area,
+                context="subscriptions.scope.areas",
+            )
+            for area in scope.areas
+        ),
+        scope.include_descendants,
+        scope.include_unassigned,
+    )
+
+
+def _parse_subscription_scope(
+    value: object,
+    *,
+    context: str,
+) -> SubscriptionScopeConfig:
+    if value is None:
+        return SubscriptionScopeConfig(include_unassigned=True)
+    table = _parse_optional_table(value, context=context)
+    _validate_allowed_keys(table, _SUBSCRIPTION_SCOPE_FIELDS, context=context)
+    raw_areas = _parse_string_sequence(table.get("areas"), context=f"{context}.areas")
+    areas = tuple(
+        _normalize_subscription_scope_area(area, context=f"{context}.areas[{index}]")
+        for index, area in enumerate(raw_areas, start=1)
+    )
+    include_descendants = _parse_bool(
+        table.get("include_descendants", True),
+        context=f"{context}.include_descendants",
+    )
+    include_unassigned = _parse_bool(
+        table.get("include_unassigned", False),
+        context=f"{context}.include_unassigned",
+    )
+    if not areas and not include_unassigned:
+        msg = (
+            f"{context} must include at least one area or set "
+            "include_unassigned = true."
+        )
+        raise ValueError(msg)
+    return SubscriptionScopeConfig(
+        areas=areas,
+        include_descendants=include_descendants,
+        include_unassigned=include_unassigned,
+    )
+
+
 def _parse_subscriptions(value: object) -> tuple[SubscriptionConfig, ...]:
     if value is None:
         return ()
@@ -2113,7 +2202,9 @@ def _parse_subscriptions(value: object) -> tuple[SubscriptionConfig, ...]:
 
     subscriptions: list[SubscriptionConfig] = []
     enabled_subscription_ids: set[str] = set()
-    enabled_usage_provider_owner: dict[str, str] = {}
+    enabled_usage_provider_scopes: dict[
+        str, list[tuple[str, tuple[tuple[str, ...], bool, bool]]]
+    ] = {}
     for index, raw_subscription in enumerate(value, start=1):
         if not isinstance(raw_subscription, dict):
             msg = f"subscriptions[{index}] must be a TOML table."
@@ -2131,6 +2222,10 @@ def _parse_subscriptions(value: object) -> tuple[SubscriptionConfig, ...]:
         usage_providers = _parse_required_identity_list(
             raw_subscription.get("usage_providers"),
             context=f"subscriptions[{index}].usage_providers",
+        )
+        scope = _parse_subscription_scope(
+            raw_subscription.get("scope"),
+            context=f"subscriptions[{index}].scope",
         )
         display_name = _parse_optional_string(
             raw_subscription.get("display_name"),
@@ -2214,16 +2309,23 @@ def _parse_subscriptions(value: object) -> tuple[SubscriptionConfig, ...]:
             raise ValueError(msg)
         if enabled:
             enabled_subscription_ids.add(subscription_id)
+            scope_key = _subscription_scope_key(scope)
             for usage_provider in usage_providers:
-                existing_owner = enabled_usage_provider_owner.get(usage_provider)
-                if existing_owner is not None and existing_owner != subscription_id:
-                    msg = (
-                        f"subscriptions[{index}].usage_providers overlaps enabled "
-                        f"usage provider {usage_provider!r} already owned by "
-                        f"subscription {existing_owner!r}."
+                existing_entries = enabled_usage_provider_scopes.get(usage_provider, [])
+                for existing_owner, existing_scope_key in existing_entries:
+                    either_unscoped = scope.is_unscoped or (
+                        not existing_scope_key[0] and existing_scope_key[2]
                     )
-                    raise ValueError(msg)
-                enabled_usage_provider_owner[usage_provider] = subscription_id
+                    same_scope = existing_scope_key == scope_key
+                    if either_unscoped or same_scope:
+                        msg = (
+                            f"subscriptions[{index}].usage_providers overlaps enabled "
+                            f"usage provider {usage_provider!r} already owned by "
+                            f"subscription {existing_owner!r}."
+                        )
+                        raise ValueError(msg)
+                existing_entries.append((subscription_id, scope_key))
+                enabled_usage_provider_scopes[usage_provider] = existing_entries
 
         subscriptions.append(
             SubscriptionConfig(
@@ -2237,6 +2339,7 @@ def _parse_subscriptions(value: object) -> tuple[SubscriptionConfig, ...]:
                 fixed_cost_reset_at=fixed_cost_reset_at,
                 fixed_cost_basis=fixed_cost_basis,
                 windows=windows,
+                scope=scope,
                 enabled=enabled,
             )
         )

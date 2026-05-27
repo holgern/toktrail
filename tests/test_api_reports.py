@@ -445,6 +445,7 @@ reset_at = "2023-11-01T00:00:00+00:00"
     assert subscriptions[0]["subscription_id"] == "anthropic-pro-plan"
     assert subscriptions[0]["usage_provider_ids"] == ["anthropic"]
     assert subscriptions[0]["quota_cost_basis"] == "source"
+    assert subscriptions[0]["scope"]["label"] == "all areas"
     assert periods[0]["period"] == "5h"
     assert periods[0]["status"] in {"waiting_for_first_use", "active"}
     assert periods[0]["reset_mode"] == "first_use"
@@ -452,6 +453,86 @@ reset_at = "2023-11-01T00:00:00+00:00"
     assert "since_ms" in periods[0]
     assert "until_ms" in periods[0]
     assert "billing" in subscriptions[0]
+
+
+def test_subscription_usage_report_scopes_duplicate_provider_by_area(
+    tmp_path: Path,
+) -> None:
+    state_db = tmp_path / "toktrail.db"
+    config_path = tmp_path / "config.toml"
+    _seed_area_events(
+        state_db,
+        [
+            (
+                "private/toktrail",
+                "private-ses",
+                1_000,
+                TokenBreakdown(input=8, output=2),
+            ),
+            ("work/odoo17", "work-ses", 2_000, TokenBreakdown(input=5, output=1)),
+        ],
+    )
+    config_path.write_text(
+        """
+config_version = 1
+
+[[subscriptions]]
+id = "anthropic-work"
+usage_providers = ["anthropic"]
+timezone = "UTC"
+quota_cost_basis = "source"
+
+[subscriptions.scope]
+areas = ["work"]
+include_descendants = true
+include_unassigned = false
+
+[[subscriptions.windows]]
+period = "5h"
+limit_usd = 100
+reset_mode = "first_use"
+reset_at = "1970-01-01T00:00:00+00:00"
+
+[[subscriptions]]
+id = "anthropic-private"
+usage_providers = ["anthropic"]
+timezone = "UTC"
+quota_cost_basis = "source"
+
+[subscriptions.scope]
+areas = ["private"]
+include_descendants = true
+include_unassigned = false
+
+[[subscriptions.windows]]
+period = "5h"
+limit_usd = 100
+reset_mode = "first_use"
+reset_at = "1970-01-01T00:00:00+00:00"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    report = subscription_usage_report(state_db, config_path=config_path, now_ms=5_000)
+    rows = {row.subscription_id: row for row in report.subscriptions}
+
+    work = rows["anthropic-work"]
+    private = rows["anthropic-private"]
+    assert work.scope is not None
+    assert work.scope.areas == ("work",)
+    assert work.scope.label == "work/*"
+    assert private.scope is not None
+    assert private.scope.areas == ("private",)
+    assert private.scope.label == "private/*"
+    assert work.periods[0].message_count == 1
+    assert private.periods[0].message_count == 1
+    assert work.periods[0].since_ms == 2_000
+    assert private.periods[0].since_ms == 1_000
+
+    payload = report.as_dict()
+    payload_rows = {row["subscription_id"]: row for row in payload["subscriptions"]}
+    assert payload_rows["anthropic-work"]["scope"]["areas"] == ["work"]
+    assert payload_rows["anthropic-private"]["scope"]["areas"] == ["private"]
 
 
 def test_session_report_bounds_to_run_lifetime(tmp_path: Path) -> None:

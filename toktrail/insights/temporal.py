@@ -159,9 +159,9 @@ def detect_anomalies(
     costs = sorted(s.virtual_cost for s in sessions if s.virtual_cost > 0)
     if len(costs) >= 3:
         median_cost = costs[len(costs) // 2]
-        threshold = median_cost * Decimal(str(_COST_OUTLIER_MULTIPLIER))
+        cost_threshold = median_cost * Decimal(str(_COST_OUTLIER_MULTIPLIER))
         for s in sessions:
-            if s.virtual_cost > threshold:
+            if s.virtual_cost > cost_threshold:
                 anomalies.append(
                     InsightAnomaly(
                         kind="cost",
@@ -169,7 +169,7 @@ def detect_anomalies(
                         session_key=f"{s.harness}/{s.source_session_id}",
                         message=(
                             f"Session cost (${s.virtual_cost:.2f}) exceeds "
-                            f"3x median (${threshold:.2f})"
+                            f"3x median (${cost_threshold:.2f})"
                         ),
                         value=s.virtual_cost,
                         baseline=median_cost,
@@ -180,12 +180,12 @@ def detect_anomalies(
     failures = sorted(s.tool_failure_count for s in sessions)
     if failures and failures[-1] >= _FAILURE_MINIMUM:
         median_failures = failures[len(failures) // 2]
-        threshold = max(
+        failure_threshold = max(
             int(median_failures * _FAILURE_OUTLIER_MULTIPLIER),
             _FAILURE_MINIMUM,
         )
         for s in sessions:
-            if s.tool_failure_count >= threshold:
+            if s.tool_failure_count >= failure_threshold:
                 anomalies.append(
                     InsightAnomaly(
                         kind="errors",
@@ -193,7 +193,7 @@ def detect_anomalies(
                         session_key=f"{s.harness}/{s.source_session_id}",
                         message=(
                             f"Session has {s.tool_failure_count} tool failures "
-                            f"(threshold: {threshold})"
+                            f"(threshold: {failure_threshold})"
                         ),
                         value=s.tool_failure_count,
                         baseline=median_failures,
@@ -207,7 +207,7 @@ def detect_anomalies(
             anomalies.append(
                 InsightAnomaly(
                     kind="unpriced",
-                    severity="warning",
+                    severity="medium",
                     session_key=f"{s.harness}/{s.source_session_id}",
                     message=(
                         f"Top-cost session has {s.unpriced_count} unpriced model calls"

@@ -138,6 +138,11 @@ Provider aliases are defined under ``[costing]`` so a separate
    fixed_cost_reset_at = "2026-05-01T00:00:00+02:00"
    fixed_cost_basis = "virtual"
 
+   [subscriptions.scope]
+   areas = ["work"]
+   include_descendants = true
+   include_unassigned = false
+
    [[subscriptions.windows]]
    period = "5h"
    limit_usd = 10
@@ -160,6 +165,14 @@ Provider aliases are defined under ``[costing]`` so a separate
 ``usage_providers`` coverage. They are not stored in the state database. Use
 ``toktrail subscriptions`` to inspect current windows, used cost, and remaining
 quota per configured subscription.
+
+``subscriptions.scope`` is optional. When omitted, the subscription matches all
+usage for its configured providers (including unassigned usage), preserving the
+legacy behavior.
+
+Use scoped subscriptions to split multiple accounts for the same provider by
+area path (for example ``work`` and ``private``). Scoped subscriptions match
+``scope.areas`` and, by default, descendants.
 
 ``subscriptions.timezone`` defines the quota/billing reset schedule timezone.
 CLI output renders windows in local timezone by default; use

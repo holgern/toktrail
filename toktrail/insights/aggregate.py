@@ -7,6 +7,7 @@ covers, including period-aware grouping for temporal comparison.
 from __future__ import annotations
 
 from collections import defaultdict
+from decimal import Decimal
 
 from toktrail.insights.models import (
     InsightAggregate,
@@ -78,9 +79,9 @@ def compute_group_row(
         cache_read_tokens=sum(s.cache_read_tokens for s in sessions),
         cache_write_tokens=sum(s.cache_write_tokens for s in sessions),
         cache_output_tokens=sum(s.cache_output_tokens for s in sessions),
-        actual_cost=sum(s.actual_cost for s in sessions),
-        virtual_cost=sum(s.virtual_cost for s in sessions),
-        source_cost=sum(s.source_cost for s in sessions),
+        actual_cost=sum((s.actual_cost for s in sessions), Decimal(0)),
+        virtual_cost=sum((s.virtual_cost for s in sessions), Decimal(0)),
+        source_cost=sum((s.source_cost for s in sessions), Decimal(0)),
         unpriced_count=sum(s.unpriced_count for s in sessions),
         tool_call_count=sum(s.tool_call_count for s in sessions),
         tool_failure_count=sum(s.tool_failure_count for s in sessions),

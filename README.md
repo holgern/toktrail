@@ -525,6 +525,29 @@ vibe = "~/.vibe/logs/session"
 
 `[[subscriptions]]` rows live in `subscriptions.toml`.
 
+Area-scoped subscriptions let you split the same provider across work/private
+plans:
+
+```toml
+[[subscriptions]]
+id = "codex-work"
+usage_providers = ["codex"]
+
+[subscriptions.scope]
+areas = ["work"]
+include_descendants = true
+include_unassigned = false
+
+[[subscriptions]]
+id = "codex-private"
+usage_providers = ["codex"]
+
+[subscriptions.scope]
+areas = ["private"]
+include_descendants = true
+include_unassigned = false
+```
+
 Manual pricing rows live in `prices.toml`. Generated provider pricing files
 live in `prices/<provider>.toml`. toktrail loads provider files first and
 `prices.toml` last, so manual rows override generated rows.

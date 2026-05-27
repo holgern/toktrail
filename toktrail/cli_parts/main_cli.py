@@ -1650,6 +1650,10 @@ def _print_subscription_usage_report(
             f"Plan: {subscription.display_name} ({subscription.subscription_id})"
         )
         typer.echo(f"  providers: {providers}")
+        scope_label = (
+            subscription.scope.label if subscription.scope is not None else "all areas"
+        )
+        typer.echo(f"  scope: {scope_label}")
         typer.echo(f"  quota basis: {subscription.quota_cost_basis}")
         typer.echo(f"  plan timezone: {plan_timezone_label}")
         if subscription.billing is not None:

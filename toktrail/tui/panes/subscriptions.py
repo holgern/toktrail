@@ -140,6 +140,7 @@ class SubscriptionsPane(ExportablePaneMixin, Vertical):
             table.add_columns(
                 "Plan",
                 "Providers",
+                "Scope",
                 "Period",
                 "Status",
                 "Used",
@@ -164,6 +165,7 @@ class SubscriptionsPane(ExportablePaneMixin, Vertical):
         period_label = period.period
         used = _format_cost(period.used_usd)
         left = _format_left(period)
+        scope_label = sub.scope.label if sub.scope is not None else "all areas"
 
         mode = self.tui_display.mode
         if mode == "micro":
@@ -182,6 +184,7 @@ class SubscriptionsPane(ExportablePaneMixin, Vertical):
             table.add_row(
                 plan,
                 ",".join(sub.usage_provider_ids),
+                scope_label,
                 period_label,
                 _format_status(period.status),
                 used,
@@ -198,9 +201,11 @@ class SubscriptionsPane(ExportablePaneMixin, Vertical):
         detail = self.query_one("#subscriptions-detail", Static)
         sub = view.subscription
         period = view.period
+        scope_label = sub.scope.label if sub.scope is not None else "all areas"
         lines = [
             f"Subscription: {sub.display_name} ({sub.subscription_id})",
             f"Providers: {', '.join(sub.usage_provider_ids)}",
+            f"Scope: {scope_label}",
             f"Quota basis: {sub.quota_cost_basis}",
             f"Timezone: {sub.timezone or '-'}",
             f"Period: {period.period} ({_format_status(period.status)})",
@@ -254,9 +259,10 @@ class SubscriptionsPane(ExportablePaneMixin, Vertical):
     def _build_export_text(self, data: SubscriptionsData, *, now_ms: int) -> str:
         lines: list[str] = ["Subscriptions"]
         lines.append(
-            "plan\tid\tproviders\tbasis\ttimezone\tperiod\tstatus\tused\tlimit\tleft\tused_pct\tmsgs\ttokens\treset"
+            "plan\tid\tproviders\tscope\tbasis\ttimezone\tperiod\tstatus\tused\tlimit\tleft\tused_pct\tmsgs\ttokens\treset"
         )
         for sub in data.subscriptions:
+            scope_label = sub.scope.label if sub.scope is not None else "all areas"
             for period in sub.periods:
                 lines.append(
                     "\t".join(
@@ -264,6 +270,7 @@ class SubscriptionsPane(ExportablePaneMixin, Vertical):
                             sub.display_name,
                             sub.subscription_id,
                             ",".join(sub.usage_provider_ids),
+                            scope_label,
                             sub.quota_cost_basis,
                             sub.timezone or "-",
                             period.period,

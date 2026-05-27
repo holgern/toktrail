@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 from pathlib import Path
+from typing import Literal, cast
 
 from toktrail.insights.extractors import (
     aggregate_sessions,
@@ -148,7 +149,16 @@ def insights_report(
 
     # Generate suggestions
     suggestion_dicts = generate_suggestions(current, previous, current_metas)
-    suggestions = tuple(DeterministicSuggestion(**s) for s in suggestion_dicts)
+    suggestions = tuple(
+        DeterministicSuggestion(
+            kind=str(s["kind"]),
+            severity=cast(Literal["info", "warning", "critical"], s["severity"]),
+            title=str(s["title"]),
+            detail=str(s["detail"]),
+            command=(None if s.get("command") is None else str(s.get("command"))),
+        )
+        for s in suggestion_dicts
+    )
 
     # Sessions to inspect: top 10 by cost, prioritizing failures and anomalies
     sessions_to_inspect = _pick_sessions_to_inspect(current_metas)

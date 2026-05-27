@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from toktrail.api.model_parts.core_models import (
     SubscriptionBillingPeriod,
+    SubscriptionScopeSummary,
     SubscriptionUsagePeriod,
     SubscriptionUsageReport,
     SubscriptionUsageRow,
@@ -9,6 +10,7 @@ from toktrail.api.model_parts.core_models import (
 
 __all__ = [
     "SubscriptionBillingPeriod",
+    "SubscriptionScopeSummary",
     "SubscriptionUsagePeriod",
     "SubscriptionUsageReport",
     "SubscriptionUsageRow",

@@ -574,15 +574,15 @@ def _provider_candidates(
             candidates.append(raw_key)
         return tuple(candidates)
 
-    candidates: list[str] = []
+    inferred_candidates: list[str] = []
     inferred_provider = inferred_provider_from_model(model_id)
     if inferred_provider is not None:
         normalized_inferred = normalize_price_key(inferred_provider)
         if config is not None:
             normalized_inferred = canonical_provider_key(normalized_inferred, config)
-        if normalized_inferred not in candidates:
-            candidates.append(normalized_inferred)
-    return tuple(candidates)
+        if normalized_inferred not in inferred_candidates:
+            inferred_candidates.append(normalized_inferred)
+    return tuple(inferred_candidates)
 
 
 @dataclass(frozen=True)
