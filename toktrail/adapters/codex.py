@@ -512,10 +512,8 @@ def _parse_structured_token_count(
     state: _CodexParseState,
     include_raw_json: bool,
 ) -> tuple[UsageEvent | None, bool] | None:
-    if _as_str(entry.get("type")) != "event_msg":
-        return None
-    payload = _as_mapping(entry.get("payload"))
-    if payload is None or _as_str(payload.get("type")) != "token_count":
+    payload = _token_count_payload(entry)
+    if payload is None:
         return None
 
     payload_model = _extract_model_from_payload(payload)
@@ -710,10 +708,36 @@ def _extract_model_from_payload(payload: Mapping[str, object]) -> str | None:
 
 
 def _extract_model_from_info(info: Mapping[str, object]) -> str | None:
-    for candidate in (info.get("model"), info.get("model_name")):
+    for candidate in (
+        info.get("model"),
+        info.get("model_name"),
+        info.get("latest_response_model"),
+        info.get("requested_model"),
+    ):
         model = _as_str(candidate)
         if model is not None:
             return model
+    return None
+
+
+def _token_count_payload(entry: Mapping[str, object]) -> Mapping[str, object] | None:
+    entry_type = _as_str(entry.get("type"))
+
+    if entry_type == "event_msg":
+        payload = _as_mapping(entry.get("payload"))
+        if payload is None or _as_str(payload.get("type")) != "token_count":
+            return None
+        return payload
+
+    if entry_type == "event":
+        payload = _as_mapping(entry.get("payload"))
+        if payload is None:
+            return None
+        msg = _as_mapping(payload.get("msg"))
+        if msg is None or _as_str(msg.get("type")) != "token_count":
+            return None
+        return msg
+
     return None
 
 

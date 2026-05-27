@@ -163,6 +163,58 @@ def test_scan_codex_file_exposes_turn_context_cwd(tmp_path) -> None:
     assert metadata.source_paths == (str(session_file),)
 
 
+def test_parse_rollout_event_token_count_line(tmp_path) -> None:
+    session_file = write_codex_rows(
+        tmp_path / "rollout.jsonl",
+        [
+            {
+                "type": "session_meta",
+                "payload": {
+                    "model_provider": None,
+                },
+            },
+            {
+                "timestamp": "2026-05-27T16:50:05.558Z",
+                "type": "event",
+                "payload": {
+                    "id": "5",
+                    "event_seq": 43,
+                    "msg": {
+                        "type": "token_count",
+                        "info": {
+                            "total_token_usage": {
+                                "input_tokens": 777882,
+                                "cached_input_tokens": 720896,
+                                "output_tokens": 2527,
+                                "reasoning_output_tokens": 1574,
+                            },
+                            "last_token_usage": {
+                                "input_tokens": 53671,
+                                "cached_input_tokens": 51072,
+                                "output_tokens": 122,
+                                "reasoning_output_tokens": 89,
+                            },
+                            "requested_model": "gpt-5.3-codex",
+                            "latest_response_model": "gpt-5.4",
+                        },
+                    },
+                },
+            },
+        ],
+    )
+
+    events = parse_codex_file(session_file)
+
+    assert len(events) == 1
+    event = events[0]
+    assert event.model_id == "gpt-5.4"
+    assert event.provider_id == "openai"
+    assert event.tokens.input == 2599
+    assert event.tokens.cache_read == 51072
+    assert event.tokens.output == 122
+    assert event.tokens.reasoning == 89
+
+
 def test_extract_model_skips_empty_slug_falls_through_to_model(tmp_path) -> None:
     session_file = write_codex_rows(
         tmp_path / "turn-context-empty.jsonl",
