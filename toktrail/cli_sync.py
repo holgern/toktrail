@@ -499,7 +499,7 @@ def _resolve_hook_command() -> tuple[str, ...]:
     return pieces
 
 
-@sync_app.command("export")
+@sync_app.command("export", help="Export database state as a portable archive file.")
 def sync_export(
     ctx: typer.Context,
     out: Annotated[Path | None, typer.Option("--out", "-o")] = None,
@@ -545,7 +545,7 @@ def sync_export(
     typer.echo(f"  raw json rows: {result.raw_json_count}")
 
 
-@sync_app.command("import")
+@sync_app.command("import", help="Import a state archive into the local database.")
 def sync_import(
     ctx: typer.Context,
     archive: Annotated[Path, typer.Argument()],
@@ -591,7 +591,7 @@ def sync_import(
     typer.echo(f"  conflicts: {len(result.conflicts)}")
 
 
-@sync_git_app.command("init")
+@sync_git_app.command("init", help="Initialize a Git repo for toktrail state sync.")
 def sync_git_init(
     ctx: typer.Context,
     repo: RepoOption = None,
@@ -686,7 +686,7 @@ def sync_git_init(
     typer.echo(f"  next: toktrail sync git sync --repo {status.repo_path}")
 
 
-@sync_git_app.command("status")
+@sync_git_app.command("status", help="Show Git sync status.")
 def sync_git_status(
     ctx: typer.Context,
     repo: RepoOption = None,
@@ -730,7 +730,7 @@ def sync_git_status(
     _print_git_status_config_files(config_files)
 
 
-@sync_git_app.command("cleanup")
+@sync_git_app.command("cleanup", help="Clean up the Git sync working tree.")
 def sync_git_cleanup(
     ctx: typer.Context,
     repo: RepoOption = None,
@@ -819,7 +819,7 @@ def sync_git_cleanup(
     _print_cleanup_analysis(repo_path, analysis)
 
 
-@sync_git_hooks_app.command("install")
+@sync_git_hooks_app.command("install", help="Install Git hooks for auto-sync.")
 def sync_git_hooks_install(
     ctx: typer.Context,
     repo: RepoOption = None,
@@ -850,7 +850,7 @@ def sync_git_hooks_install(
     typer.echo(f"  skipped: {', '.join(result.skipped) or 'none'}")
 
 
-@sync_git_hooks_app.command("status")
+@sync_git_hooks_app.command("status", help="Show Git hooks installation status.")
 def sync_git_hooks_status(
     ctx: typer.Context,
     repo: RepoOption = None,
@@ -873,7 +873,7 @@ def sync_git_hooks_status(
         typer.echo(f"  {hook_name}: {hook_status}")
 
 
-@sync_git_hooks_app.command("uninstall")
+@sync_git_hooks_app.command("uninstall", help="Remove Git hooks from sync repo.")
 def sync_git_hooks_uninstall(
     ctx: typer.Context,
     repo: RepoOption = None,
@@ -896,7 +896,7 @@ def sync_git_hooks_uninstall(
     typer.echo(f"  skipped: {', '.join(result.skipped) or 'none'}")
 
 
-@sync_git_app.command("import-local")
+@sync_git_app.command("import-local", help="Import state from sync working tree.")
 def sync_git_import_local(
     ctx: typer.Context,
     repo: RepoOption = None,
@@ -937,7 +937,7 @@ def sync_git_import_local(
     typer.echo(f"  state skipped: {'yes' if result.state_skipped else 'no'}")
 
 
-@sync_git_app.command("export-local")
+@sync_git_app.command("export-local", help="Export state to sync repo and commit.")
 def sync_git_export_local(
     ctx: typer.Context,
     repo: RepoOption = None,
@@ -990,7 +990,7 @@ def sync_git_export_local(
     typer.echo(f"  commit: {result.commit_hash or 'none'}")
 
 
-@sync_git_app.command("pull")
+@sync_git_app.command("pull", help="Pull remote changes and import locally.")
 def sync_git_pull(
     ctx: typer.Context,
     repo: RepoOption = None,
@@ -1031,7 +1031,7 @@ def sync_git_pull(
     typer.echo(f"  state skipped: {'yes' if result.state_skipped else 'no'}")
 
 
-@sync_git_app.command("push")
+@sync_git_app.command("push", help="Export, commit, and push to remote.")
 def sync_git_push(
     ctx: typer.Context,
     repo: RepoOption = None,
@@ -1087,7 +1087,7 @@ def sync_git_push(
     typer.echo(f"  pushed: {'yes' if pushed else 'no'}")
 
 
-@sync_git_app.command("sync")
+@sync_git_app.command("sync", help="Full sync: pull, export, and push.")
 def sync_git_sync(
     ctx: typer.Context,
     repo: RepoOption = None,

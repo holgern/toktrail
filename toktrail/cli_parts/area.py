@@ -75,7 +75,7 @@ def register_area_commands(  # noqa: C901
     load_resolved_toktrail_config_or_exit: LoadResolvedConfig,
     resolve_machine_id_or_exit: ResolveMachineId,
 ) -> None:
-    @area_app.command("create")
+    @area_app.command("create", help="Create a new usage area at the given path.")
     def area_create(
         ctx: typer.Context,
         path: Annotated[str, typer.Argument(help="Area path.")],
@@ -109,7 +109,7 @@ def register_area_commands(  # noqa: C901
             return
         typer.echo(f"Created area: {area.path}")
 
-    @area_app.command("list")
+    @area_app.command("list", help="List all usage areas with session counts.")
     def area_list(
         ctx: typer.Context,
         json_output: JsonOption = False,
@@ -178,7 +178,7 @@ def register_area_commands(  # noqa: C901
             max_widths={"area": 52},
         )
 
-    @area_app.command("use")
+    @area_app.command("use", help="Set the active area for new imports.")
     def area_use(
         ctx: typer.Context,
         path: Annotated[str, typer.Argument(help="Area path.")],
@@ -245,7 +245,7 @@ def register_area_commands(  # noqa: C901
             "`toktrail area assign --last` to move the latest session."
         )
 
-    @area_app.command("clear")
+    @area_app.command("clear", help="Clear the active usage area.")
     def area_clear(ctx: typer.Context) -> None:
         conn = open_toktrail_connection(ctx)
         try:
@@ -258,7 +258,7 @@ def register_area_commands(  # noqa: C901
             "until another area is selected."
         )
 
-    @area_app.command("status")
+    @area_app.command("status", help="Show the active area and its path.")
     def area_status(ctx: typer.Context, json_output: JsonOption = False) -> None:
         conn = open_toktrail_connection(ctx)
         try:
@@ -297,7 +297,7 @@ def register_area_commands(  # noqa: C901
             f"{active.path}, expires {expiry_text}"
         )
 
-    @area_app.command("assign")
+    @area_app.command("assign", help="Assign a usage session to an area.")
     def area_assign(
         ctx: typer.Context,
         path: Annotated[str, typer.Argument(help="Area path.")],
@@ -408,7 +408,7 @@ def register_area_commands(  # noqa: C901
             f"{selected_harness}/{selected_source_session} ({selected_machine_id[:8]})."
         )
 
-    @area_app.command("unassign")
+    @area_app.command("unassign", help="Remove area assignment from a session.")
     def area_unassign(
         ctx: typer.Context,
         session: Annotated[
@@ -473,7 +473,7 @@ def register_area_commands(  # noqa: C901
             f"{resolved_harness}/{resolved_source_session} ({machine_id[:8]})."
         )
 
-    @area_app.command("sessions")
+    @area_app.command("sessions", help="List usage sessions assigned to an area.")
     def area_sessions(
         ctx: typer.Context,
         path: Annotated[
@@ -571,7 +571,7 @@ def register_area_commands(  # noqa: C901
             period=resolved_range.period,
         )
 
-    @area_app.command("detect")
+    @area_app.command("detect", help="Detect the active area from CWD.")
     def area_detect(
         ctx: typer.Context,
         json_output: JsonOption = False,
@@ -645,7 +645,7 @@ def register_area_commands(  # noqa: C901
         if detected_area != active_path:
             typer.echo(f"Suggestion: toktrail area use {detected_area}")
 
-    @area_app.command("bind-cwd")
+    @area_app.command("bind-cwd", help="Bind a directory to an area.")
     def area_bind_cwd(
         ctx: typer.Context,
         path: Annotated[str, typer.Argument(help="Area path.")],
@@ -679,7 +679,7 @@ def register_area_commands(  # noqa: C901
         config_path.write_text(updated, encoding="utf-8")
         typer.echo(f"Added cwd rule for {path} in {config_path}")
 
-    @area_app.command("bulk-assign")
+    @area_app.command("bulk-assign", help="Assign sessions to an area.")
     def area_bulk_assign(
         ctx: typer.Context,
         path: Annotated[str, typer.Argument(help="Area path.")],
@@ -767,7 +767,7 @@ def register_area_commands(  # noqa: C901
             conn.close()
         typer.echo(f"Assigned {assigned} sessions to {path}; skipped {skipped}.")
 
-    @area_app.command("archive")
+    @area_app.command("archive", help="Archive an area. Hidden from default listings.")
     def area_archive(
         ctx: typer.Context,
         path: Annotated[str, typer.Argument(help="Area path to archive.")],
@@ -782,7 +782,7 @@ def register_area_commands(  # noqa: C901
             conn.close()
         typer.echo(f"Archived {archived} area rows under {path}.")
 
-    @area_app.command("move")
+    @area_app.command("move", help="Move an area to a new path.")
     def area_move(
         ctx: typer.Context,
         old_path: Annotated[str, typer.Argument(help="Current area path.")],
@@ -802,7 +802,7 @@ def register_area_commands(  # noqa: C901
             f"and {moved_events} events."
         )
 
-    @area_app.command("rename")
+    @area_app.command("rename", help="Rename the leaf segment of an area path.")
     def area_rename(
         ctx: typer.Context,
         old_path: Annotated[str, typer.Argument(help="Current area path.")],
@@ -818,7 +818,7 @@ def register_area_commands(  # noqa: C901
             destination = f"{parent}/{new_name}" if parent else new_name
         area_move(ctx, old_path=normalized_old, new_path=destination)
 
-    @area_app.command("merge")
+    @area_app.command("merge", help="Merge a source area into a target area.")
     def area_merge(
         ctx: typer.Context,
         target_path: Annotated[str, typer.Argument(help="Target area path.")],

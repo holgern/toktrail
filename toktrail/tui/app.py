@@ -61,6 +61,7 @@ class ToktrailTuiApp(App[None]):
         Binding("right", "day_forward", "Day forward", show=False, priority=True),
         Binding("q", "quit", "Quit"),
     ]
+
     def __init__(
         self,
         *,

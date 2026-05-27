@@ -37,7 +37,7 @@ def register_machine_commands(
     resolve_machine_config_path: ResolveMachineConfigPath,
     exit_with_error: ExitWithError,
 ) -> None:
-    @machine_app.command("status")
+    @machine_app.command("status", help="Show the current machine identity and name.")
     def machine_status(
         ctx: typer.Context,
         json_output: Annotated[bool, typer.Option("--json")] = False,
@@ -72,7 +72,7 @@ def register_machine_commands(
         typer.echo(f"name:  {machine.name or machine.label}")
         typer.echo("local: yes")
 
-    @machine_app.command("list")
+    @machine_app.command("list", help="List machines with imported usage data.")
     def machine_list(
         ctx: typer.Context,
         json_output: Annotated[bool, typer.Option("--json")] = False,
@@ -176,7 +176,7 @@ def register_machine_commands(
             numeric_columns={"msgs", "total", "actual", "virtual"},
         )
 
-    @machine_app.command("set-name")
+    @machine_app.command("set-name", help="Set a name for the current machine.")
     def machine_set_name(ctx: typer.Context, name: str) -> None:
         cleaned_name = name.strip()
         if not cleaned_name:
@@ -194,7 +194,7 @@ def register_machine_commands(
             conn.close()
         typer.echo(f"Updated machine name: {cleaned_name}")
 
-    @machine_app.command("clear-name")
+    @machine_app.command("clear-name", help="Remove the custom machine name.")
     def machine_clear_name(ctx: typer.Context) -> None:
         path = resolve_machine_config_path(ctx)
         path.parent.mkdir(parents=True, exist_ok=True)

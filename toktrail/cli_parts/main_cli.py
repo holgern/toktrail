@@ -400,7 +400,7 @@ def main(
     }
 
 
-@app.command()
+@app.command(help="Initialize the toktrail SQLite database and apply migrations.")
 def init(ctx: typer.Context) -> None:
     db_path = _resolve_state_db(ctx)
     conn = connect(db_path)
@@ -456,7 +456,7 @@ def tui(
     app_instance.run()
 
 
-@run_app.command()
+@run_app.command(help="Start a new tracking run and import usage.")
 def start(
     ctx: typer.Context,
     name: NameOption = None,
@@ -502,7 +502,7 @@ def start(
     typer.echo(f"Scope: {_format_scope_summary(run.scope)}")
 
 
-@run_app.command()
+@run_app.command(help="Stop a tracking run. Optionally refreshes first.")
 def stop(
     ctx: typer.Context,
     run_id: RunArgument = None,
@@ -545,7 +545,7 @@ def stop(
         typer.echo(f"Linked events excluded by scope: {excluded_total}")
 
 
-@run_app.command()
+@run_app.command(help="Show token and cost breakdown for a run.")
 def status(
     ctx: typer.Context,
     run_id: RunArgument = None,
@@ -811,7 +811,7 @@ def _format_scope_summary(scope: RunScope | PublicRunScope) -> str:
     return "; ".join(segments)
 
 
-@run_app.command("archive")
+@run_app.command("archive", help="Archive a tracking run.")
 def archive_command(
     ctx: typer.Context,
     run_id: Annotated[int, typer.Argument()],
@@ -833,7 +833,7 @@ def archive_command(
     typer.echo(f"Archived run {run.id}: {run.name or '(unnamed)'}")
 
 
-@run_app.command("unarchive")
+@run_app.command("unarchive", help="Restore an archived run.")
 def unarchive_command(
     ctx: typer.Context,
     run_id: Annotated[int, typer.Argument()],
@@ -886,7 +886,7 @@ def subscriptions(
     )
 
 
-@subscriptions_app.command("status")
+@subscriptions_app.command("status", help="Show subscription usage against limits.")
 def subscriptions_status(
     ctx: typer.Context,
     provider_id: ProviderOption = None,
@@ -998,7 +998,7 @@ def statusline(
     )
 
 
-@statusline_app.command("test")
+@statusline_app.command("test", help="Preview statusline output for your prompt.")
 def statusline_test(
     ctx: typer.Context,
     harness: HarnessOption = None,
@@ -1035,7 +1035,7 @@ def statusline_test(
     )
 
 
-@statusline_app.command("install")
+@statusline_app.command("install", help="Install statusline into starship.")
 def statusline_install(
     target: Annotated[str, typer.Option("--target")] = "starship",
 ) -> None:
@@ -1043,12 +1043,12 @@ def statusline_install(
     statusline_parts.statusline_install_impl(normalized)
 
 
-@statusline_config_app.command("show")
+@statusline_config_app.command("show", help="Show statusline configuration.")
 def statusline_config_show(ctx: typer.Context) -> None:
     statusline_parts.statusline_config_show_impl(ctx)
 
 
-@statusline_config_app.command("set")
+@statusline_config_app.command("set", help="Set a statusline config value.")
 def statusline_config_set(
     ctx: typer.Context,
     key: Annotated[str, typer.Argument()],
@@ -1057,7 +1057,7 @@ def statusline_config_set(
     statusline_parts.statusline_config_set_impl(ctx, key=key, value=value)
 
 
-@usage_app.command("statusline")
+@usage_app.command("statusline", help="Render status line for prompt.")
 def usage_statusline(
     ctx: typer.Context,
     json_output: JsonOption = False,
@@ -1156,22 +1156,22 @@ def stats(
     typer.echo(f"Unpriced models: {totals['unpriced_count']}")
 
 
-@usage_app.command("daily")
-@usage_app.command("weekly")
-@usage_app.command("monthly")
-@usage_app.command("summary")
-@usage_app.command("day")
-@usage_app.command("today")
-@usage_app.command("yesterday")
-@usage_app.command("week")
-@usage_app.command("this-week")
-@usage_app.command("last-week")
-@usage_app.command("this-month")
-@usage_app.command("last-month")
-@usage_app.command("sessions")
-@usage_app.command("runs")
-@usage_app.command("machines")
-@usage_app.command("areas")
+@usage_app.command("daily", help="Show daily usage breakdown.")
+@usage_app.command("weekly", help="Show weekly usage breakdown.")
+@usage_app.command("monthly", help="Show monthly usage breakdown.")
+@usage_app.command("summary", help="Show aggregated usage summary.")
+@usage_app.command("day", help="Show usage for a specific day.")
+@usage_app.command("today", help="Show usage for today.")
+@usage_app.command("yesterday", help="Show usage for yesterday.")
+@usage_app.command("week", help="Show usage for a specific week.")
+@usage_app.command("this-week", help="Show usage for the current week.")
+@usage_app.command("last-week", help="Show usage for the previous week.")
+@usage_app.command("this-month", help="Show usage for the current month.")
+@usage_app.command("last-month", help="Show usage for the previous month.")
+@usage_app.command("sessions", help="List usage sessions with token totals.")
+@usage_app.command("runs", help="List tracking runs with summaries.")
+@usage_app.command("machines", help="List machines with token totals.")
+@usage_app.command("areas", help="List usage totals grouped by area.")
 def usage(  # noqa: C901
     ctx: typer.Context,
     json_output: JsonOption = False,
@@ -1898,7 +1898,7 @@ def _format_subscription_status(status: str) -> str:
     }.get(status, status)
 
 
-@config_app.command("path")
+@config_app.command("path", help="Print resolved configuration file paths.")
 def config_path(
     ctx: typer.Context,
     which: Annotated[str, typer.Option("--which")] = "all",
@@ -1930,7 +1930,7 @@ def config_path(
     typer.echo(f"subscriptions: {subscriptions}")
 
 
-@config_app.command("init")
+@config_app.command("init", help="Create a default toktrail configuration file.")
 def config_init(
     ctx: typer.Context,
     template: Annotated[str, typer.Option("--template")] = DEFAULT_TEMPLATE_NAME,
@@ -1982,7 +1982,7 @@ def config_init(
         typer.echo(f"  {label}: {path}")
 
 
-@config_app.command("validate")
+@config_app.command("validate", help="Validate the configuration file.")
 def config_validate(ctx: typer.Context) -> None:
     loaded = _load_resolved_costing_config_or_exit(ctx)
     summary = summarize_costing_config(loaded.config)
@@ -2008,7 +2008,7 @@ def config_validate(ctx: typer.Context) -> None:
         )
 
 
-@config_app.command("show")
+@config_app.command("show", help="Display current configuration.")
 def config_show(ctx: typer.Context) -> None:
     loaded = _load_resolved_costing_config_or_exit(ctx)
     summary = summarize_costing_config(loaded.config)
@@ -2055,7 +2055,7 @@ def sources(
     )
 
 
-@sources_app.command("list")
+@sources_app.command("list", help="Show configured harness sources.")
 def sources_list(
     ctx: typer.Context,
     harnesses: HarnessesOption = None,
@@ -2089,7 +2089,7 @@ def _sources_list(
     )
 
 
-@prices_app.command("list")
+@prices_app.command("list", help="List configured model prices.")
 def pricing_list(
     ctx: typer.Context,
     used_only: Annotated[bool, typer.Option("--used-only")] = False,
@@ -2144,7 +2144,7 @@ def _is_provider_price_file(ctx: typer.Context, target: Path, provider: str) -> 
         return target.absolute() == expected.absolute()
 
 
-@prices_app.command("parse")
+@prices_app.command("parse", help="Parse a pricing page into TOML.")
 def pricing_parse(
     ctx: typer.Context,
     provider: Annotated[str, typer.Option("--provider")],
@@ -2180,7 +2180,7 @@ def pricing_parse(
     )
 
 
-@app.command("refresh")
+@app.command("refresh", help="Import usage from configured sources.")
 def refresh_usage(
     ctx: typer.Context,
     harness: RequiredHarnessOption = None,
@@ -2215,7 +2215,7 @@ def refresh_usage(
     )
 
 
-@app.command("watch")
+@app.command("watch", help="Continuously import usage data from configured sources.")
 def watch(
     ctx: typer.Context,
     run_id: RunOption = None,
@@ -2237,7 +2237,7 @@ def watch(
         _exit_with_error(str(exc))
 
 
-@sources_app.command("skipped")
+@sources_app.command("skipped", help="List skipped source records.")
 def sources_skipped(
     ctx: typer.Context,
     clear: Annotated[
@@ -2284,7 +2284,7 @@ def sources_skipped(
     )
 
 
-@sources_app.command("sessions")
+@sources_app.command("sessions", help="List source sessions for a harness.")
 def sources_sessions(
     ctx: typer.Context,
     harness: Annotated[str, typer.Argument(help="Harness name.")],
@@ -2315,7 +2315,7 @@ def sources_sessions(
     )
 
 
-@sources_app.command("session")
+@sources_app.command("session", help="Show detailed info for a single source session.")
 def sources_session(
     ctx: typer.Context,
     harness: Annotated[str, typer.Argument(help="Harness name.")],
@@ -2342,7 +2342,7 @@ def sources_session(
     )
 
 
-@analyze_app.command("cache")
+@analyze_app.command("cache", help="Analyze cache hit rates for a session.")
 def analyze_cache(
     ctx: typer.Context,
     harness: Annotated[str, typer.Argument(help="Harness name to analyze.")],
@@ -2389,7 +2389,7 @@ def analyze_cache(
     )
 
 
-@analyze_app.command("session")
+@analyze_app.command("session", help="Show a detailed digest of a harness session.")
 def analyze_session(
     ctx: typer.Context,
     harness: Annotated[str, typer.Argument(help="Harness name to analyze.")],
@@ -2563,7 +2563,7 @@ def _render_copilot_env_json(values: tuple[CopilotEnvVar, ...]) -> str:
     return json.dumps(dict(values), indent=2) + "\n"
 
 
-@copilot_app.command("env")
+@copilot_app.command("env", help="Print env vars for Copilot CLI OTEL export.")
 def copilot_env(
     shell: Annotated[str, typer.Argument()],
     otel_file: Annotated[Path | None, typer.Option("--otel-file")] = None,

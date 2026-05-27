@@ -205,9 +205,7 @@ async def test_help_overlay_opens_and_closes(tmp_path) -> None:
         assert "Keybindings" in help_text or "Keys" in help_text
         await pilot.press("escape")
         await pilot.pause()
-        assert not any(
-            isinstance(s, HelpScreen) for s in app.screen_stack
-        )
+        assert not any(isinstance(s, HelpScreen) for s in app.screen_stack)
 
 
 async def test_help_overlay_with_h_key(tmp_path) -> None:
