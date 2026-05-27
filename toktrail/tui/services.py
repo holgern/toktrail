@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import timedelta
 from pathlib import Path
 from typing import Literal
 
@@ -39,6 +40,7 @@ from toktrail.api.reports import (
     usage_sessions_report,
 )
 from toktrail.errors import InvalidAPIUsageError
+from toktrail.periods import resolve_timezone
 from toktrail.tui.state import ToktrailTuiState
 
 
@@ -150,27 +152,64 @@ class ToktrailTuiService:
             subscriptions_path=str(summary["subscriptions_path"]),
         )
 
-    def sessions(self) -> SessionsData:
-        report = usage_sessions_report(
-            self.state.db_path,
-            period="today",
-            timezone=self.state.timezone_name,
-            utc=self.state.utc,
-            config_path=self.state.config_path,
-            limit=50,
+    def _day_bounds(self, date_offset: int) -> tuple[int, int]:
+        """Return (since_ms, until_ms) for a day offset from today."""
+        tz = resolve_timezone(
+            timezone_name=self.state.timezone_name, utc=self.state.utc
         )
+        from datetime import datetime
+
+        now = datetime.now(tz)
+        target = (now - timedelta(days=date_offset)).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        end = target + timedelta(days=1)
+        return int(target.timestamp() * 1000), int(end.timestamp() * 1000)
+
+    def sessions(self, date_offset: int = 0) -> SessionsData:
+        if date_offset == 0:
+            report = usage_sessions_report(
+                self.state.db_path,
+                period="today",
+                timezone=self.state.timezone_name,
+                utc=self.state.utc,
+                config_path=self.state.config_path,
+                limit=50,
+            )
+        else:
+            since_ms, until_ms = self._day_bounds(date_offset)
+            report = usage_sessions_report(
+                self.state.db_path,
+                timezone=self.state.timezone_name,
+                utc=self.state.utc,
+                since_ms=since_ms,
+                until_ms=until_ms,
+                config_path=self.state.config_path,
+                limit=50,
+            )
         return SessionsData(sessions=tuple(report.sessions))
 
-    def areas(self) -> AreasData:
+    def areas(self, date_offset: int = 0) -> AreasData:
         status = get_active_area_status(self.state.db_path)
         areas = list_areas(self.state.db_path)
-        usage = usage_areas_report(
-            self.state.db_path,
-            period="today",
-            timezone=self.state.timezone_name,
-            utc=self.state.utc,
-            config_path=self.state.config_path,
-        )
+        if date_offset == 0:
+            usage = usage_areas_report(
+                self.state.db_path,
+                period="today",
+                timezone=self.state.timezone_name,
+                utc=self.state.utc,
+                config_path=self.state.config_path,
+            )
+        else:
+            since_ms, until_ms = self._day_bounds(date_offset)
+            usage = usage_areas_report(
+                self.state.db_path,
+                timezone=self.state.timezone_name,
+                utc=self.state.utc,
+                since_ms=since_ms,
+                until_ms=until_ms,
+                config_path=self.state.config_path,
+            )
         return AreasData(
             area_paths=tuple(area.path for area in areas),
             active_area=None if status.area is None else status.area.path,

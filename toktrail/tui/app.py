@@ -13,6 +13,7 @@ from textual.binding import Binding
 from textual.widgets import ContentSwitcher, Footer, Header, Static, Tab, Tabs
 
 from toktrail.errors import InvalidAPIUsageError
+from toktrail.periods import resolve_timezone
 from toktrail.tui.layout import TuiDisplay, TuiMode, resolve_tui_display
 from toktrail.tui.panes.areas import AreasPane
 from toktrail.tui.panes.config import ConfigPane
@@ -22,6 +23,7 @@ from toktrail.tui.panes.sessions import SessionsPane
 from toktrail.tui.panes.subscriptions import SubscriptionsPane
 from toktrail.tui.screens.area_form import AreaFormScreen
 from toktrail.tui.screens.confirm import ConfirmScreen
+from toktrail.tui.screens.help import HelpScreen
 from toktrail.tui.screens.price_form import PriceFormScreen
 from toktrail.tui.services import DashboardView, ToktrailTuiService
 from toktrail.tui.state import ToktrailTuiState
@@ -54,9 +56,11 @@ class ToktrailTuiApp(App[None]):
         Binding("i", "toggle_details", "Details", show=False),
         Binding("enter", "toggle_details", "Details", show=False),
         Binding("question_mark", "help", "Help"),
+        Binding("h", "help", "Help", show=False),
+        Binding("left", "day_back", "Day back", show=False, priority=True),
+        Binding("right", "day_forward", "Day forward", show=False, priority=True),
         Binding("q", "quit", "Quit"),
     ]
-
     def __init__(
         self,
         *,
@@ -97,6 +101,7 @@ class ToktrailTuiApp(App[None]):
         self._compact_bar = Static("", id="compact-bar")
         self._status = Static("", id="status")
         self._dashboard_view: DashboardView = "today"
+        self._date_offset: int = 0
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -149,6 +154,8 @@ class ToktrailTuiApp(App[None]):
         tabs = self.query_one("#tabs", Tabs)
         tabs.active = f"tab-{pane_id}"
         self._update_compact_bar()
+        self._focus_table_if_needed(pane_id)
+        self._update_status_with_date()
 
     def on_tabs_tab_activated(self, event: Tabs.TabActivated) -> None:
         tab_id = event.tab.id
@@ -156,22 +163,16 @@ class ToktrailTuiApp(App[None]):
             return
         if not tab_id.startswith("tab-"):
             return
+        pane_id = tab_id.removeprefix("tab-")
         content = self.query_one("#content", ContentSwitcher)
-        content.current = tab_id.removeprefix("tab-")
+        content.current = pane_id
         self._update_compact_bar()
+        self._focus_table_if_needed(pane_id)
+        self._update_status_with_date()
 
     def action_help(self) -> None:
-        if self._tui_display is not None and self._tui_display.compact:
-            self._status.update(
-                "1 dash 2 sess 3 area 4 price 5 subs 6 cfg | t d w | r refresh | "
-                "a/u/c/l/s areas | e edit | p price view | i details | y/Y copy/export"
-            )
-            return
-        self._status.update(
-            "1-6 switch panes, t/d/w switch dashboard, r refresh, q quit, "
-            "areas: create/set/clear/assign latest/assign selected, prices: edit, "
-            "y copy, Y export, p toggle prices, i/enter details"
-        )
+        display = self._tui_display or self._resolve_display()
+        self.push_screen(HelpScreen(display.mode))
 
     def action_refresh(self) -> None:
         try:
@@ -304,12 +305,13 @@ class ToktrailTuiApp(App[None]):
     def _refresh_views(self) -> None:
         self._apply_display()
         self._dashboard.set_data(self.service.dashboard(self._dashboard_view))
-        self._sessions.set_data(self.service.sessions())
-        self._areas.set_data(self.service.areas())
+        self._sessions.set_data(self.service.sessions(self._date_offset))
+        self._areas.set_data(self.service.areas(self._date_offset))
         self._prices.set_data(self.service.prices())
         self._subscriptions.set_data(self.service.subscriptions())
         self._config.set_data(self.service.config())
         self._update_compact_bar()
+        self._update_status_with_date()
 
     def _current_pane_text(self) -> tuple[str, str]:
         content = self.query_one("#content", ContentSwitcher)
@@ -381,13 +383,65 @@ class ToktrailTuiApp(App[None]):
             if hasattr(pane, "set_display"):
                 pane.set_display(display)
 
+    def _current_pane_id(self) -> str:
+        content = self.query_one("#content", ContentSwitcher)
+        return content.current or "dashboard"
+
+    def _focus_table_if_needed(self, pane_id: str) -> None:
+        table_id = {
+            "sessions": "#sessions-table",
+            "areas": "#areas-table",
+        }.get(pane_id)
+        if table_id is None:
+            return
+        try:
+            table = self.query_one(table_id)
+        except Exception:
+            return
+        table.focus()
+
+    def _date_label(self) -> str:
+        if self._date_offset == 0:
+            return "today"
+        from datetime import datetime, timedelta
+
+        tz = resolve_timezone(
+            timezone_name=self.state.timezone_name, utc=self.state.utc
+        )
+        now = datetime.now(tz)
+        target = now - timedelta(days=self._date_offset)
+        return target.strftime("%Y-%m-%d")
+
+    def _update_status_with_date(self) -> None:
+        pane_id = self._current_pane_id()
+        if pane_id not in ("sessions", "areas"):
+            return
+        label = self._date_label()
+        cap = pane_id.capitalize()
+        self._status.update(f"{cap}: {label}")
+
+    def action_day_back(self) -> None:
+        pane_id = self._current_pane_id()
+        if pane_id not in ("sessions", "areas"):
+            return
+        self._date_offset += 1
+        self._refresh_views()
+
+    def action_day_forward(self) -> None:
+        pane_id = self._current_pane_id()
+        if pane_id not in ("sessions", "areas"):
+            return
+        if self._date_offset <= 0:
+            return
+        self._date_offset -= 1
+        self._refresh_views()
+
     def _update_compact_bar(self) -> None:
         display = self._tui_display or self._resolve_display()
         if display.mode == "full":
             self._compact_bar.update("")
             return
-        content = self.query_one("#content", ContentSwitcher)
-        current = content.current or "dashboard"
+        current = self._current_pane_id()
         labels = {
             "dashboard": "Dash",
             "sessions": "Sess",
@@ -396,14 +450,17 @@ class ToktrailTuiApp(App[None]):
             "subscriptions": "Subs",
             "config": "Cfg",
         }
+        date_info = ""
+        if current in ("sessions", "areas") and self._date_offset > 0:
+            date_info = f"  {self._date_label()}"
         if display.mode == "micro":
             self._compact_bar.update(
-                f"toktrail {labels.get(current, current)}  ? help  q quit"
+                f"toktrail {labels.get(current, current)}{date_info}  ? help  q quit"
             )
             return
         self._compact_bar.update(
             "toktrail [1]Dash [2]Sess [3]Area [4]Price [5]Subs [6]Cfg"
-            "  r refresh  ? help"
+            f"{date_info}  r refresh  ? help"
         )
 
     def _micro_detail_preview(self) -> str:
