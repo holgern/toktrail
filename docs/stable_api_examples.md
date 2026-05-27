@@ -20,10 +20,12 @@ run coding agent without importing toktrail internals.
 - Pi: `pi`
 - GitHub Copilot CLI: `copilot`
 - Codex CLI: `codex`
+- Code (Every Code): `code`
 - Goose: `goose`
 - Droid: `droid`
 - Amp: `amp`
 - Claude: `claude`
+- Harnessbridge: `harnessbridge`
 - Vibe: `vibe`
 
 ## Run examples
@@ -33,10 +35,12 @@ python examples/manual_run_opencode.py
 python examples/manual_run_pi.py
 python examples/manual_run_copilot.py --shell bash
 python examples/manual_run_codex.py
+python examples/manual_run_code.py
 python examples/manual_run_goose.py
 python examples/manual_run_droid.py
 python examples/manual_run_amp.py
 python examples/manual_run_claude.py
+python examples/manual_run_harnessbridge.py
 python examples/manual_run_vibe.py
 ```
 
@@ -96,6 +100,34 @@ result = import_usage(Path(".toktrail/toktrail.db"), "claude", source_path=sourc
 sessions = list_source_sessions("claude", source_path=source_path, limit=5)
 ```
 
+## Code API example
+
+```python
+from pathlib import Path
+
+from toktrail.api.imports import import_usage
+from toktrail.api.paths import default_code_sessions_path
+from toktrail.api.sources import list_source_sessions
+
+source_path = default_code_sessions_path()
+result = import_usage(Path(".toktrail/toktrail.db"), "code", source_path=source_path)
+sessions = list_source_sessions("code", source_path=source_path, limit=5)
+```
+
+## Harnessbridge API example
+
+```python
+from pathlib import Path
+
+from toktrail.api.imports import import_usage
+from toktrail.api.paths import default_harnessbridge_sessions_path
+from toktrail.api.sources import list_source_sessions
+
+source_path = default_harnessbridge_sessions_path()
+result = import_usage(Path(".toktrail/toktrail.db"), "harnessbridge", source_path=source_path)
+sessions = list_source_sessions("harnessbridge", source_path=source_path, limit=5)
+```
+
 ## Vibe API example
 
 ```python
@@ -131,6 +163,11 @@ this repository, paste the printed prompt, wait for the answer, exit Codex, then
 press Enter in the Python script. Use `--source /path/to/codex/sessions` to
 override the source path.
 
+Code usually writes session logs under `~/.code/sessions`. Start Code in this
+repository, paste the printed prompt, wait for the answer, exit Code, then press
+Enter in the Python script. Use `--source /path/to/code/sessions` to override
+the source path.
+
 Goose usually writes cumulative SQLite session rows to
 `~/.local/share/goose/sessions/sessions.db`. Start Goose in this repository,
 paste the printed prompt, wait for the answer, exit Goose, then press Enter in
@@ -142,8 +179,25 @@ Droid usually writes cumulative settings JSON files under
 wait for the answer, exit Droid, then press Enter in the Python script. Use
 `--source /path/to/factory/sessions` to override the source path.
 
-Vibe writes cumulative session metadata under ~/.vibe/logs/session/<session-dir>/meta.json.
-Start Vibe in this repository, paste the printed prompt, wait for the answer, exit Vibe, then press Enter in the Python script. Use --source /path/to/.vibe/logs/session to override the source path.
+Amp usually writes thread JSON files under `~/.local/share/amp/threads`. Start
+Amp in this repository, paste the printed prompt, wait for the answer, exit Amp,
+then press Enter in the Python script. Use `--source /path/to/amp/threads`
+to override the source path.
+
+Claude usually writes conversation files under `~/.claude/projects`. Start
+Claude in this repository, paste the printed prompt, wait for the answer, exit
+Claude, then press Enter in the Python script. Use
+`--source /path/to/claude/projects` to override the source path.
+
+Harnessbridge typically scans ledger JSONL files in `~/.harnessbridge/sessions`.
+Start the ledger generation workflow, then run the import script. Use
+`--source /path/to/harnessbridge/sessions` to override the source path.
+
+Vibe writes cumulative session metadata under
+`~/.vibe/logs/session/<session-dir>/meta.json`. Start Vibe in this repository,
+paste the printed prompt, wait for the answer, exit Vibe, then press Enter in
+the Python script. Use `--source /path/to/.vibe/logs/session` to override the
+source path.
 
 ## Detailed output
 

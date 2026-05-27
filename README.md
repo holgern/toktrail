@@ -630,6 +630,16 @@ Refresh usage:
 toktrail refresh
 toktrail refresh --harness opencode --source /path/to/opencode.db
 toktrail refresh --harness pi --source ~/.pi/agent/sessions
+toktrail refresh --harness copilot --source ~/.copilot/otel
+toktrail refresh --harness codex --source ~/.codex/sessions
+toktrail refresh --harness code --source ~/.code/sessions
+toktrail refresh --harness goose --source ~/.local/share/goose/sessions/sessions.db
+toktrail refresh --harness harnessbridge --source ~/.harnessbridge/sessions
+toktrail refresh --harness droid --source ~/.factory/sessions
+toktrail refresh --harness amp --source ~/.local/share/amp/threads
+toktrail refresh --harness claude --source ~/.claude/projects
+toktrail refresh --harness vibe --source ~/.vibe/logs/session
+toktrail refresh --harness pi --source ~/.pi/agent/sessions
 toktrail refresh --harness codex --source ~/.codex/sessions
 toktrail refresh --harness code --source ~/.code/sessions
 toktrail refresh --harness goose --source ~/.local/share/goose/sessions/sessions.db
@@ -654,6 +664,7 @@ toktrail refresh --harness opencode --source /path/to/opencode.db
 toktrail refresh --harness pi --source ~/.pi/agent/sessions
 toktrail refresh --harness copilot --source ~/.copilot/otel
 toktrail refresh --harness codex --source ~/.codex/sessions
+toktrail refresh --harness code --source ~/.code/sessions
 toktrail refresh --harness goose --source ~/.local/share/goose/sessions/sessions.db
 toktrail refresh --harness harnessbridge --source ~/.harnessbridge/sessions
 toktrail refresh --harness droid --source ~/.factory/sessions
@@ -750,7 +761,8 @@ disabled by default and remains opt-in local debugging data only. Use `--raw`
 to store raw source payloads for a run, or `--no-raw` to make that choice
 explicit in automation.
 
-toktrail never prints raw OpenCode, Pi, Codex, Goose, Harnessbridge, Droid,
+toktrail never prints raw OpenCode, Pi, Codex, Code, Goose, Harnessbridge, Droid,
+Amp, Claude, Vibe, or Copilot JSON in CLI output.
 Amp, or Copilot JSON in CLI output.
 
 ## Reporting
@@ -791,7 +803,10 @@ shape for automation, including `unconfigured_models` and `display_filters`.
 
 By default:
 
-- OpenCode keeps imported source cost as actual cost
+- OpenCode, Amp, Harnessbridge, and Vibe keep imported source cost as actual cost
+  when the source data provides it
+- Pi, Codex, Code, Goose, Droid, Claude, and Copilot treat actual cost as $0.00
+  (no source cost fields in their native session formats)
 - Pi, Codex, Goose, Droid, and Copilot treat actual cost as `$0.00`
 - virtual cost uses configured pricing tables when available
 

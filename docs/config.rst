@@ -46,7 +46,7 @@ Example
    config_version = 1
 
    [imports]
-   harnesses = ["opencode", "pi", "copilot", "codex", "code", "goose", "droid", "amp", "claude", "vibe"]
+   harnesses = ["opencode", "pi", "copilot", "codex", "code", "goose", "droid", "amp", "claude", "vibe", "harnessbridge"]
    missing_source = "warn"
    include_raw_json = false
 
@@ -61,6 +61,29 @@ Example
    amp = "~/.local/share/amp/threads"
    claude = "~/.claude/projects"
    vibe = "~/.vibe/logs/session"
+   harnessbridge = "~/.harnessbridge/sessions"
+
+.. _provider-aliases:
+
+Provider aliases
+----------------
+
+The ``[costing.provider_aliases]`` table maps non-canonical provider names that
+appear in source data (such as ``"OpenCode_Go"``, ``"gh-copilot"``, or harness
+display names) to canonical provider keys used in pricing tables and cost lookup.
+
+.. code-block:: toml
+
+   [costing.provider_aliases]
+   ocgo-launch = "deepseek"
+   "OpenCode_Go" = "github-copilot"
+
+Each key is an alias string and its value is the canonical provider name.
+Aliases are normalized during identity resolution and are subject to cycle
+detection (a → b → a paths are rejected at config load time).
+
+Provider aliases are defined under ``[costing]`` so a separate
+``provider_aliases.toml`` is not required.
 
    [costing]
    default_actual_mode = "source"

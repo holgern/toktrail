@@ -529,12 +529,15 @@ def test_resolve_price_matches_provider_alias() -> None:
         provider_aliases=(ProviderAlias(alias="ocgo-launch", provider="deepseek"),),
     )
 
-    assert resolve_price(
-        "ocgo-launch",
-        "deepseek-v4-pro",
-        config.virtual_prices,
-        config=config,
-    ) == price
+    assert (
+        resolve_price(
+            "ocgo-launch",
+            "deepseek-v4-pro",
+            config.virtual_prices,
+            config=config,
+        )
+        == price
+    )
 
 
 def test_resolve_price_with_alias_still_falls_back_to_raw() -> None:
@@ -594,9 +597,7 @@ def test_actual_cost_rule_matches_provider_alias() -> None:
         provider_aliases=(ProviderAlias(alias="ocgo-launch", provider="deepseek"),),
     )
 
-    result = resolve_actual_mode(
-        "codex", "ocgo-launch", "deepseek-v4-pro", config
-    )
+    result = resolve_actual_mode("codex", "ocgo-launch", "deepseek-v4-pro", config)
     assert result == "pricing"
 
 

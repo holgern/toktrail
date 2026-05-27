@@ -902,6 +902,7 @@ class ProviderAlias:
     alias: str
     provider: str
 
+
 @dataclass(frozen=True)
 class CostingConfig:
     config_version: int = CONFIG_VERSION
@@ -1073,6 +1074,7 @@ class RuntimeConfig:
     areas: AreasConfig = field(default_factory=AreasConfig)
     context_windows: tuple[ContextWindowConfig, ...] = ()
     provider_aliases: tuple[ProviderAlias, ...] = ()
+
 
 @dataclass(frozen=True)
 class PricingConfig:
@@ -1273,6 +1275,7 @@ def default_runtime_config() -> RuntimeConfig:
         context_windows=(),
         provider_aliases=(),
     )
+
 
 def default_pricing_config() -> PricingConfig:
     return PricingConfig()
@@ -1905,6 +1908,7 @@ def parse_runtime_config(data: object) -> RuntimeConfig:
         provider_aliases=provider_aliases,
     )
 
+
 def parse_pricing_config(data: object) -> PricingConfig:
     if not isinstance(data, dict):
         msg = "prices.toml must be a TOML table."
@@ -2084,6 +2088,7 @@ def _parse_legacy_costing_config(data: dict[str, object]) -> CostingConfig:
         provider_aliases=provider_aliases,
     )
 
+
 def summarize_costing_config(config: CostingConfig) -> CostingConfigSummary:
     return CostingConfigSummary(
         config_version=config.config_version,
@@ -2097,6 +2102,7 @@ def summarize_costing_config(config: CostingConfig) -> CostingConfigSummary:
         subscription_count=len(config.subscriptions),
         provider_alias_count=len(config.provider_aliases),
     )
+
 
 def _parse_subscriptions(value: object) -> tuple[SubscriptionConfig, ...]:
     if value is None:
@@ -2839,7 +2845,9 @@ def _parse_supported_harness(value: object, *, context: str) -> str:
 
 
 def _parse_provider_aliases(
-    value: object, *, context: str,
+    value: object,
+    *,
+    context: str,
 ) -> tuple[ProviderAlias, ...]:
     table = _parse_optional_table(value, context=context)
     if table is None:
@@ -2866,7 +2874,9 @@ def _parse_provider_aliases(
 
 
 def _validate_provider_aliases(
-    aliases: tuple[ProviderAlias, ...], *, context: str,
+    aliases: tuple[ProviderAlias, ...],
+    *,
+    context: str,
 ) -> None:
     mapping = {item.alias: item.provider for item in aliases}
     for start in mapping:

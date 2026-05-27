@@ -4928,6 +4928,7 @@ def _expanded_subscription_usage_provider_ids(
 
     return tuple(expanded)
 
+
 def _select_subscription_cost(costs: CostTotals, *, basis: str) -> Decimal:
     if basis == "source":
         return costs.source_cost_usd

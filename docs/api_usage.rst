@@ -129,6 +129,33 @@ should be refreshed.
    print(result.events_imported, result.events_skipped)
    print(report.totals.as_dict())
 
+Single-source-file import
+-----------------------
+
+When a harness writes one session file per run, import that single file directly
+instead of scanning a directory. Code and Codex are good examples of this
+pattern.
+
+.. code-block:: python
+
+   from pathlib import Path
+
+   from toktrail.api import init_state, import_usage, usage_report
+
+   db_path = Path(".toktrail/toktrail.db")
+   source_path = Path("~/.code/sessions/session-abc123.json").expanduser()
+
+   init_state(db_path)
+   result = import_usage(db_path, "code", source_path=source_path)
+   report = usage_report(db_path, period="today", timezone="Europe/Berlin")
+
+   print(result.events_imported, result.events_skipped)
+   print(report.totals.tokens.total, report.totals.tokens.cache_read)
+
+Use ``source_path`` as a file for file-per-session harnesses (``code``,
+``codex``, ``amp``, ``droid``) or as a directory for directory-scanning
+harnesses (``pi``, ``copilot``, ``harnessbridge``).
+
 Track one embedded run
 ----------------------
 

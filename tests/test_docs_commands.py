@@ -152,3 +152,52 @@ def test_docs_list_all_supported_harnesses() -> None:
         text = path.read_text(encoding="utf-8")
         missing = sorted(name for name in expected if name not in text)
         assert not missing, f"{path} missing supported harnesses: {missing}"
+
+
+def test_config_default_harnesses_covers_all_registry_entries() -> None:
+    """The [imports].harnesses example in README.md and docs/config.rst must
+    include every harness from the registry."""
+    from toktrail.api.harnesses import supported_harnesses
+
+    expected = {h.name for h in supported_harnesses()}
+    paths = [Path("README.md"), Path("docs/config.rst")]
+
+    for path in paths:
+        text = path.read_text(encoding="utf-8")
+        # Look for the harnesses list in config examples (either TOML or inline)
+        missing = sorted(name for name in expected if name not in text)
+        assert not missing, f"{path} missing harnesses in config examples: {missing}"
+
+
+def test_harnesses_rst_matrix_covers_all_11_readers() -> None:
+    """docs/harnesses.rst reader matrix table must mention all 11 registry
+    names by their short name and display name."""
+    from toktrail.api.harnesses import supported_harnesses
+
+    text = Path("docs/harnesses.rst").read_text(encoding="utf-8")
+    for h in supported_harnesses():
+        assert h.name in text, f"docs/harnesses.rst missing harness name {h.name!r}"
+        # Display name should also appear (case-insensitive, ignoring spaces)
+        display_normalized = h.display_name.lower().replace(" ", "")
+        text_normalized = text.lower().replace(" ", "")
+        assert display_normalized in text_normalized, (
+            f"docs/harnesses.rst missing display name {h.display_name!r}"
+        )
+
+
+def test_provider_aliases_docs_coverage() -> None:
+    """Provider aliases must be documented in docs/config.rst and API.md."""
+    config_text = Path("docs/config.rst").read_text(encoding="utf-8")
+    api_text = Path("API.md").read_text(encoding="utf-8")
+
+    assert "provider_aliases" in config_text, (
+        "docs/config.rst missing provider_aliases documentation"
+    )
+    assert "provider_aliases" in api_text, (
+        "API.md missing provider_aliases documentation"
+    )
+
+    # Verify example form: key = value pattern in config.rst
+    assert "ocgo-launch = " in config_text, (
+        "docs/config.rst should include a provider_aliases TOML example"
+    )

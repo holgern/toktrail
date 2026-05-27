@@ -119,6 +119,9 @@ Public functions never print, never parse CLI arguments, never call `sys.exit`
 or `typer.Exit`, and return dataclasses or plain values.
 
 Supported harness names across the public API are `opencode`, `pi`, `copilot`,
+`codex`, `code`, `goose`, `droid`, `amp`, `claude`, `vibe`, and `harnessbridge`.
+Use `supported_harnesses()` from `toktrail.api.harnesses` for the
+programmatic list; do not maintain partial harness lists by hand.
 `codex`, `code`, `goose`, `droid`, `amp`, `claude`, and `vibe`.
 
 Every Code support uses the harness name `code`. `default_source_path("code")`
@@ -127,6 +130,7 @@ returns `~/.code/sessions` by default, `resolve_source_path("code")` honors
 when the toktrail-specific override is unset.
 
 Runnable examples for manually measuring OpenCode, Pi, Copilot, Codex, Goose,
+Droid, Amp, Claude, Harnessbridge, and Vibe runs are documented in
 Droid, Amp, Claude, and Vibe runs are documented in
 [`docs/stable_api_examples.md`](docs/stable_api_examples.md).
 Task-oriented usage examples are documented in
@@ -216,6 +220,23 @@ Report and source-summary APIs accept `config_path`. The runtime loader merges
 `config.toml` with sibling `prices.toml` and `subscriptions.toml` when present.
 
 Provider identity is strict: when a usage event already has an explicit provider,
+toktrail does not fall back to inferred provider aliases from the model name.
+
+Provider aliases (`[costing.provider_aliases]` in `config.toml`) let
+you map non-canonical provider names that appear in source data to canonical
+provider keys. For example, mapping `"OpenCode_Go"` to `"github-copilot"`
+ensures that events from harnesses that emit non-standard provider strings still
+resolve to the correct pricing rows.
+
+.. code-block:: toml
+
+[costing.provider_aliases]
+ocgo-launch = "deepseek"
+"OpenCode_Go" = "github-copilot"
+
+Alias resolution runs during identity normalization and is subject to cycle
+detection. Provider aliases complement model-name inference; they do not
+replace it.
 toktrail does not fall back to inferred provider aliases from the model name.
 
 Pricing rows can include context-tier metadata
