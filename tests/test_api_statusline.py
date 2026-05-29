@@ -839,9 +839,7 @@ reset_at = "2026-05-03T08:00:00+00:00"
     assert statusline.quota.remaining_usd == Decimal("1.50")
 
     # Find the 5h period in the subscription report
-    zai_sub = next(
-        r for r in subs.subscriptions if r.subscription_id == "zai-plan"
-    )
+    zai_sub = next(r for r in subs.subscriptions if r.subscription_id == "zai-plan")
     quota_period = next(p for p in zai_sub.periods if p.period == "5h")
     assert quota_period.used_usd == Decimal("8.50")
     assert quota_period.remaining_usd == statusline.quota.remaining_usd

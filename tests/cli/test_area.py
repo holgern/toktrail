@@ -509,11 +509,13 @@ def test_cli_area_bind_cwd_recursive_writes_exact_and_descendant_globs(
     result = runner.invoke(
         app,
         [
-            "--config", str(config_path),
+            "--config",
+            str(config_path),
             "area",
             "bind-cwd",
             "private/my-project",
-            "--path", str(project),
+            "--path",
+            str(project),
             "--recursive",
             "--dry-run",
         ],
@@ -539,11 +541,13 @@ def test_cli_area_bind_cwd_exact_path_only_when_not_recursive(
     result = runner.invoke(
         app,
         [
-            "--config", str(config_path),
+            "--config",
+            str(config_path),
             "area",
             "bind-cwd",
             "private/my-project",
-            "--path", str(project),
+            "--path",
+            str(project),
             "--no-recursive",
             "--dry-run",
         ],

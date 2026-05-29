@@ -316,9 +316,7 @@ def test_parse_opencode_go_cache_output_is_preserved() -> None:
 def test_scan_includes_session_cwd_from_session_table(tmp_path) -> None:
     db_path = tmp_path / "opencode.db"
     conn = create_opencode_db(db_path)
-    conn.execute(
-        "CREATE TABLE session (id TEXT PRIMARY KEY, directory TEXT NOT NULL)"
-    )
+    conn.execute("CREATE TABLE session (id TEXT PRIMARY KEY, directory TEXT NOT NULL)")
     conn.execute(
         "INSERT INTO session (id, directory) VALUES (?, ?)",
         ("ses-1", "/home/user/projects/myapp"),
@@ -367,9 +365,7 @@ def test_scan_returns_empty_metadata_when_no_session_table(tmp_path) -> None:
 def test_scan_metadata_covers_multiple_sessions(tmp_path) -> None:
     db_path = tmp_path / "opencode.db"
     conn = create_opencode_db(db_path)
-    conn.execute(
-        "CREATE TABLE session (id TEXT PRIMARY KEY, directory TEXT NOT NULL)"
-    )
+    conn.execute("CREATE TABLE session (id TEXT PRIMARY KEY, directory TEXT NOT NULL)")
     conn.execute(
         "INSERT INTO session (id, directory) VALUES (?, ?)",
         ("ses-a", "/home/user/proj-a"),

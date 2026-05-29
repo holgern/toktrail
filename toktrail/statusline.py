@@ -419,9 +419,7 @@ def build_statusline_report(
         source_session_id=source_session_id,
         config_path=config_path,
         session_source_paths=(
-            selected_session.source_paths
-            if selected_session is not None
-            else ()
+            selected_session.source_paths if selected_session is not None else ()
         ),
     )
     report = StatuslineReport(

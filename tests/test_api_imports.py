@@ -735,7 +735,6 @@ def _create_opencode_messages(path) -> None:
     conn.close()
 
 
-
 def test_import_configured_usage_auto_assigns_pi_session_by_cwd_before_active_area(
     tmp_path,
     monkeypatch,
@@ -750,6 +749,7 @@ def test_import_configured_usage_auto_assigns_pi_session_by_cwd_before_active_ar
 
     # Write a PI session whose cwd matches the project directory.
     from tests.helpers import write_jsonl_rows
+
     session_rows = [
         {
             "type": "session",
@@ -847,9 +847,7 @@ priority = 100
         assert assignment.area_id == row["id"]
 
         # Verify active area remains work/odoo19.
-        active_row = conn.execute(
-            "SELECT area_id FROM machine_active_areas"
-        ).fetchone()
+        active_row = conn.execute("SELECT area_id FROM machine_active_areas").fetchone()
         assert active_row is not None
         work_row = conn.execute(
             "SELECT id FROM areas WHERE path = ?", ("work/odoo19",)
@@ -873,6 +871,7 @@ def test_auto_detect_does_not_override_existing_session_assignment(
     project_dir.mkdir(parents=True)
 
     from tests.helpers import write_jsonl_rows
+
     session_rows = [
         {
             "type": "session",
@@ -986,6 +985,7 @@ def test_auto_detect_only_applies_to_new_source_sessions(
     project_dir.mkdir(parents=True)
 
     from tests.helpers import write_jsonl_rows
+
     session_rows = [
         {
             "type": "session",

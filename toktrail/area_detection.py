@@ -86,9 +86,8 @@ def _matches_cwd_glob(candidate: str, pattern: str) -> bool:
     # A pattern ending in /** should also match the base directory itself.
     if normalized_pattern.endswith("/**"):
         base = normalized_pattern[:-3]
-        return (
-            normalized_candidate == base
-            or normalized_candidate.startswith(base.rstrip("/") + "/")
+        return normalized_candidate == base or normalized_candidate.startswith(
+            base.rstrip("/") + "/"
         )
 
     return False

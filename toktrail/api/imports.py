@@ -733,10 +733,7 @@ def _auto_assign_detected_areas(
 
     local_machine_id = db_module.get_local_machine_id(conn)
 
-    events_by_session = {
-        (event.harness, event.source_session_id)
-        for event in events
-    }
+    events_by_session = {(event.harness, event.source_session_id) for event in events}
 
     for metadata in scan_session_metadata:
         key = (metadata.harness, metadata.source_session_id)
