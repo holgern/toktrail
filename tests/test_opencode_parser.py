@@ -9,6 +9,7 @@ from toktrail.adapters.opencode import (
     list_opencode_sessions,
     parse_opencode_row,
     parse_opencode_sqlite,
+    scan_opencode_sqlite,
 )
 
 
@@ -310,3 +311,87 @@ def test_parse_opencode_go_cache_output_is_preserved() -> None:
 
     assert event is not None
     assert event.tokens.cache_output == 3
+
+
+def test_scan_includes_session_cwd_from_session_table(tmp_path) -> None:
+    db_path = tmp_path / "opencode.db"
+    conn = create_opencode_db(db_path)
+    conn.execute(
+        "CREATE TABLE session (id TEXT PRIMARY KEY, directory TEXT NOT NULL)"
+    )
+    conn.execute(
+        "INSERT INTO session (id, directory) VALUES (?, ?)",
+        ("ses-1", "/home/user/projects/myapp"),
+    )
+    insert_message(
+        conn,
+        row_id="row-1",
+        session_id="ses-1",
+        data=deepcopy(VALID_ASSISTANT),
+    )
+    conn.commit()
+    conn.close()
+
+    scan = scan_opencode_sqlite(db_path)
+
+    assert len(scan.events) == 1
+    assert len(scan.session_metadata) == 1
+    meta = scan.session_metadata[0]
+    assert meta.source_session_id == "ses-1"
+    assert meta.cwd == "/home/user/projects/myapp"
+    assert meta.source_dir == "/home/user/projects/myapp"
+
+
+def test_scan_returns_empty_metadata_when_no_session_table(tmp_path) -> None:
+    db_path = tmp_path / "opencode.db"
+    conn = create_opencode_db(db_path)
+    insert_message(
+        conn,
+        row_id="row-1",
+        session_id="ses-1",
+        data=deepcopy(VALID_ASSISTANT),
+    )
+    conn.commit()
+    conn.close()
+
+    scan = scan_opencode_sqlite(db_path)
+
+    assert len(scan.events) == 1
+    assert len(scan.session_metadata) == 1
+    meta = scan.session_metadata[0]
+    assert meta.source_session_id == "ses-1"
+    assert meta.cwd is None
+    assert meta.source_dir == str(db_path.parent)
+
+
+def test_scan_metadata_covers_multiple_sessions(tmp_path) -> None:
+    db_path = tmp_path / "opencode.db"
+    conn = create_opencode_db(db_path)
+    conn.execute(
+        "CREATE TABLE session (id TEXT PRIMARY KEY, directory TEXT NOT NULL)"
+    )
+    conn.execute(
+        "INSERT INTO session (id, directory) VALUES (?, ?)",
+        ("ses-a", "/home/user/proj-a"),
+    )
+    conn.execute(
+        "INSERT INTO session (id, directory) VALUES (?, ?)",
+        ("ses-b", "/home/user/proj-b"),
+    )
+    msg_a = deepcopy(VALID_ASSISTANT)
+    msg_a["id"] = "msg-a"
+    msg_b = deepcopy(VALID_ASSISTANT)
+    msg_b["id"] = "msg-b"
+    msg_b["tokens"]["output"] = 600
+    insert_message(conn, row_id="row-a", session_id="ses-a", data=msg_a)
+    insert_message(conn, row_id="row-b", session_id="ses-b", data=msg_b)
+    conn.commit()
+    conn.close()
+
+    scan = scan_opencode_sqlite(db_path)
+
+    assert len(scan.events) == 2
+    assert len(scan.session_metadata) == 2
+    by_session = {m.source_session_id: m for m in scan.session_metadata}
+    assert by_session["ses-a"].cwd == "/home/user/proj-a"
+    assert by_session["ses-b"].cwd == "/home/user/proj-b"

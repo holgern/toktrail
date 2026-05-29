@@ -3636,8 +3636,6 @@ def _refresh_for_statusline(
 ) -> tuple[ImportUsageResult, ...]:
     if mode == "never":
         return ()
-    if mode == "auto" and harness is None:
-        return ()
     try:
         results = import_configured_usage_api(
             _resolve_state_db(ctx),
@@ -3686,23 +3684,17 @@ def _should_skip_statusline_auto_refresh(
     cache_metadata: dict[str, object] | None,
     min_refresh_interval_secs: int,
 ) -> bool:
-    if source_path is None or not source_path.exists():
+    if source_path is not None and not source_path.exists():
         return True
-    if source_path.is_dir():
-        if cache_metadata is None:
-            return False
-        created_ms = cache_metadata.get("created_ms")
-        if not isinstance(created_ms, int):
-            return False
-        return int(time.time() * 1000) - created_ms < min_refresh_interval_secs * 1000
-    state_mtime_ns = _path_mtime_ns(state_db_path)
-    source_mtime_ns = _path_mtime_ns(source_path)
-    if (
-        state_mtime_ns is not None
-        and source_mtime_ns is not None
-        and source_mtime_ns <= state_mtime_ns
-    ):
-        return True
+    if source_path is not None and not source_path.is_dir():
+        state_mtime_ns = _path_mtime_ns(state_db_path)
+        source_mtime_ns = _path_mtime_ns(source_path)
+        if (
+            state_mtime_ns is not None
+            and source_mtime_ns is not None
+            and source_mtime_ns <= state_mtime_ns
+        ):
+            return True
     if cache_metadata is None:
         return False
     created_ms = cache_metadata.get("created_ms")

@@ -29,7 +29,6 @@ from toktrail.api.reports import (
     usage_report,
     usage_sessions_report,
 )
-from toktrail.api.sources import list_source_sessions
 from toktrail.config import load_toktrail_config, normalize_identity
 from toktrail.models import RunScope
 
@@ -66,7 +65,9 @@ class StatuslineRequest:
 def statusline_cache_dir() -> Path:
     runtime_dir = os.environ.get("XDG_RUNTIME_DIR")
     if runtime_dir:
-        return Path(runtime_dir).expanduser() / "toktrail" / "statusline"
+        runtime_path = Path(runtime_dir).expanduser()
+        if runtime_path.is_dir():
+            return runtime_path / "toktrail" / "statusline"
 
     temp_dir = Path(tempfile.gettempdir())
     getuid = getattr(os, "getuid", None)
@@ -274,7 +275,9 @@ def build_statusline_report(
         raise ValueError(msg)
 
     generated_at_ms = int(time() * 1000) if now_ms is None else now_ms
+
     payload = request.stdin_payload
+
     active_scope = _active_run_scope(db_path)
     scope_harness = (
         _scope_singleton(active_scope.harnesses)
@@ -415,6 +418,11 @@ def build_statusline_report(
         harness=harness,
         source_session_id=source_session_id,
         config_path=config_path,
+        session_source_paths=(
+            selected_session.source_paths
+            if selected_session is not None
+            else ()
+        ),
     )
     report = StatuslineReport(
         line="",
@@ -597,12 +605,15 @@ def _select_primary_quota(
     now_ms: int,
     area_path: str | None = None,
 ) -> StatuslineQuota | None:
-    report = subscription_usage_report(
-        db_path,
-        provider_id=providers[0] if len(providers) == 1 else None,
-        now_ms=now_ms,
-        config_path=config_path,
-    )
+    try:
+        report = subscription_usage_report(
+            db_path,
+            provider_id=providers[0] if len(providers) == 1 else None,
+            now_ms=now_ms,
+            config_path=config_path,
+        )
+    except Exception:
+        return None
 
     selected_row: SubscriptionUsageRow | None = None
     selected_period = None
@@ -776,18 +787,13 @@ def _resolve_source_path(
     harness: str | None,
     source_session_id: str | None,
     config_path: Path | None,
+    session_source_paths: tuple[str, ...] = (),
 ) -> Path | None:
     if harness is None or source_session_id is None:
         return None
-    sessions = list_source_sessions(
-        harness,
-        source_session_id=source_session_id,
-        limit=1,
-        config_path=config_path,
-    )
-    if not sessions or not sessions[0].source_paths:
-        return None
-    return Path(sessions[0].source_paths[0])
+    if session_source_paths:
+        return Path(session_source_paths[0])
+    return None
 
 
 def _render_element(

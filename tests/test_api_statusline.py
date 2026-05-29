@@ -720,3 +720,156 @@ def test_statusline_refresh_auto_checks_directory_sources_without_recent_cache(
         )
         is True
     )
+
+
+def test_statusline_report_filters_by_provider(tmp_path: Path) -> None:
+    state_db = tmp_path / "toktrail.db"
+    conn = connect(state_db)
+    try:
+        migrate(conn)
+        insert_usage_events(
+            conn,
+            None,
+            [
+                make_statusline_event(
+                    "zai-1",
+                    harness="pi",
+                    source_session_id="pi/ses-1",
+                    provider_id="zai",
+                    model_id="glm-5.1",
+                    created_ms=2_000,
+                    tokens=TokenBreakdown(input=2_000, output=300),
+                ),
+                make_statusline_event(
+                    "zai-2",
+                    harness="pi",
+                    source_session_id="pi/ses-1",
+                    provider_id="zai",
+                    model_id="glm-5.1",
+                    created_ms=2_100,
+                    tokens=TokenBreakdown(input=1_000, output=200),
+                ),
+                make_statusline_event(
+                    "ant-1",
+                    harness="pi",
+                    source_session_id="pi/ses-1",
+                    provider_id="anthropic",
+                    model_id="claude-4",
+                    created_ms=2_200,
+                    tokens=TokenBreakdown(input=5_000, output=500),
+                ),
+            ],
+        )
+    finally:
+        conn.close()
+
+    report = statusline_report(state_db, provider_id="zai", now_ms=3_000)
+
+    assert report.provider_id == "zai"
+    assert report.model_id == "glm-5.1"
+    # Only zai tokens: 2_000 + 1_000 = 3_000 input, 300 + 200 = 500 output
+    assert report.tokens.total == 3_500
+    assert report.tokens.input == 3_000
+    assert report.tokens.output == 500
+    # The anthropic event (5_500 total tokens) should be excluded
+    assert "pi" in report.line
+
+
+def test_statusline_report_quota_matches_subscription_usage(tmp_path: Path) -> None:
+    state_db = tmp_path / "toktrail.db"
+    config_path = tmp_path / "config.toml"
+    conn = connect(state_db)
+    try:
+        migrate(conn)
+        insert_usage_events(
+            conn,
+            None,
+            [
+                make_statusline_event(
+                    "quota-zai",
+                    harness="pi",
+                    source_session_id="pi/ses-q",
+                    provider_id="zai",
+                    model_id="glm-5.1",
+                    created_ms=1777801200000,
+                    source_cost_usd="8.50",
+                ),
+            ],
+        )
+    finally:
+        conn.close()
+    config_path.write_text(
+        """
+config_version = 1
+
+[[subscriptions]]
+id = "zai-plan"
+usage_providers = ["zai"]
+timezone = "UTC"
+quota_cost_basis = "source"
+
+[[subscriptions.windows]]
+period = "5h"
+limit_usd = 10
+reset_mode = "fixed"
+reset_at = "2026-05-03T08:00:00+00:00"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    from toktrail.api.reports import subscription_usage_report
+
+    now_ms = 1777802400000
+    statusline = statusline_report(
+        state_db,
+        provider_id="zai",
+        config_path=config_path,
+        now_ms=now_ms,
+    )
+    subs = subscription_usage_report(
+        state_db,
+        provider_id="zai",
+        now_ms=now_ms,
+        config_path=config_path,
+    )
+
+    assert statusline.quota is not None
+    assert statusline.quota.period == "5h"
+    # 8.50 used out of 10.00 = 85%
+    assert statusline.quota.remaining_usd == Decimal("1.50")
+
+    # Find the 5h period in the subscription report
+    zai_sub = next(
+        r for r in subs.subscriptions if r.subscription_id == "zai-plan"
+    )
+    quota_period = next(p for p in zai_sub.periods if p.period == "5h")
+    assert quota_period.used_usd == Decimal("8.50")
+    assert quota_period.remaining_usd == statusline.quota.remaining_usd
+
+
+def test_should_skip_refresh_allows_source_path_none(tmp_path: Path) -> None:
+    """When source_path is None (harness unspecified), do not skip refresh."""
+    state_db = tmp_path / "toktrail.db"
+    state_db.write_text("", encoding="utf-8")
+
+    # source_path=None with no cache: should NOT skip (return False)
+    assert (
+        _should_skip_statusline_auto_refresh(
+            state_db_path=state_db,
+            source_path=None,
+            cache_metadata=None,
+            min_refresh_interval_secs=5,
+        )
+        is False
+    )
+
+    # source_path=None with recent cache: should skip (return True)
+    assert (
+        _should_skip_statusline_auto_refresh(
+            state_db_path=state_db,
+            source_path=None,
+            cache_metadata={"created_ms": int(time.time() * 1000)},
+            min_refresh_interval_secs=5,
+        )
+        is True
+    )

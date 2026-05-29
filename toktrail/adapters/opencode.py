@@ -4,14 +4,17 @@ import hashlib
 import json
 import math
 import sqlite3
-from contextlib import closing
 from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
 from urllib.parse import quote
 
 from toktrail.adapters._common import as_non_empty_str, json_object_or_none
-from toktrail.adapters.base import ScanResult, SourceSessionSummary
+from toktrail.adapters.base import (
+    ScanResult,
+    SourceSessionMetadata,
+    SourceSessionSummary,
+)
 from toktrail.adapters.summary import summarize_events_by_source_session
 from toktrail.config import CostingConfig
 from toktrail.models import TokenBreakdown, UsageEvent, normalize_thinking_level
@@ -47,13 +50,15 @@ def scan_opencode_sqlite(
             events=[],
         )
 
+    conn: sqlite3.Connection | None = None
     try:
-        with closing(open_readonly_sqlite(resolved_path)) as conn:
-            rows = _select_candidate_rows(
-                conn,
-                source_session_id=source_session_id,
-                since_ms=since_ms,
-            )
+        conn = open_readonly_sqlite(resolved_path)
+        rows = _select_candidate_rows(
+            conn,
+            source_session_id=source_session_id,
+            since_ms=since_ms,
+        )
+        session_dirs = _query_session_directories(conn)
     except (OSError, sqlite3.Error):
         return OpenCodeScanResult(
             source_path=resolved_path,
@@ -61,6 +66,9 @@ def scan_opencode_sqlite(
             rows_skipped=0,
             events=[],
         )
+    finally:
+        if conn is not None:
+            conn.close()
 
     rows_skipped = 0
     events: list[UsageEvent] = []
@@ -95,11 +103,27 @@ def scan_opencode_sqlite(
             )
         rows_skipped += 1
 
+    metadata: list[SourceSessionMetadata] = []
+    session_ids = {event.source_session_id for event in events}
+    for sid in sorted(session_ids):
+        cwd = session_dirs.get(sid)
+        source_dir = cwd or str(resolved_path.parent)
+        metadata.append(
+            SourceSessionMetadata(
+                harness=OPENCODE_HARNESS,
+                source_session_id=sid,
+                source_paths=(str(resolved_path),),
+                cwd=cwd,
+                source_dir=source_dir,
+            )
+        )
+
     return OpenCodeScanResult(
         source_path=resolved_path,
         rows_seen=len(rows),
         rows_skipped=rows_skipped,
         events=events,
+        session_metadata=tuple(metadata),
     )
 
 
@@ -251,6 +275,17 @@ def _select_candidate_rows(
         return conn.execute(json_query, params).fetchall()
     except sqlite3.OperationalError:
         return conn.execute(fallback_query, params).fetchall()
+
+
+def _query_session_directories(conn: sqlite3.Connection) -> dict[str, str]:
+    try:
+        rows = conn.execute(
+            "SELECT id, directory "
+            "FROM session WHERE directory IS NOT NULL AND directory != ''"
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return {}
+    return {str(row["id"]): str(row["directory"]) for row in rows}
 
 
 def _json_loads(data_json: str) -> dict[str, object] | None:
