@@ -8,12 +8,18 @@ from pathlib import Path
 
 from toktrail import db as db_module
 from toktrail._db._impl_db import InsertUsageResult
-from toktrail.adapters.base import ImportScanState, ImportSourceState, ScanResult
+from toktrail.adapters.base import (
+    ImportScanState,
+    ImportSourceState,
+    ScanResult,
+    SourceSessionMetadata,
+)
 from toktrail.adapters.registry import HarnessDefinition as RegistryHarnessDefinition
 from toktrail.api._common import _get_harness, _open_state_db, _validate_source_path
 from toktrail.api.models import ImportUsageResult
 from toktrail.api.paths import resolve_source_path
-from toktrail.config import load_resolved_toktrail_config
+from toktrail.area_detection import detect_area_for_session_metadata
+from toktrail.config import AreasConfig, load_resolved_toktrail_config
 from toktrail.errors import (
     InvalidAPIUsageError,
     RunNotFoundError,
@@ -56,6 +62,8 @@ def import_usage(
     use_active_session: bool = True,
     include_raw_json: bool = False,
     refresh_mode: str = "full",
+    config_path: Path | None = None,
+    areas_config: AreasConfig | None = None,
 ) -> ImportUsageResult:
     if since_start and since_ms is not None:
         msg = "since_start=True and since_ms cannot be used together."
@@ -149,6 +157,9 @@ def import_usage(
             for event in scan.events
             if effective_since_ms is None or event.created_ms >= effective_since_ms
         ]
+        resolved_areas_config = _resolve_areas_config(
+            areas_config, config_path=config_path
+        )
         started_db_write = time.perf_counter()
         insert_result = _persist_scan(
             conn=conn,
@@ -161,6 +172,7 @@ def import_usage(
             pre_scan_fingerprint=pre_scan_fingerprint,
             scan=scan,
             filtered_events=filtered_events,
+            areas_config=resolved_areas_config,
         )
         timing = ImportExecutionTiming(
             fingerprint_ms=timing.fingerprint_ms,
@@ -202,6 +214,7 @@ def import_configured_usage(  # noqa: C901
         raise InvalidAPIUsageError(msg)
     loaded = load_resolved_toktrail_config(config_path)
     import_config = loaded.config.imports
+    areas_config = loaded.config.areas
     selected_harnesses = (
         tuple(_get_harness(harness).name for harness in harnesses)
         if harnesses is not None
@@ -298,6 +311,8 @@ def import_configured_usage(  # noqa: C901
                         since_start=since_start,
                         since_ms=since_ms,
                         refresh_mode=refresh_mode,
+                        config_path=config_path,
+                        areas_config=areas_config,
                     )
                     results.append(result)
                     continue
@@ -343,6 +358,8 @@ def import_configured_usage(  # noqa: C901
                     since_start=since_start,
                     since_ms=since_ms,
                     refresh_mode=refresh_mode,
+                    config_path=config_path,
+                    areas_config=areas_config,
                 )
             )
     conn, _ = _open_state_db(db_path)
@@ -507,7 +524,15 @@ def _persist_scan(
     ],
     scan: ScanResult,
     filtered_events: list[UsageEvent],
+    areas_config: AreasConfig | None = None,
+    config_path: Path | None = None,
 ) -> InsertUsageResult:
+    _auto_assign_detected_areas(
+        conn=conn,
+        areas_config=areas_config,
+        scan_session_metadata=scan.session_metadata,
+        events=filtered_events,
+    )
     try:
         insert_result: InsertUsageResult = db_module.insert_usage_events(
             conn,
@@ -680,3 +705,71 @@ def _directory_fingerprint(
     except OSError:
         return (None, None, None, None, None)
     return (total_size, max_mtime_ns, file_count ^ inode_hash, None, None)
+
+
+def _resolve_areas_config(
+    areas_config: AreasConfig | None,
+    *,
+    config_path: Path | None,
+) -> AreasConfig | None:
+    if areas_config is not None:
+        return areas_config
+    loaded = load_resolved_toktrail_config(config_path)
+    return loaded.config.areas
+
+
+def _auto_assign_detected_areas(
+    *,
+    conn: sqlite3.Connection,
+    areas_config: AreasConfig | None,
+    scan_session_metadata: tuple[SourceSessionMetadata, ...],
+    events: list[UsageEvent],
+) -> None:
+    """Create area-session assignments from auto-detected areas before insert."""
+    if areas_config is None or not areas_config.auto_detect:
+        return
+    if not scan_session_metadata or not events:
+        return
+
+    local_machine_id = db_module.get_local_machine_id(conn)
+
+    events_by_session = {
+        (event.harness, event.source_session_id)
+        for event in events
+    }
+
+    for metadata in scan_session_metadata:
+        key = (metadata.harness, metadata.source_session_id)
+        if key not in events_by_session:
+            continue
+
+        existing = db_module.get_area_session_assignment(
+            conn,
+            origin_machine_id=local_machine_id,
+            harness=metadata.harness,
+            source_session_id=metadata.source_session_id,
+        )
+        if existing is not None:
+            continue
+
+        if db_module._source_session_has_usage_events(
+            conn,
+            origin_machine_id=local_machine_id,
+            harness=metadata.harness,
+            source_session_id=metadata.source_session_id,
+        ):
+            continue
+
+        detected = detect_area_for_session_metadata(areas_config, metadata)
+        if detected is None:
+            continue
+
+        area = db_module.ensure_area(conn, detected.area_path)
+        db_module.assign_area_to_source_session(
+            conn,
+            area_id=area.id,
+            origin_machine_id=local_machine_id,
+            harness=metadata.harness,
+            source_session_id=metadata.source_session_id,
+            create_only=True,
+        )

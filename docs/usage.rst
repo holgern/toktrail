@@ -276,6 +276,36 @@ Key behavior:
 - ``toktrail usage areas`` exposes direct-vs-subtree totals in both JSON and
   human output.
 
+Default working-directory area detection
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Toktrail can assign new source sessions to an area based on the session working
+directory. This is useful when the active machine area is a broad default but
+some projects should always map to a specific area.
+
+Example::
+
+   [areas]
+   auto_detect = true
+
+   [[areas.rules]]
+   area = "private/toktrail"
+   cwd_globs = [
+     "~/src/odoo17/toktrail",
+     "~/src/odoo17/toktrail/**",
+   ]
+   priority = 100
+
+When a new PI, Codex, Code, or Harnessbridge source session reports a matching
+``cwd``/``source_dir``/``git_root``, Toktrail creates a normal session assignment
+for that source session. Explicit assignments are preserved, and already
+imported sessions are not moved automatically.
+
+Use ``toktrail area bind-cwd`` to add a rule from the command line::
+
+   toktrail area bind-cwd private/toktrail --path ~/src/odoo17/toktrail
+
+Use ``toktrail area list --verbose`` to see which areas have cwd rules.
 
 Provider subscription status
 ----------------------------

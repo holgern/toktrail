@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import datetime
-import fnmatch
 import json
 import re
 import sqlite3
@@ -13,6 +12,7 @@ from typing import Annotated
 
 import typer
 
+from toktrail.area_detection import detect_area_for_cwd
 from toktrail.cli_parts import usage as usage_parts
 from toktrail.db import (
     archive_area_path,
@@ -110,6 +110,7 @@ def register_area_commands(  # noqa: C901
         typer.echo(f"Created area: {area.path}")
 
     @area_app.command("list", help="List all usage areas with session counts.")
+    @area_app.command("list", help="List all usage areas with session counts.")
     def area_list(
         ctx: typer.Context,
         json_output: JsonOption = False,
@@ -155,6 +156,10 @@ def register_area_commands(  # noqa: C901
                 suffix = " *" if active_area_id == area.id else ""
                 typer.echo(f"{'  ' * depth}{area.path}{suffix}")
             return
+        loaded = load_resolved_toktrail_config_or_exit(ctx)
+        rules_by_area: dict[str, list[str]] = {}
+        for rule in loaded.config.areas.rules:  # type: ignore[attr-defined]
+            rules_by_area.setdefault(rule.area, []).extend(rule.cwd_globs)
         print_table(
             [
                 {
@@ -162,20 +167,22 @@ def register_area_commands(  # noqa: C901
                     "stable_id": area.sync_id[:12],
                     "local_id": format_int(area.id),
                     "active": "*" if active_area_id == area.id else "",
+                    "cwd_rules": ", ".join(rules_by_area.get(area.path, [])),
                 }
                 for area in areas
             ],
-            ["area", "stable_id", "local_id", "active"],
+            ["area", "stable_id", "local_id", "active", "cwd_rules"],
             {
                 "area": "area",
                 "stable_id": "stable id",
                 "local_id": "local id",
                 "active": "active",
+                "cwd_rules": "cwd rules",
             },
             rich_output=rich_output,
             numeric_columns={"local_id"},
-            wrap_columns={"area"},
-            max_widths={"area": 52},
+            wrap_columns={"area", "cwd_rules"},
+            max_widths={"area": 52, "cwd_rules": 60},
         )
 
     @area_app.command("use", help="Set the active area for new imports.")
@@ -577,39 +584,14 @@ def register_area_commands(  # noqa: C901
         json_output: JsonOption = False,
     ) -> None:
         loaded = load_resolved_toktrail_config_or_exit(ctx)
-        rules = loaded.config.areas.rules  # type: ignore[attr-defined]
+        areas_config = loaded.config.areas  # type: ignore[attr-defined]
         cwd = Path.cwd()
         cwd_text = str(cwd)
         git_remote = _git_remote_origin(cwd)
-        matched: list[tuple[int, str, str]] = []
-        for index, rule in enumerate(rules):
-            for pattern in rule.cwd_globs:
-                expanded = str(Path(pattern).expanduser())
-                if fnmatch.fnmatch(cwd_text, expanded):
-                    matched.append((rule.priority, rule.area, f"cwd matched {pattern}"))
-                    break
-            else:
-                for remote_pattern in rule.git_remotes:
-                    if git_remote and fnmatch.fnmatch(git_remote, remote_pattern):
-                        matched.append(
-                            (
-                                rule.priority,
-                                rule.area,
-                                f"git remote matched {remote_pattern}",
-                            )
-                        )
-                        break
-            if matched and matched[-1][1] == rule.area:
-                matched[-1] = (
-                    matched[-1][0],
-                    matched[-1][1],
-                    f"{matched[-1][2]} (rule {index + 1})",
-                )
-        detected_area: str | None = None
-        reason: str | None = None
-        if matched:
-            matched.sort(key=lambda item: (item[0], item[1]), reverse=True)
-            _, detected_area, reason = matched[0]
+        detected = detect_area_for_cwd(areas_config, cwd_text, git_remote=git_remote)
+        detected_area = detected.area_path if detected is not None else None
+        reason = detected.reason if detected is not None else None
+
         conn = open_toktrail_connection(ctx)
         try:
             active = get_active_area_status(conn)
@@ -649,15 +631,31 @@ def register_area_commands(  # noqa: C901
     def area_bind_cwd(
         ctx: typer.Context,
         path: Annotated[str, typer.Argument(help="Area path.")],
+        bind_path: Annotated[
+            Path | None,
+            typer.Option(
+                "--path",
+                help="Directory to bind; defaults to current directory.",
+            ),
+        ] = None,
         recursive: Annotated[bool, typer.Option("--recursive/--no-recursive")] = True,
         git_root: Annotated[bool, typer.Option("--git-root")] = False,
         dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
     ) -> None:
-        base = _resolve_git_root(Path.cwd()) if git_root else Path.cwd()
+        resolved_cwd = bind_path.expanduser() if bind_path is not None else Path.cwd()
+        if git_root:
+            base = _resolve_git_root(resolved_cwd)
+        else:
+            base = resolved_cwd
         if base is None:
             exit_with_error("Could not resolve git root.")
             return  # unreachable
-        glob = f"{base.expanduser()}/**" if recursive else str(base.expanduser())
+        base_text = str(base.expanduser())
+        if recursive:
+            globs = [base_text, f"{base_text}/**"]
+        else:
+            globs = [base_text]
+        glob_lines = ",\n  ".join(f'"{g}"' for g in globs)
         config_path = resolve_config_path(ctx)
         rendered = (
             "\n[areas]\n"
@@ -665,7 +663,7 @@ def register_area_commands(  # noqa: C901
             "warn_on_mismatch = true\n\n"
             "[[areas.rules]]\n"
             f'area = "{path}"\n'
-            f'cwd_globs = ["{glob}"]\n'
+            f"cwd_globs = [\n  {glob_lines}\n]\n"
             "priority = 100\n"
         )
         if dry_run:

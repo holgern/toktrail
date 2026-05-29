@@ -238,7 +238,9 @@ toktrail area sessions --area-leaf tests --today
 toktrail area bulk-assign work/odoo --unassigned --today --dry-run
 toktrail area bulk-assign work/odoo --unassigned --today --apply
 toktrail area detect
-toktrail area bind-cwd work/odoo --git-root
+toktrail area bind-cwd work/odoo --path ~/src/my-project --recursive
+   toktrail area bind-cwd work/odoo --git-root
+   toktrail area list --verbose
 toktrail usage today --area work
 toktrail usage today --area toktrail
 toktrail usage today --area work --area-exact

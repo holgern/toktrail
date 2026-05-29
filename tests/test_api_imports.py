@@ -17,6 +17,7 @@ from tests.test_amp_parser import create_amp_source
 from tests.test_droid_parser import write_droid_settings
 from tests.test_goose_parser import create_goose_db, insert_session
 from tests.test_harnessbridge_parser import write_harnessbridge_rows
+from toktrail import db as db_module
 from toktrail.api import imports as imports_module
 from toktrail.api.imports import import_configured_usage, import_usage
 from toktrail.api.models import RunScope
@@ -732,3 +733,364 @@ def _create_opencode_messages(path) -> None:
     insert_message(conn, row_id="row-2", session_id="ses-1", data=second)
     conn.commit()
     conn.close()
+
+
+
+def test_import_configured_usage_auto_assigns_pi_session_by_cwd_before_active_area(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """Auto-detection from cwd wins over active area for new PI sessions."""
+    toktrail_db = tmp_path / "toktrail.db"
+    config_path = tmp_path / "toktrail.toml"
+    sessions_dir = tmp_path / "pi-sessions"
+    sessions_dir.mkdir()
+    project_dir = tmp_path / "src" / "odoo17" / "toktrail"
+    project_dir.mkdir(parents=True)
+
+    # Write a PI session whose cwd matches the project directory.
+    from tests.helpers import write_jsonl_rows
+    session_rows = [
+        {
+            "type": "session",
+            "id": "pi_private",
+            "timestamp": "2026-01-01T00:00:00.000Z",
+            "cwd": str(project_dir),
+        },
+        {
+            "type": "message",
+            "id": "msg_001",
+            "parentId": None,
+            "timestamp": "2026-01-01T00:00:01.000Z",
+            "message": {
+                "role": "assistant",
+                "model": "claude-3-5-sonnet",
+                "provider": "anthropic",
+                "usage": {
+                    "input": 100,
+                    "output": 50,
+                    "cacheRead": 0,
+                    "cacheWrite": 0,
+                    "totalTokens": 150,
+                },
+            },
+        },
+    ]
+    session_file = sessions_dir / "session.jsonl"
+    write_jsonl_rows(session_file, session_rows)
+
+    # Config with auto_detect and a rule for the project directory.
+    config_text = f"""\
+config_version = 1
+
+[imports]
+harnesses = ["pi"]
+missing_source = "error"
+include_raw_json = false
+
+[imports.sources]
+pi = "{_toml_path_value(sessions_dir)}"
+
+[areas]
+auto_detect = true
+
+[[areas.rules]]
+area = "private/toktrail"
+cwd_globs = ["{_toml_path_value(project_dir)}", "{_toml_path_value(project_dir)}/**"]
+priority = 100
+"""
+    config_path.write_text(config_text, encoding="utf-8")
+    monkeypatch.setenv("TOKTRAIL_CONFIG", str(config_path))
+
+    from toktrail.db import (
+        ensure_area,
+        get_area_session_assignment,
+        get_local_machine_id,
+        set_active_area,
+    )
+
+    init_state(toktrail_db)
+    start_run(toktrail_db, name="test-run", started_at_ms=0)
+
+    conn = db_module.connect(toktrail_db)
+    try:
+        # Create the competing active area different from auto-detected.
+        ensure_area(conn, "work/odoo19")
+        work_area = ensure_area(conn, "work/odoo19")
+        set_active_area(conn, work_area.id)
+        # Also create the auto-detected area so it exists.
+        ensure_area(conn, "private/toktrail")
+        conn.commit()
+    finally:
+        conn.close()
+
+    results = import_configured_usage(toktrail_db, config_path=config_path)
+    assert len(results) == 1
+    assert results[0].rows_imported >= 1
+
+    conn = db_module.connect(toktrail_db)
+    try:
+        local_machine_id = get_local_machine_id(conn)
+        # Verify assignment was created for the detected area.
+        assignment = get_area_session_assignment(
+            conn,
+            origin_machine_id=local_machine_id,
+            harness="pi",
+            source_session_id="pi_private",
+        )
+        assert assignment is not None
+        # Find the area id for private/toktrail.
+        row = conn.execute(
+            "SELECT id FROM areas WHERE path = ?", ("private/toktrail",)
+        ).fetchone()
+        assert row is not None
+        assert assignment.area_id == row["id"]
+
+        # Verify active area remains work/odoo19.
+        active_row = conn.execute(
+            "SELECT area_id FROM machine_active_areas"
+        ).fetchone()
+        assert active_row is not None
+        work_row = conn.execute(
+            "SELECT id FROM areas WHERE path = ?", ("work/odoo19",)
+        ).fetchone()
+        assert work_row is not None
+        assert active_row["area_id"] == work_row["id"]
+    finally:
+        conn.close()
+
+
+def test_auto_detect_does_not_override_existing_session_assignment(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """Existing manual assignment must not be overwritten by auto-detect."""
+    toktrail_db = tmp_path / "toktrail.db"
+    config_path = tmp_path / "toktrail.toml"
+    sessions_dir = tmp_path / "pi-sessions"
+    sessions_dir.mkdir()
+    project_dir = tmp_path / "src" / "odoo17" / "toktrail"
+    project_dir.mkdir(parents=True)
+
+    from tests.helpers import write_jsonl_rows
+    session_rows = [
+        {
+            "type": "session",
+            "id": "pi_manual",
+            "timestamp": "2026-01-01T00:00:00.000Z",
+            "cwd": str(project_dir),
+        },
+        {
+            "type": "message",
+            "id": "msg_001",
+            "parentId": None,
+            "timestamp": "2026-01-01T00:00:01.000Z",
+            "message": {
+                "role": "assistant",
+                "model": "claude-3-5-sonnet",
+                "provider": "anthropic",
+                "usage": {
+                    "input": 100,
+                    "output": 50,
+                    "cacheRead": 0,
+                    "cacheWrite": 0,
+                    "totalTokens": 150,
+                },
+            },
+        },
+    ]
+    session_file = sessions_dir / "session.jsonl"
+    write_jsonl_rows(session_file, session_rows)
+
+    config_text = f"""\
+config_version = 1
+
+[imports]
+harnesses = ["pi"]
+missing_source = "error"
+include_raw_json = false
+
+[imports.sources]
+pi = "{_toml_path_value(sessions_dir)}"
+
+[areas]
+auto_detect = true
+
+[[areas.rules]]
+area = "private/toktrail"
+cwd_globs = ["{_toml_path_value(project_dir)}", "{_toml_path_value(project_dir)}/**"]
+priority = 100
+"""
+    config_path.write_text(config_text, encoding="utf-8")
+    monkeypatch.setenv("TOKTRAIL_CONFIG", str(config_path))
+
+    from toktrail.db import (
+        assign_area_to_source_session,
+        ensure_area,
+        get_area_session_assignment,
+        get_local_machine_id,
+    )
+
+    init_state(toktrail_db)
+    start_run(toktrail_db, name="test-run", started_at_ms=0)
+
+    conn = db_module.connect(toktrail_db)
+    try:
+        ensure_area(conn, "private/toktrail")
+        manual_area = ensure_area(conn, "manual/area")
+        local_machine_id = get_local_machine_id(conn)
+        # Pre-create a manual assignment for the same source session.
+        assign_area_to_source_session(
+            conn,
+            area_id=manual_area.id,
+            origin_machine_id=local_machine_id,
+            harness="pi",
+            source_session_id="pi_manual",
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    results = import_configured_usage(toktrail_db, config_path=config_path)
+    assert len(results) >= 1
+
+    conn = db_module.connect(toktrail_db)
+    try:
+        local_machine_id = get_local_machine_id(conn)
+        assignment = get_area_session_assignment(
+            conn,
+            origin_machine_id=local_machine_id,
+            harness="pi",
+            source_session_id="pi_manual",
+        )
+        assert assignment is not None
+        manual_row = conn.execute(
+            "SELECT id FROM areas WHERE path = ?", ("manual/area",)
+        ).fetchone()
+        assert manual_row is not None
+        assert assignment.area_id == manual_row["id"]
+    finally:
+        conn.close()
+
+
+def test_auto_detect_only_applies_to_new_source_sessions(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """Already-imported sessions must not be moved by auto-detect."""
+    toktrail_db = tmp_path / "toktrail.db"
+    config_path = tmp_path / "toktrail.toml"
+    sessions_dir = tmp_path / "pi-sessions"
+    sessions_dir.mkdir()
+    project_dir = tmp_path / "src" / "odoo17" / "toktrail"
+    project_dir.mkdir(parents=True)
+
+    from tests.helpers import write_jsonl_rows
+    session_rows = [
+        {
+            "type": "session",
+            "id": "pi_stable",
+            "timestamp": "2026-01-01T00:00:00.000Z",
+            "cwd": str(project_dir),
+        },
+        {
+            "type": "message",
+            "id": "msg_001",
+            "parentId": None,
+            "timestamp": "2026-01-01T00:00:01.000Z",
+            "message": {
+                "role": "assistant",
+                "model": "claude-3-5-sonnet",
+                "provider": "anthropic",
+                "usage": {
+                    "input": 100,
+                    "output": 50,
+                    "cacheRead": 0,
+                    "cacheWrite": 0,
+                    "totalTokens": 150,
+                },
+            },
+        },
+    ]
+    session_file = sessions_dir / "session.jsonl"
+    write_jsonl_rows(session_file, session_rows)
+
+    # First import with auto_detect disabled.
+    config_text_no_detect = f"""\
+config_version = 1
+
+[imports]
+harnesses = ["pi"]
+missing_source = "error"
+include_raw_json = false
+
+[imports.sources]
+pi = "{_toml_path_value(sessions_dir)}"
+
+[areas]
+auto_detect = false
+"""
+    config_path.write_text(config_text_no_detect, encoding="utf-8")
+    monkeypatch.setenv("TOKTRAIL_CONFIG", str(config_path))
+
+    init_state(toktrail_db)
+    start_run(toktrail_db, name="test-run", started_at_ms=0)
+
+    results = import_configured_usage(toktrail_db, config_path=config_path)
+    assert len(results) == 1
+    assert results[0].rows_imported >= 1
+
+    # Now enable auto-detect and import again.
+    config_text_detect = f"""\
+config_version = 1
+
+[imports]
+harnesses = ["pi"]
+missing_source = "error"
+include_raw_json = false
+
+[imports.sources]
+pi = "{_toml_path_value(sessions_dir)}"
+
+[areas]
+auto_detect = true
+
+[[areas.rules]]
+area = "private/toktrail"
+cwd_globs = ["{_toml_path_value(project_dir)}", "{_toml_path_value(project_dir)}/**"]
+priority = 100
+"""
+    config_path.write_text(config_text_detect, encoding="utf-8")
+
+    from toktrail.db import (
+        ensure_area,
+        get_area_session_assignment,
+        get_local_machine_id,
+    )
+
+    conn = db_module.connect(toktrail_db)
+    try:
+        ensure_area(conn, "private/toktrail")
+        conn.commit()
+    finally:
+        conn.close()
+
+    results2 = import_configured_usage(toktrail_db, config_path=config_path)
+    # The second import should see 0 imported (idempotent) and not reassign.
+    assert results2[0].rows_imported == 0
+
+    conn = db_module.connect(toktrail_db)
+    try:
+        local_machine_id = get_local_machine_id(conn)
+        assignment = get_area_session_assignment(
+            conn,
+            origin_machine_id=local_machine_id,
+            harness="pi",
+            source_session_id="pi_stable",
+        )
+        # Should remain unassigned (or None) since the session was imported
+        # before auto-detect was enabled. The auto_assign logic skips sessions
+        # that already have usage events.
+        assert assignment is None
+    finally:
+        conn.close()

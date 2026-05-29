@@ -494,3 +494,61 @@ def test_cli_area_sessions_accepts_area_leaf(tmp_path: Path) -> None:
         "privat/taskledger/tests",
         "privat/toktrail/tests",
     ]
+
+
+def test_cli_area_bind_cwd_recursive_writes_exact_and_descendant_globs(
+    tmp_path,
+) -> None:
+    """bind-cwd --recursive emits both the base dir and base/** patterns."""
+    runner = CliRunner()
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("config_version = 1\n", encoding="utf-8")
+    project = tmp_path / "my-project"
+    project.mkdir()
+
+    result = runner.invoke(
+        app,
+        [
+            "--config", str(config_path),
+            "area",
+            "bind-cwd",
+            "private/my-project",
+            "--path", str(project),
+            "--recursive",
+            "--dry-run",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    output = result.output
+    assert str(project) in output
+    assert f"{project}/**" in output
+    assert 'area = "private/my-project"' in output
+    assert "priority = 100" in output
+
+
+def test_cli_area_bind_cwd_exact_path_only_when_not_recursive(
+    tmp_path,
+) -> None:
+    """bind-cwd --no-recursive emits only the base directory."""
+    runner = CliRunner()
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("config_version = 1\n", encoding="utf-8")
+    project = tmp_path / "my-project"
+    project.mkdir()
+
+    result = runner.invoke(
+        app,
+        [
+            "--config", str(config_path),
+            "area",
+            "bind-cwd",
+            "private/my-project",
+            "--path", str(project),
+            "--no-recursive",
+            "--dry-run",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    output = result.output
+    assert str(project) in output
+    assert f"{project}/**" not in output

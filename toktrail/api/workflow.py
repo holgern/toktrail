@@ -98,6 +98,7 @@ def finalize_manual_run(
         source_path=prepared.source_path,
         source_session_id=selected_source_session.source_session_id,
         include_raw_json=include_raw_json,
+        config_path=config_path,
     )
     run = (
         stop_active_run(db_path, prepared.run.id)
