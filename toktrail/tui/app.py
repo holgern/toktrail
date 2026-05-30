@@ -367,7 +367,6 @@ class ToktrailTuiApp(App[None]):
                 return pane_id, value
         return pane_id, str(pane)
 
-
     def _resolve_display(self) -> TuiDisplay:
         size = getattr(self, "size", None)
         columns = getattr(size, "width", None)

@@ -1794,7 +1794,7 @@ def _sync_state_directory(staged_root: Path, target_root: Path) -> None:
 
     old_paths = _manifest_relative_paths(target_root)
     new_paths = {
-        str(path.relative_to(staged_root))
+        path.relative_to(staged_root).as_posix()
         for path in staged_root.rglob("*")
         if path.is_file()
     }
