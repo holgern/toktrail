@@ -13,7 +13,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Literal, NoReturn, cast
 
 import typer
-from click.core import ParameterSource
 
 if TYPE_CHECKING:
     pass
@@ -427,20 +426,23 @@ def tui(
     ] = None,
 ) -> None:
     """Open interactive terminal UI."""
+    if tui_mode is not None:
+        from toktrail.tui.layout import normalize_tui_mode
+        try:
+            normalize_tui_mode(tui_mode)
+        except ValueError as exc:
+            _exit_with_error(str(exc))
     try:
         from toktrail.tui.app import ToktrailTuiApp
-        from toktrail.tui.layout import normalize_tui_mode
     except ImportError:
         _exit_with_error(
             "Textual mode requires installing toktrail[tui]. "
             "Run: python -m pip install 'toktrail[tui]'"
         )
-    try:
-        requested_tui_mode = normalize_tui_mode(
-            tui_mode or os.environ.get("TOKTRAIL_TUI_MODE") or "auto"
-        )
-    except ValueError as exc:
-        _exit_with_error(str(exc))
+    from toktrail.tui.layout import normalize_tui_mode
+    requested_tui_mode = normalize_tui_mode(
+        tui_mode or os.environ.get("TOKTRAIL_TUI_MODE") or "auto"
+    )
     app_instance = ToktrailTuiApp(
         db_path=_resolve_state_db(ctx),
         config_path=_resolve_config_path(ctx),
@@ -4026,7 +4028,7 @@ def _refresh_before_report(
 
 def _resolve_report_refresh_mode(ctx: typer.Context, *, enabled: bool) -> str:
     source = ctx.get_parameter_source("refresh")
-    if source is not None and source is not ParameterSource.DEFAULT:
+    if source is not None and source.name != "DEFAULT":
         return "always" if enabled else "never"
     loaded_config = _load_resolved_toktrail_config_or_exit(ctx)
     return loaded_config.config.reports.refresh

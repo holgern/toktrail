@@ -8,7 +8,6 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import typer
-from click.core import ParameterSource
 
 from toktrail.adapters.registry import get_harness
 from toktrail.api.imports import import_configured_usage as import_configured_usage_api
@@ -127,7 +126,7 @@ def refresh_before_report(
 
 def resolve_report_refresh_mode(ctx: typer.Context, *, enabled: bool) -> str:
     source = ctx.get_parameter_source("refresh")
-    if source is not None and source is not ParameterSource.DEFAULT:
+    if source is not None and source.name != "DEFAULT":
         return "always" if enabled else "never"
     loaded_config = _load_resolved_toktrail_config_or_exit(ctx)
     return loaded_config.config.reports.refresh  # type: ignore[no-any-return, attr-defined]
