@@ -26,6 +26,7 @@ readme = "README.md"
 license = "MIT"
 keywords = ["cli", "developer-tools", "token"]
 dependencies = [
+    "click",
     "typer",
     "PyYAML",
     'tomli; python_version < "3.11"',
