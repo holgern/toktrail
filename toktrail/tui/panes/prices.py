@@ -7,8 +7,9 @@ from textual.widgets import DataTable, Static
 
 from toktrail.api.models import PriceRow, UnconfiguredModelRow
 from toktrail.cli_parts.formatting import _format_int, _format_price
-from toktrail.tui.layout import TuiDisplay, resolve_tui_display
+from toktrail.tui.layout import TuiDisplay
 from toktrail.tui.panes.exportable import ExportablePaneMixin
+from toktrail.tui.panes.table import move_table_to_key, restore_selected_key
 from toktrail.tui.services import PricesData
 
 
@@ -17,7 +18,7 @@ class PricesPane(ExportablePaneMixin, Vertical):
 
     def __init__(self, *args, **kwargs) -> None:  # type: ignore[no-untyped-def]
         super().__init__(*args, **kwargs)
-        self.tui_display: TuiDisplay = resolve_tui_display("full")
+        self.tui_display: TuiDisplay = TuiDisplay(mode="full", columns=80, rows=24)
         self._price_subview: str = "unconfigured"
 
     def set_display(self, display: TuiDisplay) -> None:
@@ -96,13 +97,11 @@ class PricesPane(ExportablePaneMixin, Vertical):
             detail.update("No unconfigured model selected.")
             self.export_text = self._build_export_text(data)
         else:
-            if previous_key and previous_key in self._rows_by_key:
-                selected_key = previous_key
-            else:
-                selected_key = self._unconfigured_row_key(data.unconfigured[0])
-            self.selected_unconfigured = self._rows_by_key[selected_key]
-            row_index = unconfigured.get_row_index(selected_key)
-            unconfigured.move_cursor(row=row_index, column=0)
+            selected_key = restore_selected_key(previous_key, self._rows_by_key.keys())
+            self.selected_unconfigured = (
+                None if selected_key is None else self._rows_by_key[selected_key]
+            )
+            move_table_to_key(unconfigured, selected_key)
             self._update_detail(self.selected_unconfigured)
             self.export_text = self._build_export_text(data)
         self._sync_subview_visibility()

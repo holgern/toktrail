@@ -52,7 +52,7 @@ def _make_seeded_app(tmp_path) -> ToktrailTuiApp:
 async def test_export_current_view_writes_copyable_file(tmp_path, monkeypatch) -> None:
     app = _make_seeded_app(tmp_path)
     export_dir = tmp_path / "exports"
-    monkeypatch.setattr(app, "_export_dir", lambda: export_dir)
+    monkeypatch.setattr("toktrail.tui.app.export_dir", lambda: export_dir)
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.press("2")
         await pilot.pause()

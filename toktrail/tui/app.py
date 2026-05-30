@@ -1,9 +1,5 @@
-# mypy: ignore-errors
 from __future__ import annotations
 
-import os
-import shutil
-import subprocess
 from pathlib import Path
 from typing import cast
 
@@ -11,9 +7,12 @@ from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.widgets import ContentSwitcher, Footer, Header, Static, Tab, Tabs
+from textual.worker import Worker, WorkerState
 
+from toktrail.api.models import PriceRow
 from toktrail.errors import InvalidAPIUsageError
 from toktrail.periods import resolve_timezone
+from toktrail.tui.clipboard import copy_fallback_path, copy_to_clipboard, export_dir
 from toktrail.tui.layout import TuiDisplay, TuiMode, resolve_tui_display
 from toktrail.tui.panes.areas import AreasPane
 from toktrail.tui.panes.config import ConfigPane
@@ -27,6 +26,36 @@ from toktrail.tui.screens.help import HelpScreen
 from toktrail.tui.screens.price_form import PriceFormScreen
 from toktrail.tui.services import DashboardView, ToktrailTuiService
 from toktrail.tui.state import ToktrailTuiState
+
+PANE_LABELS = {
+    "dashboard": "Dashboard",
+    "sessions": "Sessions",
+    "areas": "Areas",
+    "prices": "Prices",
+    "subscriptions": "Subscriptions",
+    "config": "Config",
+}
+
+PANE_SHORT_LABELS = {
+    "dashboard": "Dash",
+    "sessions": "Sess",
+    "areas": "Area",
+    "prices": "Price",
+    "subscriptions": "Subs",
+    "config": "Cfg",
+}
+
+PANE_TABLE_IDS = {
+    "sessions": "#sessions-table",
+    "areas": "#areas-table",
+}
+
+DETAIL_IDS = {
+    "sessions": "#sessions-detail",
+    "areas": "#areas-detail",
+    "prices": "#prices-detail",
+    "subscriptions": "#subscriptions-detail",
+}
 
 
 class ToktrailTuiApp(App[None]):
@@ -95,7 +124,6 @@ class ToktrailTuiApp(App[None]):
         self._areas = AreasPane(id="areas")
         self._prices = PricesPane(id="prices")
         self._subscriptions = SubscriptionsPane(id="subscriptions")
-        self._config = ConfigPane(id="config")
         self._config = ConfigPane(id="config")
         self._tui_display: TuiDisplay | None = None
         self._compact_details_visible = False
@@ -176,12 +204,27 @@ class ToktrailTuiApp(App[None]):
         self.push_screen(HelpScreen(display.mode))
 
     def action_refresh(self) -> None:
-        try:
-            self.service.refresh()
+        self._status.update("Refresh started.")
+        self.run_worker(
+            self._refresh_in_worker,
+            name="refresh",
+            group="refresh",
+            exclusive=True,
+            thread=True,
+        )
+
+    def _refresh_in_worker(self) -> tuple[object, ...]:
+        return self.service.refresh()
+
+    def on_worker_state_changed(self, event: Worker.StateChanged) -> None:
+        if event.worker.name != "refresh":
+            return
+        if event.state == WorkerState.SUCCESS:
             self._refresh_views()
             self._status.update("Refresh completed.")
-        except Exception as exc:  # pragma: no cover - defensive UI boundary
-            self._status.update(f"Refresh failed: {exc}")
+            return
+        if event.state == WorkerState.ERROR:
+            self._status.update(f"Refresh failed: {event.worker.error}")
 
     def action_create_area(self) -> None:
         self.push_screen(AreaFormScreen(), self._on_area_form_saved)
@@ -196,7 +239,7 @@ class ToktrailTuiApp(App[None]):
         self._status.update(f"Active area set: {path}")
 
     def action_clear_active_area(self) -> None:
-        def _after_confirm(confirmed: bool) -> None:
+        def _after_confirm(confirmed: bool | None) -> None:
             if not confirmed:
                 return
             self.service.clear_active_area()
@@ -262,13 +305,13 @@ class ToktrailTuiApp(App[None]):
         if not text.strip():
             self._status.update("Current view is empty.")
             return
-        copied = self._copy_to_clipboard(text)
-        fallback = self._copy_fallback_path()
-        fallback.parent.mkdir(parents=True, exist_ok=True)
-        fallback.write_text(text, encoding="utf-8")
+        copied = copy_to_clipboard(text)
         if copied:
             self._status.update(f"Copied {pane_id} view to clipboard.")
             return
+        fallback = copy_fallback_path()
+        fallback.parent.mkdir(parents=True, exist_ok=True)
+        fallback.write_text(text, encoding="utf-8")
         self._status.update(
             f"Clipboard unavailable; wrote copy fallback to {fallback}."
         )
@@ -278,7 +321,7 @@ class ToktrailTuiApp(App[None]):
         if not text.strip():
             self._status.update("Current view is empty.")
             return
-        export_path = self._export_dir() / f"toktrail-{pane_id}.txt"
+        export_path = export_dir() / f"toktrail-{pane_id}.txt"
         export_path.parent.mkdir(parents=True, exist_ok=True)
         export_path.write_text(text, encoding="utf-8")
         self._status.update(f"Exported current view: {export_path}")
@@ -291,7 +334,7 @@ class ToktrailTuiApp(App[None]):
         self._refresh_views()
         self._status.update(f"Area created: {value}")
 
-    def _on_price_saved(self, row) -> None:
+    def _on_price_saved(self, row: PriceRow | None) -> None:
         if row is None:
             self._status.update("Price edit cancelled or invalid.")
             return
@@ -324,37 +367,6 @@ class ToktrailTuiApp(App[None]):
                 return pane_id, value
         return pane_id, str(pane)
 
-    def _export_dir(self) -> Path:
-        xdg_cache_home = os.environ.get("XDG_CACHE_HOME")
-        if xdg_cache_home:
-            return Path(xdg_cache_home).expanduser() / "toktrail" / "exports"
-        return Path.home() / ".cache" / "toktrail" / "exports"
-
-    def _copy_fallback_path(self) -> Path:
-        xdg_cache_home = os.environ.get("XDG_CACHE_HOME")
-        if xdg_cache_home:
-            return Path(xdg_cache_home).expanduser() / "toktrail" / "tui-last-view.txt"
-        return Path.home() / ".cache" / "toktrail" / "tui-last-view.txt"
-
-    def _copy_to_clipboard(self, text: str) -> bool:
-        if self._run_clipboard(["termux-clipboard-set"], text):
-            return True
-        wayland = os.environ.get("WAYLAND_DISPLAY")
-        display = os.environ.get("DISPLAY")
-        if wayland and self._run_clipboard(["wl-copy"], text):
-            return True
-        if display and self._run_clipboard(["xclip", "-selection", "clipboard"], text):
-            return True
-        if display and self._run_clipboard(["xsel", "--clipboard", "--input"], text):
-            return True
-        if self._run_clipboard(["pbcopy"], text):
-            return True
-        if self._run_clipboard(["clip.exe"], text):
-            return True
-        return self._run_clipboard(
-            ["powershell.exe", "-NoProfile", "-Command", "Set-Clipboard"],
-            text,
-        )
 
     def _resolve_display(self) -> TuiDisplay:
         size = getattr(self, "size", None)
@@ -389,10 +401,7 @@ class ToktrailTuiApp(App[None]):
         return content.current or "dashboard"
 
     def _focus_table_if_needed(self, pane_id: str) -> None:
-        table_id = {
-            "sessions": "#sessions-table",
-            "areas": "#areas-table",
-        }.get(pane_id)
+        table_id = PANE_TABLE_IDS.get(pane_id)
         if table_id is None:
             return
         try:
@@ -416,9 +425,10 @@ class ToktrailTuiApp(App[None]):
     def _update_status_with_date(self) -> None:
         pane_id = self._current_pane_id()
         if pane_id not in ("sessions", "areas"):
+            self._status.update(f"{PANE_LABELS.get(pane_id, pane_id)} pane.")
             return
         label = self._date_label()
-        cap = pane_id.capitalize()
+        cap = PANE_LABELS.get(pane_id, pane_id.capitalize())
         self._status.update(f"{cap}: {label}")
 
     def action_day_back(self) -> None:
@@ -443,20 +453,14 @@ class ToktrailTuiApp(App[None]):
             self._compact_bar.update("")
             return
         current = self._current_pane_id()
-        labels = {
-            "dashboard": "Dash",
-            "sessions": "Sess",
-            "areas": "Area",
-            "prices": "Price",
-            "subscriptions": "Subs",
-            "config": "Cfg",
-        }
         date_info = ""
         if current in ("sessions", "areas") and self._date_offset > 0:
             date_info = f"  {self._date_label()}"
         if display.mode == "micro":
             self._compact_bar.update(
-                f"toktrail {labels.get(current, current)}{date_info}  ? help  q quit"
+                "toktrail "
+                f"{PANE_SHORT_LABELS.get(current, current)}{date_info}  "
+                "? help  q quit"
             )
             return
         self._compact_bar.update(
@@ -467,12 +471,7 @@ class ToktrailTuiApp(App[None]):
     def _micro_detail_preview(self) -> str:
         content = self.query_one("#content", ContentSwitcher)
         pane_id = content.current or "dashboard"
-        detail_id = {
-            "sessions": "#sessions-detail",
-            "areas": "#areas-detail",
-            "prices": "#prices-detail",
-            "subscriptions": "#subscriptions-detail",
-        }.get(pane_id)
+        detail_id = DETAIL_IDS.get(pane_id)
         if detail_id is None:
             return "No details for this pane."
         try:
@@ -483,19 +482,3 @@ class ToktrailTuiApp(App[None]):
         value = str(text)
         first_line = value.splitlines()[0] if value else "No details available."
         return first_line
-
-    def _run_clipboard(self, command: list[str], text: str) -> bool:
-        executable = command[0]
-        if shutil.which(executable) is None:
-            return False
-        try:
-            subprocess.run(
-                command,
-                input=text,
-                text=True,
-                check=True,
-                capture_output=True,
-            )
-        except (subprocess.CalledProcessError, OSError):
-            return False
-        return True

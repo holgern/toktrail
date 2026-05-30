@@ -16,8 +16,9 @@ from toktrail.api.models import (
 )
 from toktrail.cli_parts.formatting import _format_cost, _format_int, _format_percent
 from toktrail.formatting import format_duration_seconds, format_epoch_ms_compact
-from toktrail.tui.layout import TuiDisplay, resolve_tui_display
+from toktrail.tui.layout import TuiDisplay
 from toktrail.tui.panes.exportable import ExportablePaneMixin
+from toktrail.tui.panes.table import move_table_to_key, restore_selected_key
 from toktrail.tui.services import SubscriptionsData
 
 
@@ -67,7 +68,7 @@ class SubscriptionsPane(ExportablePaneMixin, Vertical):
 
     def __init__(self, *args, **kwargs):  # type: ignore[no-untyped-def]
         super().__init__(*args, **kwargs)
-        self.tui_display: TuiDisplay = resolve_tui_display("full")
+        self.tui_display: TuiDisplay = TuiDisplay(mode="full", columns=80, rows=24)
         self._rows_by_key: dict[str, _SubscriptionWindowView] = {}
 
     def set_display(self, display: TuiDisplay) -> None:
@@ -95,7 +96,6 @@ class SubscriptionsPane(ExportablePaneMixin, Vertical):
         previous_key = (
             None if self.selected_window is None else self.selected_window.key
         )
-        first_key: str | None = None
         now_ms = int(time.time() * 1000)
 
         for subscription in data.subscriptions:
@@ -103,17 +103,15 @@ class SubscriptionsPane(ExportablePaneMixin, Vertical):
                 key = f"{subscription.subscription_id}:{period.period}:{index}"
                 view = _SubscriptionWindowView(key, subscription, period)
                 self._rows_by_key[key] = view
-                if first_key is None:
-                    first_key = key
                 self._add_table_row(table, view, now_ms=now_ms)
 
-        selected_key = previous_key if previous_key in self._rows_by_key else first_key
+        selected_key = restore_selected_key(previous_key, self._rows_by_key.keys())
         if selected_key is None:
             self.selected_window = None
             detail.update("No active subscription windows.")
         else:
             self.selected_window = self._rows_by_key[selected_key]
-            table.move_cursor(row=table.get_row_index(selected_key), column=0)
+            move_table_to_key(table, selected_key)
             self._update_detail(self.selected_window, now_ms=now_ms)
 
         self.export_text = self._build_export_text(data, now_ms=now_ms)

@@ -7,8 +7,9 @@ from textual.widgets import DataTable, Static
 
 from toktrail.cli_parts.formatting import _format_cost, _format_int
 from toktrail.tui.formatting import leaf_path
-from toktrail.tui.layout import TuiDisplay, resolve_tui_display
+from toktrail.tui.layout import TuiDisplay
 from toktrail.tui.panes.exportable import ExportablePaneMixin
+from toktrail.tui.panes.table import move_table_to_key, restore_selected_key
 from toktrail.tui.services import AreasData
 
 
@@ -17,7 +18,7 @@ class AreasPane(ExportablePaneMixin, Vertical):
 
     def __init__(self, *args, **kwargs) -> None:  # type: ignore[no-untyped-def]
         super().__init__(*args, **kwargs)
-        self.tui_display: TuiDisplay = resolve_tui_display("full")
+        self.tui_display: TuiDisplay = TuiDisplay(mode="full", columns=80, rows=24)
 
     def set_display(self, display: TuiDisplay) -> None:
         self.tui_display = display
@@ -70,12 +71,10 @@ class AreasPane(ExportablePaneMixin, Vertical):
             self.export_text = "Areas\n(none)"
             detail.update("No area selected.")
         else:
-            if previous_selected and previous_selected in data.area_paths:
-                self.selected_area_path = previous_selected
-            else:
-                self.selected_area_path = data.area_paths[0]
-            row_index = table.get_row_index(self.selected_area_path)
-            table.move_cursor(row=row_index, column=0)
+            self.selected_area_path = restore_selected_key(
+                previous_selected, data.area_paths
+            )
+            move_table_to_key(table, self.selected_area_path)
             self._update_detail(self.selected_area_path, usage_by_path)
             self.export_text = self._build_export_text(data, usage_by_path)
 
@@ -109,12 +108,10 @@ class AreasPane(ExportablePaneMixin, Vertical):
             self.export_text = "Areas\n(none)"
             detail.update("No area selected.")
             return
-        if previous_selected and previous_selected in data.area_paths:
-            self.selected_area_path = previous_selected
-        else:
-            self.selected_area_path = data.area_paths[0]
-        row_index = table.get_row_index(self.selected_area_path)
-        table.move_cursor(row=row_index, column=0)
+        self.selected_area_path = restore_selected_key(
+            previous_selected, data.area_paths
+        )
+        move_table_to_key(table, self.selected_area_path)
         self._update_detail(self.selected_area_path, usage_by_path)
         self.export_text = self._build_export_text(data, usage_by_path)
 
@@ -150,12 +147,10 @@ class AreasPane(ExportablePaneMixin, Vertical):
             self.export_text = "Areas\n(none)"
             detail.update("No area selected.")
             return
-        if previous_selected and previous_selected in data.area_paths:
-            self.selected_area_path = previous_selected
-        else:
-            self.selected_area_path = data.area_paths[0]
-        row_index = table.get_row_index(self.selected_area_path)
-        table.move_cursor(row=row_index, column=0)
+        self.selected_area_path = restore_selected_key(
+            previous_selected, data.area_paths
+        )
+        move_table_to_key(table, self.selected_area_path)
         self._update_detail(self.selected_area_path, usage_by_path)
         self.export_text = self._build_export_text(data, usage_by_path)
 

@@ -1,4 +1,3 @@
-# mypy: ignore-errors
 from __future__ import annotations
 
 import os
@@ -57,9 +56,7 @@ def resolve_tui_display(
     assert rows is not None
 
     if requested != "auto":
-        return TuiDisplay(
-            mode=cast(ResolvedTuiMode, requested), columns=columns, rows=rows
-        )
+        return TuiDisplay(mode=requested, columns=columns, rows=rows)
 
     if columns < MICRO_MAX_COLUMNS or rows < MICRO_MAX_ROWS:
         return TuiDisplay(mode="micro", columns=columns, rows=rows)

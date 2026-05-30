@@ -96,3 +96,25 @@ async def test_upsert_price_from_unconfigured_seed(tmp_path) -> None:
             row.provider_id == seed.provider and row.model_id == seed.model
             for row in remaining
         )
+
+
+async def test_price_form_keeps_invalid_numbers_visible(tmp_path) -> None:
+    from toktrail.api.models import PriceRow
+    from toktrail.tui.screens.price_form import PriceFormScreen
+
+    app = _make_seeded_app(tmp_path)
+    seed = PriceRow(
+        table="virtual",
+        provider="unknown-a",
+        model="unknown-model-a",
+        input_usd_per_1m=0.0,
+        output_usd_per_1m=0.0,
+    )
+    async with app.run_test(size=(120, 40)) as pilot:
+        app.push_screen(PriceFormScreen(seed))
+        await pilot.pause()
+        app.screen.query_one("#input-price").value = "not-a-number"
+        await pilot.click("#save")
+        await pilot.pause()
+        assert isinstance(app.screen, PriceFormScreen)
+        assert "must be numbers" in str(app.screen.query_one("#price-error").render())

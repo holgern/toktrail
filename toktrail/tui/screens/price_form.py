@@ -1,10 +1,9 @@
-# mypy: ignore-errors
 from __future__ import annotations
 
 from textual.app import ComposeResult
 from textual.containers import Horizontal
 from textual.screen import ModalScreen
-from textual.widgets import Button, Input, Label, Select
+from textual.widgets import Button, Input, Label, Select, Static
 
 from toktrail.api.models import PriceRow
 
@@ -29,6 +28,7 @@ class PriceFormScreen(ModalScreen[PriceRow | None]):
         yield Input(str(self._seed.input_usd_per_1m), id="input-price")
         yield Label("Output USD / 1M")
         yield Input(str(self._seed.output_usd_per_1m), id="output-price")
+        yield Static("", id="price-error")
         with Horizontal():
             yield Button("Save", id="save")
             yield Button("Cancel", id="cancel")
@@ -42,14 +42,18 @@ class PriceFormScreen(ModalScreen[PriceRow | None]):
         table = self.query_one("#table", Select).value
         input_text = self.query_one("#input-price", Input).value.strip()
         output_text = self.query_one("#output-price", Input).value.strip()
+        error = self.query_one("#price-error", Static)
+        if not provider or not model or table not in {"actual", "virtual"}:
+            error.update("Provider, model, and table are required.")
+            return
         try:
             input_price = float(input_text)
             output_price = float(output_text)
         except ValueError:
-            self.dismiss(None)
+            error.update("Input and output prices must be numbers.")
             return
-        if not provider or not model or table not in {"actual", "virtual"}:
-            self.dismiss(None)
+        if input_price < 0 or output_price < 0:
+            error.update("Input and output prices must be non-negative.")
             return
         self.dismiss(
             PriceRow(

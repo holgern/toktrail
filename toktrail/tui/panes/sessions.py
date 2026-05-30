@@ -13,8 +13,9 @@ from toktrail.tui.formatting import (
     leaf_path,
     session_cost_label,
 )
-from toktrail.tui.layout import TuiDisplay, resolve_tui_display
+from toktrail.tui.layout import TuiDisplay
 from toktrail.tui.panes.exportable import ExportablePaneMixin
+from toktrail.tui.panes.table import move_table_to_key, restore_selected_key
 from toktrail.tui.services import SessionsData
 
 
@@ -23,7 +24,7 @@ class SessionsPane(ExportablePaneMixin, Vertical):
 
     def __init__(self, *args, **kwargs) -> None:  # type: ignore[no-untyped-def]
         super().__init__(*args, **kwargs)
-        self.tui_display: TuiDisplay = resolve_tui_display("full")
+        self.tui_display: TuiDisplay = TuiDisplay(mode="full", columns=80, rows=24)
 
     def set_display(self, display: TuiDisplay) -> None:
         self.tui_display = display
@@ -59,7 +60,7 @@ class SessionsPane(ExportablePaneMixin, Vertical):
             "Path",
         )
         previous_selected = self.selected_session_key
-        self._rows_by_key: dict[str, object] = {}
+        self._rows_by_key = {}
         for row in data.sessions:
             key = row.key
             self._rows_by_key[key] = row
@@ -82,12 +83,10 @@ class SessionsPane(ExportablePaneMixin, Vertical):
             self.export_text = "Sessions\n(none)"
             detail.update("No session selected.")
         else:
-            if previous_selected and previous_selected in self._rows_by_key:
-                self.selected_session_key = previous_selected
-            else:
-                self.selected_session_key = data.sessions[0].key
-            selected_row_index = table.get_row_index(self.selected_session_key)
-            table.move_cursor(row=selected_row_index, column=0)
+            self.selected_session_key = restore_selected_key(
+                previous_selected, self._rows_by_key.keys()
+            )
+            move_table_to_key(table, self.selected_session_key)
             self._update_detail(self.selected_session_key)
             self.export_text = self._build_export_text(data)
 
@@ -116,12 +115,10 @@ class SessionsPane(ExportablePaneMixin, Vertical):
             self.export_text = "Sessions\n(none)"
             detail.update("No session selected.")
             return
-        if previous_selected and previous_selected in self._rows_by_key:
-            self.selected_session_key = previous_selected
-        else:
-            self.selected_session_key = data.sessions[0].key
-        row_index = table.get_row_index(self.selected_session_key)
-        table.move_cursor(row=row_index, column=0)
+        self.selected_session_key = restore_selected_key(
+            previous_selected, self._rows_by_key.keys()
+        )
+        move_table_to_key(table, self.selected_session_key)
         self._update_detail(self.selected_session_key)
         self.export_text = self._build_export_text(data)
 
@@ -149,12 +146,10 @@ class SessionsPane(ExportablePaneMixin, Vertical):
             self.export_text = "Sessions\n(none)"
             detail.update("No session selected.")
             return
-        if previous_selected and previous_selected in self._rows_by_key:
-            self.selected_session_key = previous_selected
-        else:
-            self.selected_session_key = data.sessions[0].key
-        row_index = table.get_row_index(self.selected_session_key)
-        table.move_cursor(row=row_index, column=0)
+        self.selected_session_key = restore_selected_key(
+            previous_selected, self._rows_by_key.keys()
+        )
+        move_table_to_key(table, self.selected_session_key)
         self._update_detail(self.selected_session_key)
         self.export_text = self._build_export_text(data)
 
