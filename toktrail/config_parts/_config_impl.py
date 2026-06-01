@@ -1070,8 +1070,6 @@ class SessionIndexConfig:
     max_chars_per_item: int = 500
 
 
-
-
 @dataclass(frozen=True)
 class ContextWindowConfig:
     provider: str
@@ -1104,9 +1102,7 @@ class RuntimeConfig:
     areas: AreasConfig = field(default_factory=AreasConfig)
     context_windows: tuple[ContextWindowConfig, ...] = ()
     provider_aliases: tuple[ProviderAlias, ...] = ()
-    session_index: SessionIndexConfig = field(
-        default_factory=SessionIndexConfig
-    )
+    session_index: SessionIndexConfig = field(default_factory=SessionIndexConfig)
 
 
 @dataclass(frozen=True)
@@ -2902,8 +2898,6 @@ def _parse_context_windows(value: object) -> tuple[ContextWindowConfig, ...]:
         seen.add(key)
         windows.append(window)
     return tuple(windows)
-
-
 
 
 _SESSION_INDEX_FIELDS = {"enabled", "store", "max_chars_per_item"}

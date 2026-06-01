@@ -277,12 +277,11 @@ def search_session_index(
         for row in rows
     )
 
+
 def clear_session_index(conn: sqlite3.Connection) -> int:
     """Clear all index rows. Returns count deleted."""
     _create_index_tables(conn)
-    count_row = conn.execute(
-        "SELECT count(*) FROM session_index_items"
-    ).fetchone()[0]
+    count_row = conn.execute("SELECT count(*) FROM session_index_items").fetchone()[0]
     count: int = int(count_row) if count_row is not None else 0
     conn.execute("DELETE FROM session_index_items")
     if _has_fts5(conn):

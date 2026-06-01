@@ -157,7 +157,9 @@ def test_retry_and_edit_churn_helpers_detect_repeated_work() -> None:
 def test_classify_outcome_marks_abandoned_when_last_user_turn_goes_quiet() -> None:
     outcome, confidence = classify_outcome(
         (
-            _event(created_ms=1_000, role="assistant", kind="tool_result", success=True),
+            _event(
+                created_ms=1_000, role="assistant", kind="tool_result", success=True
+            ),
             _event(created_ms=2_000, role="user", kind="command", text="try again"),
         ),
         _usage_session(last_ms=2_000),
@@ -171,7 +173,9 @@ def test_classify_outcome_marks_completed_on_successful_last_event() -> None:
     outcome, confidence = classify_outcome(
         (
             _event(created_ms=1_000, role="user", kind="command", text="run tests"),
-            _event(created_ms=2_000, role="assistant", kind="tool_result", success=True),
+            _event(
+                created_ms=2_000, role="assistant", kind="tool_result", success=True
+            ),
         ),
         _usage_session(last_ms=2_000),
     )

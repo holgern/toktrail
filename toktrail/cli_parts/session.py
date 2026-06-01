@@ -426,15 +426,15 @@ def session_search(
 
     config = load_resolved_toktrail_config(_resolve_config_path(ctx))
     if not config.runtime.session_index.enabled:
-        _exit_with_error(
-            "Session index is disabled. Enable [session_index] in config."
-        )
+        _exit_with_error("Session index is disabled. Enable [session_index] in config.")
 
     db_path = _resolve_state_db(ctx)
     conn = connect(db_path)
     try:
         results = search_session_index(
-            conn, query, harness=harness,
+            conn,
+            query,
+            harness=harness,
         )
     finally:
         conn.close()
@@ -447,7 +447,5 @@ def session_search(
         return
     for r in results:
         typer.echo(
-            f"{r.harness}/{r.source_session_id} "
-            f"[{r.kind}] {r.content_redacted[:80]}"
+            f"{r.harness}/{r.source_session_id} [{r.kind}] {r.content_redacted[:80]}"
         )
-

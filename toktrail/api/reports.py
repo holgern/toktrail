@@ -93,10 +93,7 @@ def _resolve_usage_session_row(
     resolved_source_session_id = source_session_id
     if session_key is not None:
         if (
-            any(
-                value is not None
-                for value in (machine_id, harness, source_session_id)
-            )
+            any(value is not None for value in (machine_id, harness, source_session_id))
             or last
         ):
             msg = (
@@ -348,17 +345,13 @@ def usage_report(
     return replace(public_report, filters=filters)
 
 
-
-
 def _compute_distributions(
     session_metas: tuple[InsightSessionMeta, ...],
 ) -> dict[str, object]:
     """Compute duration and message count distributions."""
     durations = [m.duration_ms for m in session_metas if m.duration_ms is not None]
     user_msgs = [m.user_messages for m in session_metas]
-    total_msgs = [
-        m.user_messages + m.assistant_messages for m in session_metas
-    ]
+    total_msgs = [m.user_messages + m.assistant_messages for m in session_metas]
 
     def _bucket_ms(ms: int) -> str:
         minutes = ms / 60_000
@@ -492,9 +485,7 @@ def _compute_health_aggregates(
         "sessions_with_health": len(scores) + sum(1 for _ in grades.values()),
         "outcomes": outcomes,
         "grade_distribution": grades,
-        "failure_rate": (
-            round(total_failures / max(total_tool_calls, 1), 4)
-        ),
+        "failure_rate": (round(total_failures / max(total_tool_calls, 1), 4)),
     }
     if scores:
         result["average_score"] = round(sum(scores) / len(scores), 1)
@@ -513,20 +504,20 @@ def _compute_area_mix(
     for m in session_metas:
         area = m.area_path or "(unassigned)"
         area_data[area]["sessions"] += 1
-        area_data[area]["messages"] += (
-            m.user_messages + m.assistant_messages
-        )
+        area_data[area]["messages"] += m.user_messages + m.assistant_messages
         area_data[area]["tokens"] += m.total_tokens
         area_data[area]["cost"] += m.actual_cost
     rows: list[dict[str, object]] = []
     for area, data in sorted(area_data.items()):
-        rows.append({
-            "area": area,
-            "sessions": data["sessions"],
-            "messages": data["messages"],
-            "tokens": data["tokens"],
-            "cost": str(data["cost"]),
-        })
+        rows.append(
+            {
+                "area": area,
+                "sessions": data["sessions"],
+                "messages": data["messages"],
+                "tokens": data["tokens"],
+                "cost": str(data["cost"]),
+            }
+        )
     return tuple(rows)
 
 
@@ -604,9 +595,7 @@ def stats_report(
             "cache_write_ratio": tokens.cache_write / cache_denominator,
             "cache_read_tokens": tokens.cache_read,
             "cache_write_tokens": tokens.cache_write,
-            "reuse_ratio": (
-                tokens.cache_read / cache_denominator
-            ),
+            "reuse_ratio": (tokens.cache_read / cache_denominator),
         },
         models=tuple(row.as_dict() for row in report.by_model),
         providers=tuple(row.as_dict() for row in report.by_provider),

@@ -10,7 +10,6 @@ runner = CliRunner()
 pytestmark = pytest.mark.usefixtures("cli_config")
 
 
-
 @pytest.fixture
 def cli_config(tmp_path, monkeypatch):
     from toktrail.api.config import init_config

@@ -857,6 +857,7 @@ class StatsReport:
             result["generated_at_ms"] = self.generated_at_ms
         return result
 
+
 @dataclass(frozen=True)
 class SubscriptionUsagePeriod:
     period: str

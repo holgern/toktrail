@@ -971,9 +971,7 @@ class SessionDigest:
             "providers": list(self.providers),
             "summary": self.summary.as_dict(),
             "tool_health": self.tool_health.as_dict(),
-            "health": (
-                None if self.health is None else self.health.as_dict()
-            ),
+            "health": (None if self.health is None else self.health.as_dict()),
             "privacy": {
                 "contains_raw_transcript": self.contains_raw_transcript,
                 "contains_snippets": self.contains_snippets,

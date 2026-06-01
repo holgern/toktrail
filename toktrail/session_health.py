@@ -244,7 +244,9 @@ def _classify_outcome_with_basis(
             return "errored", "high", tuple(basis)
 
         evaluation_ms = generated_at_ms or int(time() * 1000)
-        last_event_ms = last_event.created_ms or usage_session.last_ms or usage_session.first_ms
+        last_event_ms = (
+            last_event.created_ms or usage_session.last_ms or usage_session.first_ms
+        )
         if (
             last_event.role == "user"
             and last_event_ms is not None

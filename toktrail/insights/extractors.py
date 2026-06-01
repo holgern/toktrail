@@ -160,7 +160,9 @@ def extract_session_metas(
         meta_lookup: dict[tuple[str, str, str], SourceSessionMetadata] = {}
         tool_call_counts: dict[tuple[str, str, str], int] = {}
         tool_failure_counts: dict[tuple[str, str, str], int] = {}
-        tool_failure_categories: dict[tuple[str, str, str], tuple[tuple[str, int], ...]] = {}
+        tool_failure_categories: dict[
+            tuple[str, str, str], tuple[tuple[str, int], ...]
+        ] = {}
         for m in raw_meta:
             key = (m.origin_machine_id, m.harness, m.source_session_id)
             meta_lookup[key] = m

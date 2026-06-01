@@ -201,9 +201,7 @@ class SessionsPane(ExportablePaneMixin, Vertical):
             )
             if digest.penalties:
                 detail_lines.append(f"Penalties: {', '.join(digest.penalties)}")
-        detail.update(
-            "\n".join(detail_lines)
-        )
+        detail.update("\n".join(detail_lines))
 
     def _build_export_text(self, data: SessionsData) -> str:
         lines = [

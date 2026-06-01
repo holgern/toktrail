@@ -19,7 +19,7 @@ def test_pi_session_digest_extracts_failed_tool_result(tmp_path: Path) -> None:
         '"content":['
         '{"type":"toolCall","name":"bash","id":"call_00","arguments":{"command":"ls"}},'
         '{"type":"toolCall","name":"read","id":"call_01","arguments":{"filePath":"x.py"}}'
-        ']}}\n'
+        "]}}\n"
         '{"type":"message","timestamp":"2026-01-01T00:00:03Z",'
         '"message":{"role":"toolResult","toolName":"bash",'
         '"toolCallId":"call_00","isError":false,'

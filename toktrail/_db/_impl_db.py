@@ -3379,7 +3379,8 @@ def upsert_source_session_digest(
             contains_raw_transcript, contains_snippets, created_at_ms, updated_at_ms,
             imported_at_ms
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(origin_machine_id, harness, source_session_id, generator)
         DO UPDATE SET
             schema_version = excluded.schema_version,
@@ -3438,10 +3439,7 @@ def upsert_source_session_digest(
             json.dumps(
                 []
                 if digest.health is None
-                else [
-                    penalty.as_dict()
-                    for penalty in digest.health.penalties
-                ],
+                else [penalty.as_dict() for penalty in digest.health.penalties],
                 separators=(",", ":"),
             ),
             0 if digest.health is None else digest.health.retry_count,
@@ -3581,9 +3579,7 @@ def _health_from_row(row: sqlite3.Row) -> SessionHealth | None:
             kind=str(item.get("kind", "unknown")),
             points=int(item.get("points", 0)),
             detail=(
-                None
-                if item.get("detail") in (None, "")
-                else str(item.get("detail"))
+                None if item.get("detail") in (None, "") else str(item.get("detail"))
             ),
         )
         for item in json.loads(penalties_json)

@@ -1144,9 +1144,7 @@ def stats(
     token_payload = totals.get("tokens")
     tokens = token_payload if isinstance(token_payload, dict) else {}
     messages = totals.get("messages")
-    message_count = (
-        int(messages) if isinstance(messages, (int, float, str)) else 0
-    )
+    message_count = int(messages) if isinstance(messages, (int, float, str)) else 0
     total_tokens_value = tokens.get("total")
     total_tokens = (
         int(total_tokens_value)
@@ -1175,9 +1173,7 @@ def stats(
     if health:
         avg_score = health.get("average_score")
         outcomes = health.get("outcomes")
-        if isinstance(outcomes, dict) and any(
-            v > 0 for v in outcomes.values()
-        ):
+        if isinstance(outcomes, dict) and any(v > 0 for v in outcomes.values()):
             outcome_parts = [f"{k}={v}" for k, v in outcomes.items() if v]
             typer.echo(f"Outcomes: {', '.join(outcome_parts)}")
         if avg_score is not None:
@@ -1190,10 +1186,10 @@ def stats(
             median = dur.get("median")
             if median is not None:
                 from toktrail.formatting import format_duration_seconds
+
                 seconds = int(median) // 1000
-                typer.echo(
-                    f"Median duration: {format_duration_seconds(seconds)}"
-                )
+                typer.echo(f"Median duration: {format_duration_seconds(seconds)}")
+
 
 @usage_app.command("daily", help="Show daily usage breakdown.")
 @usage_app.command("weekly", help="Show weekly usage breakdown.")

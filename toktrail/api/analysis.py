@@ -399,6 +399,7 @@ def _compact_report_from_usage_session(
         source_fingerprint=digest.source_fingerprint if digest is not None else None,
     )
 
+
 def _resolve_digest_source_path(
     *,
     definition: object,
