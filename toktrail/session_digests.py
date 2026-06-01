@@ -256,31 +256,64 @@ def _extract_pi_file_events(
             continue
         if current_session_id != source_session_id:
             continue
-        message = _as_mapping(entry.get("message")) or entry
-        raw_kind = _as_str(entry.get("type")) or _as_str(message.get("type"))
-        created_ms = _timestamp_ms(entry.get("timestamp") or message.get("timestamp"))
-        text = _first_str(message, "cmd", "command", "text", "content")
-        name = _first_str(message, "name", "tool", "toolName", "tool_name")
-        success = _success_from_mapping(message)
-        error_text = _first_str(message, "error", "errorText", "stderr")
-        kind = _event_kind(raw_kind, message, text=text, error_text=error_text)
-        if kind is None:
+        if entry_type != "message":
             continue
-        events.append(
-            SessionTranscriptEvent(
-                harness="pi",
-                source_session_id=source_session_id,
-                created_ms=created_ms,
-                role=_as_str(message.get("role")),
-                kind=kind,
-                name=name or _default_tool_name(raw_kind),
-                text=text if kind == "command" else None,
-                path=_first_str(message, "path", "filePath", "file_path"),
-                success=success,
-                error_text=error_text,
-                raw_kind=raw_kind,
+        message = _as_mapping(entry.get("message"))
+        if message is None:
+            continue
+        role = _as_str(message.get("role"))
+        created_ms = _timestamp_ms(entry.get("timestamp") or message.get("timestamp"))
+
+        if role == "toolResult":
+            tool_name = _as_str(message.get("toolName"))
+            is_error = message.get("isError")
+            kind = "error" if is_error is True else "tool_result"
+            name = tool_name or _as_str(message.get("toolCallId"))
+            error_text = (
+                _as_str(message.get("error"))
+                or _as_str(message.get("errorText"))
+                or _as_str(message.get("stderr"))
             )
-        )
+            events.append(
+                SessionTranscriptEvent(
+                    harness="pi",
+                    source_session_id=source_session_id,
+                    created_ms=created_ms,
+                    role=role,
+                    kind=kind,
+                    name=name,
+                    success=not is_error if isinstance(is_error, bool) else None,
+                    error_text=error_text,
+                    raw_kind="toolResult",
+                )
+            )
+            continue
+
+        if role == "assistant":
+            content = message.get("content")
+            if not isinstance(content, list):
+                continue
+            for part in content:
+                if not isinstance(part, dict):
+                    continue
+                part_type = _as_str(part.get("type"))
+                if part_type not in ("toolCall", "tool-call"):
+                    continue
+                tool_name = _as_str(part.get("name"))
+                tool_call_id = _as_str(part.get("id"))
+                name = tool_name or tool_call_id
+                events.append(
+                    SessionTranscriptEvent(
+                        harness="pi",
+                        source_session_id=source_session_id,
+                        created_ms=created_ms,
+                        role=role,
+                        kind="tool_call",
+                        name=name,
+                        raw_kind=part_type,
+                    )
+                )
+
     return events
 
 
