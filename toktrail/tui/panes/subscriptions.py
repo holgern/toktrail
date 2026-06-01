@@ -7,7 +7,7 @@ from decimal import Decimal
 
 from textual.app import ComposeResult
 from textual.containers import Vertical
-from textual.widgets import DataTable, Static
+from textual.widgets import DataTable
 
 from toktrail.api.models import (
     SubscriptionBillingPeriod,
@@ -23,10 +23,9 @@ from toktrail.tui.services import SubscriptionsData
 
 
 @dataclass(frozen=True)
-class _SubscriptionWindowView:
+class _SubscriptionListView:
     key: str
     subscription: SubscriptionUsageRow
-    period: SubscriptionUsagePeriod
 
 
 def _format_left(period: SubscriptionUsagePeriod) -> str:
@@ -63,13 +62,100 @@ def _format_break_even(billing: SubscriptionBillingPeriod) -> str:
     return "-"
 
 
+def _primary_period(
+    subscription: SubscriptionUsageRow,
+) -> SubscriptionUsagePeriod | None:
+    active = [period for period in subscription.periods if period.status == "active"]
+    if active:
+        return active[0]
+    if subscription.periods:
+        return subscription.periods[0]
+    return None
+
+
+def render_subscription_detail(
+    subscription: SubscriptionUsageRow,
+    *,
+    now_ms: int,
+) -> str:
+    scope_label = (
+        subscription.scope.label if subscription.scope is not None else "all areas"
+    )
+    lines = [
+        f"Subscription: {subscription.display_name} ({subscription.subscription_id})",
+        f"Providers: {', '.join(subscription.usage_provider_ids)}",
+        f"Scope: {scope_label}",
+        f"Quota basis: {subscription.quota_cost_basis}",
+        f"Timezone: {subscription.timezone or '-'}",
+    ]
+
+    if subscription.billing is not None:
+        billing = subscription.billing
+        lines.extend(
+            [
+                "",
+                "Billing",
+                f"  Period: {billing.period}",
+                f"  Fixed cost: {_format_cost(billing.fixed_cost_usd)}",
+                f"  Current value: {_format_cost(billing.value_usd)}",
+                f"  Net savings: {_format_cost(billing.net_savings_usd)}",
+                f"  Break-even: {_format_break_even(billing)}",
+            ]
+        )
+
+    lines.extend(["", "Quota windows"])
+    for period in subscription.periods:
+        lines.append("")
+        lines.append(f"  {period.period} ({_format_status(period.status)})")
+        if period.until_ms is not None:
+            seconds = max(0, (period.until_ms - now_ms) // 1000)
+            lines.append(
+                "    Resets in: " + format_duration_seconds(seconds, compact=False)
+            )
+        if period.since_ms is not None:
+            lines.append(
+                f"    Window start: {format_epoch_ms_compact(period.since_ms)}"
+            )
+        if period.until_ms is not None:
+            lines.append(f"    Window end: {format_epoch_ms_compact(period.until_ms)}")
+        used_line = (
+            f"    Used: {_format_cost(period.used_usd)} / "
+            f"{_format_cost(period.limit_usd)}"
+        )
+        lines.append(used_line)
+        lines.append(f"    Remaining: {_format_left(period)}")
+        if period.percent_used is not None:
+            lines.append(f"    Used %: {_format_percent(period.percent_used)}")
+        lines.append(f"    Messages: {_format_int(period.message_count)}")
+        lines.append(f"    Tokens: {_format_int(period.tokens.total)}")
+
+        if period.warnings:
+            lines.append("    Warnings:")
+            for warning in period.warnings:
+                kind = warning.get("kind", "unknown")
+                if kind == "zero_cost_with_tokens":
+                    basis = warning.get("basis", "?")
+                    msgs = warning.get("message_count", "?")
+                    lines.append(
+                        "      provider/model has "
+                        f"{msgs} messages but zero cost for basis={basis}"
+                    )
+                else:
+                    lines.append(f"      {kind}: {warning}")
+
+    if not subscription.periods:
+        lines.append("  No quota windows configured.")
+
+    return "\n".join(lines)
+
+
 class SubscriptionsPane(ExportablePaneMixin, Vertical):
-    selected_window: _SubscriptionWindowView | None = None
+    selected_subscription: SubscriptionUsageRow | None = None
 
     def __init__(self, *args, **kwargs):  # type: ignore[no-untyped-def]
         super().__init__(*args, **kwargs)
         self.tui_display: TuiDisplay = TuiDisplay(mode="full", columns=80, rows=24)
-        self._rows_by_key: dict[str, _SubscriptionWindowView] = {}
+        self._rows_by_key: dict[str, _SubscriptionListView] = {}
 
     def set_display(self, display: TuiDisplay) -> None:
         self.tui_display = display
@@ -78,41 +164,37 @@ class SubscriptionsPane(ExportablePaneMixin, Vertical):
         table = DataTable(id="subscriptions-table")
         table.cursor_type = "row"
         yield table
-        yield Static("No subscription selected.", id="subscriptions-detail")
 
     def set_data(self, data: SubscriptionsData) -> None:
         table = self.query_one("#subscriptions-table", DataTable)
-        detail = self.query_one("#subscriptions-detail", Static)
         self._configure_columns(table)
         table.clear(columns=False)
         self._rows_by_key = {}
 
         if not data.subscriptions:
-            self.selected_window = None
-            detail.update("No provider subscriptions configured.")
+            self.selected_subscription = None
             self.export_text = "No provider subscriptions configured."
             return
 
         previous_key = (
-            None if self.selected_window is None else self.selected_window.key
+            None
+            if self.selected_subscription is None
+            else self.selected_subscription.subscription_id
         )
         now_ms = int(time.time() * 1000)
 
         for subscription in data.subscriptions:
-            for index, period in enumerate(subscription.periods):
-                key = f"{subscription.subscription_id}:{period.period}:{index}"
-                view = _SubscriptionWindowView(key, subscription, period)
-                self._rows_by_key[key] = view
-                self._add_table_row(table, view, now_ms=now_ms)
+            key = subscription.subscription_id
+            view = _SubscriptionListView(key=key, subscription=subscription)
+            self._rows_by_key[key] = view
+            self._add_subscription_row(table, view, now_ms=now_ms)
 
         selected_key = restore_selected_key(previous_key, self._rows_by_key.keys())
         if selected_key is None:
-            self.selected_window = None
-            detail.update("No active subscription windows.")
+            self.selected_subscription = None
         else:
-            self.selected_window = self._rows_by_key[selected_key]
+            self.selected_subscription = self._rows_by_key[selected_key].subscription
             move_table_to_key(table, selected_key)
-            self._update_detail(self.selected_window, now_ms=now_ms)
 
         self.export_text = self._build_export_text(data, now_ms=now_ms)
 
@@ -123,136 +205,68 @@ class SubscriptionsPane(ExportablePaneMixin, Vertical):
         view = self._rows_by_key.get(key)
         if view is None:
             return
-        self.selected_window = view
-        now_ms = int(time.time() * 1000)
-        self._update_detail(view, now_ms=now_ms)
+        self.selected_subscription = view.subscription
 
     def _configure_columns(self, table: DataTable) -> None:
         table.clear(columns=True)
         mode = self.tui_display.mode
         if mode == "micro":
-            table.add_columns("Plan", "Period", "Used", "Left")
+            table.add_columns("Plan", "Used", "Left")
         elif mode == "compact":
-            table.add_columns("Plan", "Period", "Status", "Used", "Left", "Reset")
+            table.add_columns("Plan", "Used", "Left", "Reset")
         else:
             table.add_columns(
                 "Plan",
                 "Providers",
                 "Scope",
-                "Period",
-                "Status",
+                "Basis",
                 "Used",
                 "Limit",
                 "Left",
-                "Used%",
                 "Reset",
-                "Msgs",
-                "Tokens",
+                "Windows",
             )
 
-    def _add_table_row(
+    def _add_subscription_row(
         self,
         table: DataTable,
-        view: _SubscriptionWindowView,
+        view: _SubscriptionListView,
         *,
         now_ms: int,
     ) -> None:
         sub = view.subscription
-        period = view.period
-        plan = sub.display_name
-        period_label = period.period
-        used = _format_cost(period.used_usd)
-        left = _format_left(period)
+        primary = _primary_period(sub)
         scope_label = sub.scope.label if sub.scope is not None else "all areas"
+
+        used = "-" if primary is None else _format_cost(primary.used_usd)
+        limit = "-" if primary is None else _format_cost(primary.limit_usd)
+        left = "-" if primary is None else _format_left(primary)
+        reset = "-" if primary is None else _format_reset(primary, now_ms=now_ms)
 
         mode = self.tui_display.mode
         if mode == "micro":
-            table.add_row(plan, period_label, used, left, key=view.key)
+            table.add_row(sub.display_name, used, left, key=view.key)
         elif mode == "compact":
             table.add_row(
-                plan,
-                period_label,
-                _format_status(period.status),
+                sub.display_name,
                 used,
                 left,
-                _format_reset(period, now_ms=now_ms),
+                reset,
                 key=view.key,
             )
         else:
             table.add_row(
-                plan,
+                sub.display_name,
                 ",".join(sub.usage_provider_ids),
                 scope_label,
-                period_label,
-                _format_status(period.status),
+                sub.quota_cost_basis,
                 used,
-                _format_cost(period.limit_usd),
+                limit,
                 left,
-                _format_percent(period.percent_used),
-                _format_reset(period, now_ms=now_ms),
-                _format_int(period.message_count),
-                _format_int(period.tokens.total),
+                reset,
+                str(len(sub.periods)),
                 key=view.key,
             )
-
-    def _update_detail(self, view: _SubscriptionWindowView, *, now_ms: int) -> None:
-        detail = self.query_one("#subscriptions-detail", Static)
-        sub = view.subscription
-        period = view.period
-        scope_label = sub.scope.label if sub.scope is not None else "all areas"
-        lines = [
-            f"Subscription: {sub.display_name} ({sub.subscription_id})",
-            f"Providers: {', '.join(sub.usage_provider_ids)}",
-            f"Scope: {scope_label}",
-            f"Quota basis: {sub.quota_cost_basis}",
-            f"Timezone: {sub.timezone or '-'}",
-            f"Period: {period.period} ({_format_status(period.status)})",
-        ]
-        if period.until_ms is not None:
-            seconds = max(0, (period.until_ms - now_ms) // 1000)
-            lines.append(
-                "Resets in: " + format_duration_seconds(seconds, compact=False)
-            )
-        if period.since_ms is not None:
-            lines.append(f"Window start: {format_epoch_ms_compact(period.since_ms)}")
-        if period.until_ms is not None:
-            lines.append(f"Window end: {format_epoch_ms_compact(period.until_ms)}")
-        lines.append(
-            f"Used: {_format_cost(period.used_usd)} / {_format_cost(period.limit_usd)}"
-        )
-        lines.append(f"Remaining: {_format_left(period)}")
-        if period.percent_used is not None:
-            lines.append(f"Used %: {_format_percent(period.percent_used)}")
-        lines.append(f"Messages: {_format_int(period.message_count)}")
-        lines.append(f"Tokens: {_format_int(period.tokens.total)}")
-
-        if sub.billing is not None:
-            billing = sub.billing
-            lines.append("")
-            lines.append("Billing")
-            lines.append(f"  Period: {billing.period}")
-            lines.append(f"  Fixed cost: {_format_cost(billing.fixed_cost_usd)}")
-            lines.append(f"  Current value: {_format_cost(billing.value_usd)}")
-            lines.append(f"  Net savings: {_format_cost(billing.net_savings_usd)}")
-            lines.append(f"  Break-even: {_format_break_even(billing)}")
-
-        if period.warnings:
-            lines.append("")
-            lines.append("Warnings")
-            for warning in period.warnings:
-                kind = warning.get("kind", "unknown")
-                if kind == "zero_cost_with_tokens":
-                    basis = warning.get("basis", "?")
-                    msgs = warning.get("message_count", "?")
-                    lines.append(
-                        f"  provider/model has {msgs} messages"
-                        f" but zero cost for basis={basis}"
-                    )
-
-                else:
-                    lines.append(f"  {kind}: {warning}")
-
-        detail.update("\n".join(lines))
 
     def _build_export_text(self, data: SubscriptionsData, *, now_ms: int) -> str:
         lines: list[str] = ["Subscriptions"]

@@ -254,7 +254,7 @@ async def test_help_overlay_opens_and_closes(make_tui_app) -> None:
         assert "Keybindings" in help_text or "Keys" in help_text
         assert "enter" in help_text.lower()
         assert "open" in help_text.lower()
-        assert "session" in help_text.lower()
+        assert "esc" in help_text.lower()
         await pilot.press("escape")
         await pilot.pause()
         assert not any(isinstance(s, HelpScreen) for s in app.screen_stack)
@@ -282,7 +282,7 @@ async def test_help_compact_mode(make_tui_app) -> None:
         help_text = str(help_screen.query_one("#help-content").render())
         assert "Keybindings" in help_text
         assert "enter" in help_text.lower()
-        assert "open session" in help_text.lower()
+        assert "open" in help_text.lower()
         assert "esc" in help_text.lower()
         await pilot.press("escape")
         await pilot.pause()
@@ -296,8 +296,9 @@ async def test_help_micro_mode(make_tui_app) -> None:
         help_screen = app.screen_stack[-1]
         help_text = str(help_screen.query_one("#help-content").render())
         assert "Keys" in help_text
-        assert "enter open sess" in help_text.lower()
+        assert "enter open" in help_text.lower()
         assert "esc back" in help_text.lower()
+        assert "j/k row" in help_text.lower()
         await pilot.press("escape")
         await pilot.pause()
 
@@ -319,6 +320,24 @@ async def test_areas_table_focus_on_switch(make_tui_app) -> None:
         await pilot.pause()
         await pilot.pause()
         table = app.query_one("#areas-table")
+        assert table.has_focus
+
+
+async def test_prices_table_focus_on_switch(make_tui_app) -> None:
+    app = make_tui_app()
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.press("4")
+        await pilot.pause()
+        table = app.query_one("#prices-unconfigured-table")
+        assert table.has_focus
+
+
+async def test_subscriptions_table_focus_on_switch(make_tui_app) -> None:
+    app = make_tui_app()
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.press("5")
+        await pilot.pause()
+        table = app.query_one("#subscriptions-table")
         assert table.has_focus
 
 

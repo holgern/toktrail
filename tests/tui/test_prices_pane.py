@@ -29,6 +29,21 @@ def _future_assistant(*, provider: str, model: str) -> dict[str, object]:
     return assistant
 
 
+def _make_empty_app(tmp_path) -> ToktrailTuiApp:
+    db_path = tmp_path / "toktrail.db"
+    config_path = tmp_path / "toktrail.toml"
+    init_state(db_path)
+    init_config(config_path, template="copilot")
+    return ToktrailTuiApp(
+        db_path=db_path,
+        config_path=config_path,
+        prices_path=config_path.with_name("prices.toml"),
+        prices_dir=config_path.with_name("prices"),
+        subscriptions_path=config_path.with_name("subscriptions.toml"),
+        refresh_on_start=False,
+    )
+
+
 def _make_seeded_app(tmp_path) -> ToktrailTuiApp:
     db_path = tmp_path / "toktrail.db"
     source_db = tmp_path / "opencode.db"
@@ -118,3 +133,32 @@ async def test_price_form_keeps_invalid_numbers_visible(tmp_path) -> None:
         await pilot.pause()
         assert isinstance(app.screen, PriceFormScreen)
         assert "must be numbers" in str(app.screen.query_one("#price-error").render())
+
+
+async def test_enter_on_prices_opens_price_form(tmp_path) -> None:
+    from toktrail.tui.screens.price_form import PriceFormScreen
+
+    app = _make_seeded_app(tmp_path)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.press("4")
+        await pilot.pause()
+        assert app.query_one("#content").current == "prices"
+
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert isinstance(app.screen_stack[-1], PriceFormScreen)
+
+
+async def test_enter_on_prices_without_unconfigured_model_shows_status(
+    tmp_path,
+) -> None:
+    app = _make_empty_app(tmp_path)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.press("4")
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        assert "No unconfigured model selected." in str(
+            app.query_one("#status").render()
+        )

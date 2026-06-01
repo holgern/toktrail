@@ -23,3 +23,11 @@ def move_table_to_key(table: DataTable, key: str | None) -> None:
     if key is None:
         return
     table.move_cursor(row=table.get_row_index(key), column=0)
+
+
+def move_table_by(table: DataTable, delta: int) -> None:
+    if table.row_count <= 0:
+        return
+    current = getattr(table, "cursor_row", 0)
+    target = max(0, min(table.row_count - 1, current + delta))
+    table.move_cursor(row=target, column=0)

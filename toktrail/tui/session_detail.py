@@ -11,8 +11,7 @@ def _health_summary(digest: SessionDigest) -> str:
     score = "-" if digest.health.score is None else _format_int(digest.health.score)
     grade = digest.health.grade or "-"
     return (
-        f"{grade} {score} {digest.health.outcome} "
-        f"({digest.health.outcome_confidence})"
+        f"{grade} {score} {digest.health.outcome} ({digest.health.outcome_confidence})"
     )
 
 

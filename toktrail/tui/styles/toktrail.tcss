@@ -41,7 +41,6 @@ Screen {
 
 #sessions-detail,
 #areas-detail,
-#subscriptions-detail,
 #prices-detail {
   height: auto;
   border-top: heavy $panel;
@@ -56,6 +55,16 @@ Screen {
 }
 
 #session-detail-content {
+  width: 100%;
+}
+
+#subscription-detail-scroll {
+  height: 1fr;
+  width: 100%;
+  padding: 0 1;
+}
+
+#subscription-detail-content {
   width: 100%;
 }
 #status {
@@ -95,21 +104,18 @@ Screen.micro #content {
 
 Screen.compact.compact-details-hidden #sessions-detail,
 Screen.compact.compact-details-hidden #areas-detail,
-Screen.compact.compact-details-hidden #subscriptions-detail,
 Screen.compact.compact-details-hidden #prices-detail {
   display: none;
 }
 
 Screen.compact #sessions-detail,
 Screen.compact #areas-detail,
-Screen.compact #subscriptions-detail,
 Screen.compact #prices-detail {
   height: 6;
 }
 
 Screen.micro #sessions-detail,
 Screen.micro #areas-detail,
-Screen.micro #subscriptions-detail,
 Screen.micro #prices-detail {
   display: none;
 }

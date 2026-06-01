@@ -1,12 +1,21 @@
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from typing import cast
 
 from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.widgets import ContentSwitcher, Footer, Header, Static, Tab, Tabs
+from textual.widgets import (
+    ContentSwitcher,
+    DataTable,
+    Footer,
+    Header,
+    Static,
+    Tab,
+    Tabs,
+)
 from textual.worker import Worker, WorkerState
 
 from toktrail.api.models import PriceRow
@@ -19,12 +28,17 @@ from toktrail.tui.panes.config import ConfigPane
 from toktrail.tui.panes.dashboard import DashboardPane
 from toktrail.tui.panes.prices import PricesPane
 from toktrail.tui.panes.sessions import SessionsPane
-from toktrail.tui.panes.subscriptions import SubscriptionsPane
+from toktrail.tui.panes.subscriptions import (
+    SubscriptionsPane,
+    render_subscription_detail,
+)
+from toktrail.tui.panes.table import move_table_by
 from toktrail.tui.screens.area_form import AreaFormScreen
 from toktrail.tui.screens.confirm import ConfirmScreen
 from toktrail.tui.screens.help import HelpScreen
 from toktrail.tui.screens.price_form import PriceFormScreen
 from toktrail.tui.screens.session_detail import SessionDetailScreen
+from toktrail.tui.screens.subscription_detail import SubscriptionDetailScreen
 from toktrail.tui.services import DashboardView, ToktrailTuiService
 from toktrail.tui.state import ToktrailTuiState
 
@@ -49,13 +63,14 @@ PANE_SHORT_LABELS = {
 PANE_TABLE_IDS = {
     "sessions": "#sessions-table",
     "areas": "#areas-table",
+    "prices": "#prices-unconfigured-table",
+    "subscriptions": "#subscriptions-table",
 }
 
 DETAIL_IDS = {
     "sessions": "#sessions-detail",
     "areas": "#areas-detail",
     "prices": "#prices-detail",
-    "subscriptions": "#subscriptions-detail",
 }
 
 
@@ -84,9 +99,9 @@ class ToktrailTuiApp(App[None]):
         Binding("y", "copy_current_view", "Copy"),
         Binding("Y", "export_current_view", "Export"),
         Binding("i", "toggle_details", "Details", show=False),
-        Binding(
-            "enter", "open_session_detail", "Open session", show=False, priority=True
-        ),
+        Binding("enter", "open_current_item", "Open", show=False, priority=True),
+        Binding("j", "move_row_down", "Down", show=False),
+        Binding("k", "move_row_up", "Up", show=False),
         Binding("question_mark", "help", "Help"),
         Binding("h", "help", "Help", show=False),
         Binding("left", "day_back", "Day back", show=False, priority=True),
@@ -290,11 +305,24 @@ class ToktrailTuiApp(App[None]):
         selected = self._prices.toggle_subview()
         self._status.update(f"Prices view: {selected}")
 
-    def action_open_session_detail(self) -> None:
-        if self._current_pane_id() != "sessions":
-            self.action_toggle_details()
+    def action_open_current_item(self) -> None:
+        pane_id = self._current_pane_id()
+        if pane_id == "sessions":
+            self._open_session_detail()
+            return
+        if pane_id == "subscriptions":
+            self._open_subscription_detail()
+            return
+        if pane_id == "prices":
+            self.action_edit_selected_price()
             return
 
+        self._status.update(f"No open action for {PANE_LABELS.get(pane_id, pane_id)}.")
+
+    def action_open_session_detail(self) -> None:
+        self._open_session_detail()
+
+    def _open_session_detail(self) -> None:
         key = self._sessions.selected_session_key
         if not key:
             self._status.update("No session selected.")
@@ -308,6 +336,21 @@ class ToktrailTuiApp(App[None]):
 
         self.push_screen(SessionDetailScreen(text, session_key=key))
 
+    def _open_subscription_detail(self) -> None:
+        subscription = self._subscriptions.selected_subscription
+        if subscription is None:
+            self._status.update("No subscription selected.")
+            return
+
+        now_ms = int(time.time() * 1000)
+        text = render_subscription_detail(subscription, now_ms=now_ms)
+        self.push_screen(
+            SubscriptionDetailScreen(
+                text,
+                subscription_id=subscription.subscription_id,
+            )
+        )
+
     def action_toggle_details(self) -> None:
         display = self._tui_display or self._resolve_display()
         if display.mode == "full":
@@ -320,6 +363,24 @@ class ToktrailTuiApp(App[None]):
         self._apply_display()
         state = "shown" if self._compact_details_visible else "hidden"
         self._status.update(f"Details {state}.")
+
+    def action_move_row_down(self) -> None:
+        self._move_current_table(1)
+
+    def action_move_row_up(self) -> None:
+        self._move_current_table(-1)
+
+    def _move_current_table(self, delta: int) -> None:
+        pane_id = self._current_pane_id()
+        table_id = PANE_TABLE_IDS.get(pane_id)
+        if table_id is None:
+            return
+        try:
+            table = self.query_one(table_id, DataTable)
+        except Exception:
+            return
+        move_table_by(table, delta)
+        table.focus()
 
     def action_copy_current_view(self) -> None:
         pane_id, text = self._current_pane_text()
@@ -498,7 +559,6 @@ class ToktrailTuiApp(App[None]):
             detail = self.query_one(detail_id, Static)
         except Exception:
             return "No details available."
-        text = detail.renderable
-        value = str(text)
+        value = str(detail.render())
         first_line = value.splitlines()[0] if value else "No details available."
         return first_line
