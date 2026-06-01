@@ -5,6 +5,7 @@ import json
 import re
 from collections.abc import Iterable, Mapping
 from pathlib import Path
+from time import time
 
 from toktrail.reporting import (
     SessionDigest,
@@ -14,8 +15,9 @@ from toktrail.reporting import (
     SessionTranscriptEvent,
     UsageSessionRow,
 )
+from toktrail.session_health import build_session_health
 
-DIGEST_SCHEMA_VERSION = 1
+DIGEST_SCHEMA_VERSION = 2
 DIGEST_GENERATOR = "heuristic:v1"
 _PATH_RE = re.compile(r"(?:^|\s)([A-Za-z0-9_./-]+\.[A-Za-z0-9_/-]+)")
 _SECRET_RE = re.compile(r"(?i)(api[_-]?key|token|secret|password)=([^\s]+)")
@@ -30,7 +32,14 @@ def build_session_digest(
     source_fingerprint: str | None = None,
 ) -> SessionDigest:
     events = tuple(transcript_events)
+    effective_generated_at_ms = generated_at_ms or int(time() * 1000)
     tool_health = summarize_tool_health(events)
+    health = build_session_health(
+        events,
+        usage_session=usage_session,
+        tool_health=tool_health,
+        generated_at_ms=effective_generated_at_ms,
+    )
     files = _top_values(
         _redact(value) for event in events for value in _event_file_candidates(event)
     )
@@ -64,11 +73,14 @@ def build_session_digest(
         message_count=usage_session.message_count,
         summary=summary,
         tool_health=tool_health,
+        health=health,
         files_mentioned=files,
         commands_mentioned=commands,
         contains_raw_transcript=False,
         contains_snippets=False,
-        generated_at_ms=generated_at_ms,
+        models=usage_session.models,
+        providers=usage_session.providers,
+        generated_at_ms=effective_generated_at_ms,
         source_fingerprint=source_fingerprint,
     )
 
@@ -456,6 +468,12 @@ def public_digest_from_internal(digest: SessionDigest) -> object:
         SessionDigestSummary as PublicSessionDigestSummary,
     )
     from toktrail.api.models import (
+        SessionHealth as PublicSessionHealth,
+    )
+    from toktrail.api.models import (
+        SessionHealthPenalty as PublicSessionHealthPenalty,
+    )
+    from toktrail.api.models import (
         SessionToolHealth as PublicSessionToolHealth,
     )
     from toktrail.api.models import (
@@ -510,8 +528,35 @@ def public_digest_from_internal(digest: SessionDigest) -> object:
             failed_tools=dict(digest.tool_health.failed_tools),
             warnings=digest.tool_health.warnings,
         ),
+        health=(
+            None
+            if digest.health is None
+            else PublicSessionHealth(
+                score=digest.health.score,
+                grade=digest.health.grade,
+                outcome=digest.health.outcome,
+                outcome_confidence=digest.health.outcome_confidence,
+                basis=digest.health.basis,
+                penalties=tuple(
+                    PublicSessionHealthPenalty(
+                        kind=penalty.kind,
+                        points=penalty.points,
+                        detail=penalty.detail,
+                    )
+                    for penalty in digest.health.penalties
+                ),
+                retry_count=digest.health.retry_count,
+                edit_churn_count=digest.health.edit_churn_count,
+                consecutive_failure_max=digest.health.consecutive_failure_max,
+                context_pressure_max=digest.health.context_pressure_max,
+                compaction_count=digest.health.compaction_count,
+                mid_task_compaction_count=digest.health.mid_task_compaction_count,
+            )
+        ),
         files_mentioned=digest.files_mentioned,
         commands_mentioned=digest.commands_mentioned,
+        models=digest.models,
+        providers=digest.providers,
         contains_raw_transcript=digest.contains_raw_transcript,
         contains_snippets=digest.contains_snippets,
         generated_at_ms=digest.generated_at_ms,

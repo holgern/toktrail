@@ -36,6 +36,7 @@ class SessionsPane(ExportablePaneMixin, Vertical):
         yield Static("No session selected.", id="sessions-detail")
 
     def set_data(self, data: SessionsData) -> None:
+        self._digests_by_key = data.digests
         if self.tui_display.mode == "full":
             self._set_full_data(data)
         elif self.tui_display.mode == "compact":
@@ -53,6 +54,8 @@ class SessionsPane(ExportablePaneMixin, Vertical):
             "Area",
             "Harness",
             "Session",
+            "Health",
+            "Fails",
             "Msgs",
             "Tokens",
             "Actual",
@@ -64,12 +67,15 @@ class SessionsPane(ExportablePaneMixin, Vertical):
         for row in data.sessions:
             key = row.key
             self._rows_by_key[key] = row
+            digest = data.digests.get(key)
             table.add_row(
                 format_epoch_ms_compact(row.last_ms),
                 row.machine_label,
                 row.area_path or "-",
                 row.harness,
                 row.session_title or row.source_session_id,
+                "-" if digest is None else digest.health_label,
+                "-" if digest is None else _format_int(digest.tool_failure_count),
                 _format_int(row.message_count),
                 _format_int(row.tokens.total),
                 _format_cost(row.costs.actual_cost_usd),
@@ -94,16 +100,19 @@ class SessionsPane(ExportablePaneMixin, Vertical):
         table = self.query_one("#sessions-table", DataTable)
         detail = self.query_one("#sessions-detail", Static)
         table.clear(columns=True)
-        table.add_columns("Time", "Area", "Model", "Tokens", "Cost")
+        table.add_columns("Time", "Area", "Model", "Health", "Fails", "Tokens", "Cost")
         previous_selected = self.selected_session_key
         self._rows_by_key = {}
         for row in data.sessions:
             key = row.key
             self._rows_by_key[key] = row
+            digest = data.digests.get(key)
             table.add_row(
                 compact_time(format_epoch_ms_compact(row.last_ms)),
                 leaf_path(row.area_path),
                 compact_model(row.models, limit=1),
+                "-" if digest is None else digest.health_label,
+                "-" if digest is None else _format_int(digest.tool_failure_count),
                 _format_int(row.tokens.total),
                 session_cost_label(
                     float(row.costs.actual_cost_usd), float(row.costs.virtual_cost_usd)
@@ -132,10 +141,13 @@ class SessionsPane(ExportablePaneMixin, Vertical):
         for row in data.sessions:
             key = row.key
             self._rows_by_key[key] = row
+            digest = data.digests.get(key)
             table.add_row(
                 (
                     f"{compact_time(format_epoch_ms_compact(row.last_ms))} "
                     f"{row.harness} {leaf_path(row.area_path)} "
+                    f"{'-' if digest is None else digest.health_label} "
+                    f"{'-' if digest is None else _format_int(digest.tool_failure_count)}f"  # noqa: E501
                     f"{_format_int(row.tokens.total)} "
                     f"{compact_model(row.models, limit=1)}"
                 ),
@@ -169,25 +181,37 @@ class SessionsPane(ExportablePaneMixin, Vertical):
         if row is None:
             detail.update("No session selected.")
             return
-        detail.update(
-            "\n".join(
+        digest = getattr(self, "_digests_by_key", {}).get(key)
+        detail_lines = [
+            f"Key: {row.key}",
+            f"Harness: {row.harness}",
+            f"Area: {row.area_path or '-'}",
+            f"CWD: {row.cwd or '-'}",
+            f"Source dir: {row.source_dir or '-'}",
+            f"Models: {', '.join(row.models) if row.models else '-'}",
+        ]
+        if digest is not None:
+            detail_lines.extend(
                 [
-                    f"Key: {row.key}",
-                    f"Harness: {row.harness}",
-                    f"Area: {row.area_path or '-'}",
-                    f"CWD: {row.cwd or '-'}",
-                    f"Source dir: {row.source_dir or '-'}",
-                    f"Models: {', '.join(row.models) if row.models else '-'}",
+                    f"Summary: {digest.summary}",
+                    f"Health: {digest.health_detail}",
+                    f"Tool failures: {_format_int(digest.tool_failure_count)}",
+                    f"Signals: {digest.signal_summary}",
                 ]
             )
+            if digest.penalties:
+                detail_lines.append(f"Penalties: {', '.join(digest.penalties)}")
+        detail.update(
+            "\n".join(detail_lines)
         )
 
     def _build_export_text(self, data: SessionsData) -> str:
         lines = [
             "Sessions",
-            "time\tmachine\tarea\tharness\tsession\tmsgs\ttokens\tactual\tvirtual\tpath",
+            "time\tmachine\tarea\tharness\tsession\thealth\tfails\tmsgs\ttokens\tactual\tvirtual\tpath",
         ]
         for row in data.sessions:
+            digest = data.digests.get(row.key)
             lines.append(
                 "\t".join(
                     [
@@ -196,6 +220,8 @@ class SessionsPane(ExportablePaneMixin, Vertical):
                         row.area_path or "-",
                         row.harness,
                         row.session_title or row.source_session_id,
+                        "-" if digest is None else digest.health_label,
+                        "0" if digest is None else str(digest.tool_failure_count),
                         str(row.message_count),
                         str(row.tokens.total),
                         str(row.costs.actual_cost_usd),

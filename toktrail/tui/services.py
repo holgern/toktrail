@@ -39,6 +39,8 @@ from toktrail.api.reports import (
     usage_series_report,
     usage_sessions_report,
 )
+from toktrail.db import connect as connect_db
+from toktrail.db import get_source_session_digest
 from toktrail.errors import InvalidAPIUsageError
 from toktrail.periods import resolve_timezone
 from toktrail.tui.state import ToktrailTuiState
@@ -66,8 +68,19 @@ DashboardView = Literal["today", "daily", "weekly"]
 
 
 @dataclass(frozen=True)
+class SessionDigestData:
+    summary: str
+    health_label: str
+    health_detail: str
+    tool_failure_count: int
+    signal_summary: str
+    penalties: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class SessionsData:
     sessions: tuple[UsageSessionRow, ...]
+    digests: dict[str, SessionDigestData]
 
 
 @dataclass(frozen=True)
@@ -187,7 +200,68 @@ class ToktrailTuiService:
                 config_path=self.state.config_path,
                 limit=50,
             )
-        return SessionsData(sessions=tuple(report.sessions))
+        return SessionsData(
+            sessions=tuple(report.sessions),
+            digests=self._session_digest_data(tuple(report.sessions)),
+        )
+
+    def _session_digest_data(
+        self, sessions: tuple[UsageSessionRow, ...]
+    ) -> dict[str, SessionDigestData]:
+        if not sessions:
+            return {}
+        conn = connect_db(self.state.db_path)
+        try:
+            digests: dict[str, SessionDigestData] = {}
+            for session in sessions:
+                if session.origin_machine_id is None:
+                    continue
+                digest = get_source_session_digest(
+                    conn,
+                    origin_machine_id=session.origin_machine_id,
+                    harness=session.harness,
+                    source_session_id=session.source_session_id,
+                )
+                if digest is None:
+                    continue
+                health = digest.health
+                if health is None:
+                    health_label = "-"
+                    health_detail = "- unknown (low)"
+                    signal_summary = "retry=0 edit=0 streak=0"
+                    penalties: tuple[str, ...] = ()
+                else:
+                    health_label = (
+                        f"{health.grade}{health.score}"
+                        if health.grade and health.score is not None
+                        else health.outcome
+                    )
+                    score = "-" if health.score is None else str(health.score)
+                    grade = health.grade or "-"
+                    health_detail = (
+                        f"{grade} {score} {health.outcome} "
+                        f"({health.outcome_confidence})"
+                    )
+                    signal_summary = (
+                        f"retry={health.retry_count} "
+                        f"edit={health.edit_churn_count} "
+                        f"streak={health.consecutive_failure_max}"
+                    )
+                    penalties = tuple(
+                        f"{penalty.kind} -{penalty.points}"
+                        for penalty in health.penalties
+                    )
+                digests[session.key] = SessionDigestData(
+                    summary=digest.summary.one_line or "-",
+                    health_label=health_label,
+                    health_detail=health_detail,
+                    tool_failure_count=digest.tool_health.tool_failure_count,
+                    signal_summary=signal_summary,
+                    penalties=penalties,
+                )
+            return digests
+        finally:
+            conn.close()
 
     def areas(self, date_offset: int = 0) -> AreasData:
         status = get_active_area_status(self.state.db_path)

@@ -236,6 +236,7 @@ _RUNTIME_CONFIG_ROOT_FIELDS = {
     "statusline",
     "areas",
     "context_window",
+    "session_index",
 }
 _PRICE_CONFIG_ROOT_FIELDS = {
     "config_version",
@@ -1063,6 +1064,15 @@ class AreasConfig:
 
 
 @dataclass(frozen=True)
+class SessionIndexConfig:
+    enabled: bool = False
+    store: str = "redacted-snippets"
+    max_chars_per_item: int = 500
+
+
+
+
+@dataclass(frozen=True)
 class ContextWindowConfig:
     provider: str
     model: str
@@ -1094,6 +1104,9 @@ class RuntimeConfig:
     areas: AreasConfig = field(default_factory=AreasConfig)
     context_windows: tuple[ContextWindowConfig, ...] = ()
     provider_aliases: tuple[ProviderAlias, ...] = ()
+    session_index: SessionIndexConfig = field(
+        default_factory=SessionIndexConfig
+    )
 
 
 @dataclass(frozen=True)
@@ -1926,6 +1939,10 @@ def parse_runtime_config(data: object) -> RuntimeConfig:
         ),
         context_windows=_parse_context_windows(data.get("context_window")),
         provider_aliases=provider_aliases,
+        session_index=_parse_session_index_config(
+            data.get("session_index"),
+            default_config.session_index,
+        ),
     )
 
 
@@ -2885,6 +2902,41 @@ def _parse_context_windows(value: object) -> tuple[ContextWindowConfig, ...]:
         seen.add(key)
         windows.append(window)
     return tuple(windows)
+
+
+
+
+_SESSION_INDEX_FIELDS = {"enabled", "store", "max_chars_per_item"}
+
+
+def _parse_session_index_config(
+    value: object,
+    default_config: SessionIndexConfig,
+) -> SessionIndexConfig:
+    table = _parse_optional_table(value, context="session_index")
+    _validate_allowed_keys(table, _SESSION_INDEX_FIELDS, context="session_index")
+    enabled = _parse_bool(
+        table.get("enabled", default_config.enabled),
+        context="session_index.enabled",
+    )
+    store = _parse_choice(
+        table.get("store", default_config.store),
+        valid={"redacted-snippets"},
+        context="session_index.store",
+    )
+    max_chars = _parse_non_negative_int(
+        table.get(
+            "max_chars_per_item",
+            default_config.max_chars_per_item,
+        ),
+        context="session_index.max_chars_per_item",
+        required=False,
+    )
+    return SessionIndexConfig(
+        enabled=enabled,
+        store=cast(Literal["redacted-snippets"], store),
+        max_chars_per_item=max_chars,
+    )
 
 
 def _parse_import_harnesses(value: object, *, context: str) -> tuple[str, ...]:

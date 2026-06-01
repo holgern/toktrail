@@ -10,6 +10,8 @@ from toktrail.api.model_parts.core_models import (
     SessionCompactReport,
     SessionDigest,
     SessionDigestSummary,
+    SessionHealth,
+    SessionHealthPenalty,
     SessionToolHealth,
 )
 from toktrail.api.model_parts.reports import (
@@ -115,6 +117,8 @@ __all__ = [
     "SessionCompactReport",
     "SessionDigest",
     "SessionDigestSummary",
+    "SessionHealth",
+    "SessionHealthPenalty",
     "SessionToolCallReport",
     "SubscriptionBillingPeriod",
     "SubscriptionScopeSummary",

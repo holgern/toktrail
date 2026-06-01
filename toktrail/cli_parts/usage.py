@@ -1297,6 +1297,26 @@ def _digest_tool_failures(
     return _format_int(digest.tool_health.tool_failure_count)
 
 
+def _digest_health_label(
+    digest_lookup: dict[tuple[str, str, str], Any] | None, session: Any
+) -> str:
+    digest = _lookup_session_digest(digest_lookup, session)
+    if digest is None or digest.health is None:
+        return "-"
+    if digest.health.grade and digest.health.score is not None:
+        return f"{digest.health.grade}{digest.health.score}"
+    return digest.health.outcome
+
+
+def _digest_health_summary(digest: Any) -> str:
+    health = getattr(digest, "health", None)
+    if health is None:
+        return "-"
+    score = "-" if health.score is None else _format_int(health.score)
+    grade = health.grade or "-"
+    return f"{grade} {score} {health.outcome} ({health.outcome_confidence})"
+
+
 def _add_digest_summaries_to_payload(
     payload: dict[str, object],
     digest_lookup: dict[tuple[str, str, str], Any] | None,
@@ -1325,6 +1345,8 @@ def _add_digest_summaries_to_payload(
             "generator": digest.summary.generator,
             "tool_failure_count": digest.tool_health.tool_failure_count,
         }
+        row["tool_health"] = digest.tool_health.as_dict()
+        row["health"] = None if digest.health is None else digest.health.as_dict()
 
 
 def _print_usage_sessions(
@@ -1391,6 +1413,7 @@ def _print_usage_sessions(
                     f"{digest.summary.one_line or '-'} "
                     f"(tool_failures={_format_int(digest.tool_health.tool_failure_count)})"
                 )
+                typer.echo(f"   Health:  {_digest_health_summary(digest)}")
             if breakdown and session.by_model:
                 typer.echo("   Breakdown:")
                 for row in session.by_model:
@@ -1437,8 +1460,14 @@ def _print_usage_sessions(
         wrap_columns = {"area", "models"}
         max_widths = {"area": 36, "models": 48, "session": 48}
         if digest_lookup is not None:
-            columns.extend(["summary", "tool_failures"])
-            labels.update({"summary": "summary", "tool_failures": "tool_failures"})
+            columns.extend(["summary", "health", "tool_failures"])
+            labels.update(
+                {
+                    "summary": "summary",
+                    "health": "health",
+                    "tool_failures": "tool_failures",
+                }
+            )
             numeric_columns.add("tool_failures")
             wrap_columns.add("summary")
             max_widths["summary"] = 48
@@ -1455,6 +1484,7 @@ def _print_usage_sessions(
                 "savings": _format_cost(session.costs.savings_usd),
                 "models": _format_model_list(session.models, rich_output=rich_output),
                 "summary": _digest_one_line(digest_lookup, session),
+                "health": _digest_health_label(digest_lookup, session),
                 "tool_failures": _digest_tool_failures(digest_lookup, session),
             }
             for session in report.sessions
@@ -1527,8 +1557,14 @@ def _print_usage_sessions(
         wrap_columns = {"session", "area", "models"}
         max_widths = {"session": 48, "area": 36, "models": 48}
         if digest_lookup is not None:
-            columns.extend(["summary", "tool_failures"])
-            labels.update({"summary": "summary", "tool_failures": "tool_failures"})
+            columns.extend(["summary", "health", "tool_failures"])
+            labels.update(
+                {
+                    "summary": "summary",
+                    "health": "health",
+                    "tool_failures": "tool_failures",
+                }
+            )
             numeric_columns.add("tool_failures")
             wrap_columns.add("summary")
             max_widths["summary"] = 48
@@ -1553,6 +1589,7 @@ def _print_usage_sessions(
                 "savings": _format_cost(session.costs.savings_usd),
                 "unpriced": _format_int(session.costs.unpriced_count),
                 "summary": _digest_one_line(digest_lookup, session),
+                "health": _digest_health_label(digest_lookup, session),
                 "tool_failures": _digest_tool_failures(digest_lookup, session),
             }
             for session in report.sessions

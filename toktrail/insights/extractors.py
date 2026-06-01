@@ -18,6 +18,7 @@ from pathlib import Path
 
 from toktrail._db._impl_db import (
     SourceSessionMetadata,
+    list_source_session_digests,
     list_source_session_metadata,
 )
 from toktrail.api._common import _open_state_db
@@ -155,16 +156,40 @@ def extract_session_metas(
 
         migrate(conn)
         raw_meta = list_source_session_metadata(conn)
+        raw_digests = list_source_session_digests(conn)
         meta_lookup: dict[tuple[str, str, str], SourceSessionMetadata] = {}
+        tool_call_counts: dict[tuple[str, str, str], int] = {}
+        tool_failure_counts: dict[tuple[str, str, str], int] = {}
+        tool_failure_categories: dict[tuple[str, str, str], tuple[tuple[str, int], ...]] = {}
         for m in raw_meta:
             key = (m.origin_machine_id, m.harness, m.source_session_id)
             meta_lookup[key] = m
+        for digest in raw_digests:
+            key = (
+                digest.origin_machine_id or "",
+                digest.harness,
+                digest.source_session_id,
+            )
+            tool_call_counts[key] = digest.tool_health.tool_call_count
+            tool_failure_counts[key] = digest.tool_health.tool_failure_count
+            tool_failure_categories[key] = tuple(
+                sorted(
+                    digest.tool_health.failed_tools.items(),
+                    key=lambda item: (-item[1], item[0]),
+                )
+            )
     finally:
         conn.close()
 
     metas: list[InsightSessionMeta] = []
     for row in sessions_report.sessions:
-        meta = _session_meta_from_row(row, meta_lookup)
+        meta = _session_meta_from_row(
+            row,
+            meta_lookup,
+            tool_call_counts=tool_call_counts,
+            tool_failure_counts=tool_failure_counts,
+            tool_failure_categories=tool_failure_categories,
+        )
         metas.append(meta)
 
     return tuple(sorted(metas, key=lambda m: m.start_ms or 0, reverse=True))

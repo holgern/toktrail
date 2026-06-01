@@ -34,6 +34,7 @@ from toktrail.db import (
     has_imported_sync_archive,
     insert_usage_events,
     list_import_source_file_states,
+    list_source_session_digests,
     list_tracking_sessions,
     migrate,
     move_area_path,
@@ -51,16 +52,21 @@ from toktrail.db import (
     unarchive_tracking_session,
     unassign_area_from_source_session,
     upsert_import_source_file_state,
+    upsert_source_session_digest,
     upsert_source_session_metadata,
 )
 from toktrail.models import RunScope, TokenBreakdown, UsageEvent
 from toktrail.periods import resolve_fixed_subscription_window
 from toktrail.reporting import (
+    CostTotals,
+    SessionTranscriptEvent,
     UsageReportFilter,
     UsageRunsFilter,
     UsageSeriesFilter,
+    UsageSessionRow,
     UsageSessionsFilter,
 )
+from toktrail.session_digests import build_session_digest
 
 
 def make_price(
@@ -3369,7 +3375,7 @@ def test_summarize_usage_series_instance_breakdown_scoping(tmp_path: Path) -> No
             assert inst.buckets[0].by_model[0].model_id == "model-b"
 
 
-def test_schema_v16_creates_source_session_digests(tmp_path: Path) -> None:
+def test_schema_v17_creates_source_session_digests(tmp_path: Path) -> None:
     db_path = tmp_path / "state.db"
     conn = connect(db_path)
     try:
@@ -3382,3 +3388,69 @@ def test_schema_v16_creates_source_session_digests(tmp_path: Path) -> None:
         assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
     finally:
         conn.close()
+
+
+def test_source_session_digest_round_trips_health_fields(tmp_path: Path) -> None:
+    db_path = tmp_path / "state.db"
+    conn = connect(db_path)
+    try:
+        migrate(conn)
+        machine_id = get_local_machine_id(conn)
+        digest = build_session_digest(
+            usage_session=UsageSessionRow(
+                key="machine/codex/ses-health",
+                origin_machine_id=machine_id,
+                machine_name="workstation",
+                machine_label="workstation",
+                harness="codex",
+                source_session_id="ses-health",
+                area_id=None,
+                area_sync_id=None,
+                area_path="private/toktrail",
+                area_name=None,
+                first_ms=1_000,
+                last_ms=2_000,
+                message_count=1,
+                tokens=TokenBreakdown(input=10, output=5),
+                costs=CostTotals(actual_cost_usd=Decimal("0.01")),
+                cwd="/tmp/project",
+                source_dir="/tmp/project",
+                git_root="/tmp/project",
+                git_remote="git@example.com:org/toktrail.git",
+                session_title="Health round-trip",
+            ),
+            transcript_events=(
+                SessionTranscriptEvent(
+                    harness="codex",
+                    source_session_id="ses-health",
+                    created_ms=1_500,
+                    role=None,
+                    kind="command",
+                    name="shell",
+                    text="pytest tests/test_db.py",
+                    path="tests/test_db.py",
+                    success=False,
+                    error_text="failed",
+                    raw_kind="exec_command",
+                ),
+            ),
+        )
+        upsert_source_session_digest(conn, digest)
+        conn.commit()
+        loaded = next(
+            digest_row
+            for digest_row in list_source_session_digests(
+                conn,
+                origin_machine_id=machine_id,
+                harness="codex",
+                source_session_id="ses-health",
+            )
+        )
+    finally:
+        conn.close()
+
+    assert loaded.health is not None
+    assert loaded.health.score == digest.health.score
+    assert loaded.health.grade == digest.health.grade
+    assert loaded.health.retry_count == digest.health.retry_count
+    assert loaded.health.penalties == digest.health.penalties

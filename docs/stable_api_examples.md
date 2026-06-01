@@ -243,6 +243,47 @@ For subscription reporting, rows are keyed by subscription `id` and expose
 `usage_provider_ids` plus `quota_cost_basis`/`billing_basis` fields when
 `subscription_usage_report()` is used.
 
+## Stable session automation examples
+
+### CLI
+
+```bash
+toktrail session list --today --json
+toktrail session get "machine-1/codex/codex_ses_123" --json
+toktrail session health --last --json
+toktrail session usage "machine-1/opencode/ses-1" --json
+toktrail session tool-calls "machine-1/codex/codex_ses_123" --bad-only --json
+```
+
+### Python
+
+```python
+from pathlib import Path
+
+from toktrail.api.analysis import (
+    session_digest,
+    session_report,
+    session_tool_call_analysis,
+)
+from toktrail.api.reports import get_usage_session, usage_sessions_report
+
+db_path = Path(".toktrail/toktrail.db")
+
+sessions = usage_sessions_report(db_path, period="today", limit=10)
+session = get_usage_session(db_path, session_key=sessions.sessions[0].key)
+
+health = session_digest(db_path=db_path, session_key=session.key, refresh=False)
+usage = session_report(db_path=db_path, session_key=session.key, refresh=False)
+tool_calls = session_tool_call_analysis(
+    db_path=db_path,
+    session_key=session.key,
+    bad_only=True,
+)
+```
+
+Like the CLI JSON output, these report payloads are additive-only. Keep reading
+the documented fields you need and ignore unknown future fields.
+
 ## Ambiguous source sessions
 
 If several source sessions changed while the user was running the harness,

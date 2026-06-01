@@ -99,7 +99,7 @@ async def test_sessions_compact_uses_reduced_columns(make_tui_app) -> None:
         await pilot.pause()
         table = app.query_one("#sessions-table")
         labels = [str(column.label) for column in table.ordered_columns]
-        assert labels == ["Time", "Area", "Model", "Tokens", "Cost"]
+        assert labels == ["Time", "Area", "Model", "Health", "Fails", "Tokens", "Cost"]
 
 
 async def test_day_back_updates_date_offset(make_tui_app) -> None:
@@ -275,3 +275,75 @@ async def test_refresh_action_uses_thread_worker(make_tui_app, monkeypatch) -> N
         assert captured["thread"] is True
         assert captured["exclusive"] is True
         assert "Refresh started." in str(app.query_one("#status").render())
+
+
+async def test_sessions_full_mode_has_health_and_fails_columns(make_tui_app) -> None:
+    app = make_tui_app()
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.press("2")
+        await pilot.pause()
+        table = app.query_one("#sessions-table")
+        labels = [str(column.label) for column in table.ordered_columns]
+        assert "Health" in labels
+        assert "Fails" in labels
+        assert labels.index("Health") < labels.index("Msgs")
+        assert labels.index("Fails") < labels.index("Msgs")
+
+
+async def test_sessions_micro_mode_includes_health_in_rows(make_tui_app) -> None:
+    app = make_tui_app(tui_mode="micro")
+    async with app.run_test(size=(60, 18)) as pilot:
+        await pilot.press("2")
+        await pilot.pause()
+        table = app.query_one("#sessions-table")
+        labels = [str(column.label) for column in table.ordered_columns]
+        assert labels == ["Session"]
+
+
+async def test_sessions_detail_panel_shows_no_session_when_empty(make_tui_app) -> None:
+    app = make_tui_app()
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.press("2")
+        await pilot.pause()
+        detail = app.query_one("#sessions-detail")
+        assert "No session selected." in str(detail.render())
+
+
+async def test_sessions_export_header_includes_health_and_fails() -> None:
+    """Unit-level check: _build_export_text header includes health/fails columns."""
+
+    from toktrail.api.model_parts.core_models import TokenBreakdown
+    from toktrail.reporting import (
+        CostTotals,
+        UsageSessionRow,
+    )
+    from toktrail.tui.panes.sessions import SessionsPane
+    from toktrail.tui.services import SessionsData
+
+    row = UsageSessionRow(
+        key="m1/pi/s1",
+        origin_machine_id="m1",
+        machine_name=None,
+        machine_label="m1",
+        harness="pi",
+        source_session_id="s1",
+        area_id=None,
+        area_sync_id=None,
+        area_path="area/test",
+        area_name=None,
+        first_ms=1000,
+        last_ms=2000,
+        message_count=5,
+        tokens=TokenBreakdown(input=100, output=50),
+        costs=CostTotals(actual_cost_usd=0.01, virtual_cost_usd=0.02),
+        models=("claude-3",),
+        cwd="/tmp",
+        source_dir="/tmp/src",
+    )
+    data = SessionsData(sessions=(row,), digests={})
+    pane = SessionsPane()
+    export_text = pane._build_export_text(data)
+    header_line = export_text.split("\n")[1]
+    assert "health" in header_line
+    assert "fails" in header_line
+    assert row.source_session_id in export_text

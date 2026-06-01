@@ -183,6 +183,7 @@ class TestRenderInsightsMarkdown:
                         session_count=2,
                         total_tokens=5000,
                         virtual_cost=Decimal("10.00"),
+                        tool_failure_count=2,
                     ),
                     InsightGroupRow(
                         key="pi",
@@ -190,6 +191,7 @@ class TestRenderInsightsMarkdown:
                         session_count=1,
                         total_tokens=2000,
                         virtual_cost=Decimal("4.00"),
+                        tool_failure_count=1,
                     ),
                 ),
             ),
@@ -198,6 +200,8 @@ class TestRenderInsightsMarkdown:
         assert "Usage by harness" in md
         assert "codex" in md
         assert "pi" in md
+        assert "Failures" in md
+        assert "| codex | 2 | 5.0K | $0.00 | $10.00 | 2 |" in md
 
     def test_no_html_in_output(self):
         report = InsightsReport(

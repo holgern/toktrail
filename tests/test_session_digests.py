@@ -57,11 +57,17 @@ def test_build_session_digest_redacts_and_aggregates_tool_failures() -> None:
     assert digest.tool_health.tool_call_count == 1
     assert digest.tool_health.tool_failure_count == 1
     assert digest.tool_health.failed_tools == {"shell": 1}
+    assert digest.health is not None
+    assert digest.health.score == 97
+    assert digest.health.grade == "A"
+    assert digest.health.outcome == "unknown"
     assert digest.files_mentioned == ("tests/test_session_digests.py",)
     assert digest.commands_mentioned == ("pytest tests/test_session_digests.py",)
     assert "secret-value" not in str(payload)
     assert "user@example.com" not in str(payload)
     assert "artifacts" not in payload
+    assert payload["health"]["score"] == 97
+    assert payload["health"]["grade"] == "A"
     assert payload["privacy"]["contains_raw_transcript"] is False
     assert payload["privacy"]["contains_snippets"] is False
     assert payload["privacy"]["artifacts_included"] is False

@@ -45,6 +45,7 @@ from toktrail.cli_parts import analyze as analyze_parts
 from toktrail.cli_parts import insights as insights_parts
 from toktrail.cli_parts import prices as prices_parts
 from toktrail.cli_parts import refresh as refresh_parts
+from toktrail.cli_parts import session as session_parts
 from toktrail.cli_parts import sources as sources_parts
 from toktrail.cli_parts import statusline as statusline_parts
 from toktrail.cli_parts import subscriptions as subscriptions_parts
@@ -161,6 +162,7 @@ area_app = typer.Typer(help="Create and manage hierarchical usage areas.")
 insights_cli_app = insights_parts.insights_app
 
 app.add_typer(run_app, name="run")
+app.add_typer(session_parts.session_app, name="session")
 app.add_typer(sources_app, name="sources")
 app.add_typer(usage_app, name="usage")
 app.add_typer(statusline_app, name="statusline")
@@ -1142,7 +1144,9 @@ def stats(
     token_payload = totals.get("tokens")
     tokens = token_payload if isinstance(token_payload, dict) else {}
     messages = totals.get("messages")
-    message_count = int(messages) if isinstance(messages, (int, float, str)) else 0
+    message_count = (
+        int(messages) if isinstance(messages, (int, float, str)) else 0
+    )
     total_tokens_value = tokens.get("total")
     total_tokens = (
         int(total_tokens_value)
@@ -1155,6 +1159,41 @@ def stats(
     typer.echo(f"Virtual cost: ${totals['virtual_usd']}")
     typer.echo(f"Unpriced models: {totals['unpriced_count']}")
 
+    sessions_data = report.sessions
+    session_count = sessions_data.get("session_count")
+    if isinstance(session_count, (int, float)):
+        typer.echo(f"Sessions: {_format_int(int(session_count))}")
+
+    archetypes = report.archetypes
+    if archetypes:
+        counts = archetypes.get("counts")
+        if isinstance(counts, dict) and any(v > 0 for v in counts.values()):
+            parts = [f"{k}={v}" for k, v in counts.items() if v]
+            typer.echo(f"Archetypes: {', '.join(parts)}")
+
+    health = report.health
+    if health:
+        avg_score = health.get("average_score")
+        outcomes = health.get("outcomes")
+        if isinstance(outcomes, dict) and any(
+            v > 0 for v in outcomes.values()
+        ):
+            outcome_parts = [f"{k}={v}" for k, v in outcomes.items() if v]
+            typer.echo(f"Outcomes: {', '.join(outcome_parts)}")
+        if avg_score is not None:
+            typer.echo(f"Avg health: {avg_score}")
+
+    distributions = report.distributions
+    if distributions:
+        dur = distributions.get("duration_ms")
+        if isinstance(dur, dict):
+            median = dur.get("median")
+            if median is not None:
+                from toktrail.formatting import format_duration_seconds
+                seconds = int(median) // 1000
+                typer.echo(
+                    f"Median duration: {format_duration_seconds(seconds)}"
+                )
 
 @usage_app.command("daily", help="Show daily usage breakdown.")
 @usage_app.command("weekly", help="Show weekly usage breakdown.")
@@ -3296,6 +3335,16 @@ def _print_session_digest(
     utc: bool,
     rich_output: bool,
 ) -> None:
+    def _health_summary() -> str:
+        if digest.health is None:
+            return "- unknown (low)"
+        score = "-" if digest.health.score is None else _format_int(digest.health.score)
+        grade = digest.health.grade or "-"
+        return (
+            f"{grade} {score} {digest.health.outcome} "
+            f"({digest.health.outcome_confidence})"
+        )
+
     typer.echo(f"{digest.harness} source session {digest.source_session_id}")
     if digest.area_path:
         typer.echo(f"Area:       {digest.area_path}")
@@ -3305,6 +3354,10 @@ def _print_session_digest(
         typer.echo(f"Where:      {digest.cwd or digest.source_dir}")
     if digest.git_remote:
         typer.echo(f"Git:        {digest.git_remote}")
+    if digest.models:
+        typer.echo(f"Models:     {', '.join(digest.models)}")
+    if digest.providers:
+        typer.echo(f"Providers:  {', '.join(digest.providers)}")
     if digest.started_ms is not None and digest.last_seen_ms is not None:
         typer.echo(
             "When:       "
@@ -3335,6 +3388,22 @@ def _print_session_digest(
         typer.echo(f"  Failed tools: {failed}")
     if digest.tool_health.warnings:
         typer.echo(f"  Warnings:     {', '.join(digest.tool_health.warnings)}")
+    typer.echo("")
+    typer.echo("Health")
+    typer.echo(f"  Score:        {_health_summary()}")
+    if digest.health is not None:
+        typer.echo(
+            "  Signals:      "
+            f"retry_count={_format_int(digest.health.retry_count)} "
+            f"edit_churn={_format_int(digest.health.edit_churn_count)} "
+            f"max_failure_streak={_format_int(digest.health.consecutive_failure_max)}"
+        )
+        if digest.health.penalties:
+            penalty_text = ", ".join(
+                f"{penalty.kind} -{_format_int(penalty.points)}"
+                for penalty in digest.health.penalties
+            )
+            typer.echo(f"  Penalties:    {penalty_text}")
     if digest.files_mentioned:
         typer.echo("")
         typer.echo("Files/paths mentioned")
@@ -3352,6 +3421,16 @@ def _print_session_compact_report(
     *,
     utc: bool,
 ) -> None:
+    def _health_summary() -> str:
+        if report.health is None:
+            return "- unknown (low)"
+        score = "-" if report.health.score is None else _format_int(report.health.score)
+        grade = report.health.grade or "-"
+        return (
+            f"{grade} {score} {report.health.outcome} "
+            f"({report.health.outcome_confidence})"
+        )
+
     typer.echo(f"{report.harness} source session {report.source_session_id}")
     if report.session_title:
         typer.echo(f"Title:      {report.session_title}")
@@ -3395,13 +3474,20 @@ def _print_session_compact_report(
         typer.echo(f"Models:     {', '.join(report.models[:5])}")
     if report.summary is not None and report.summary.one_line:
         typer.echo(f"Summary:    {report.summary.one_line}")
+    typer.echo(f"Health:     {_health_summary()}")
     if report.tool_health is not None:
         typer.echo(
-            "Health:     "
+            "Signals:    "
             f"tool_calls={_format_int(report.tool_health.tool_call_count)} "
             f"failures={_format_int(report.tool_health.tool_failure_count)} "
             f"timeouts={_format_int(report.tool_health.tool_timeout_count)}"
         )
+    if report.health is not None and report.health.penalties:
+        penalty_text = ", ".join(
+            f"{penalty.kind} -{_format_int(penalty.points)}"
+            for penalty in report.health.penalties
+        )
+        typer.echo(f"Penalties:  {penalty_text}")
 
 
 def _print_session_tool_call_report(
@@ -4264,6 +4350,18 @@ analyze_parts.configure_analyze_runtime(
         resolve_config_path=_resolve_config_path,
         exit_with_error=_exit_with_error,
         print_session_cache_analysis_report=_print_session_cache_analysis_report,
+        print_session_digest=_print_session_digest,
+        print_session_compact_report=_print_session_compact_report,
+        print_session_tool_call_report=_print_session_tool_call_report,
+    )
+)
+
+session_parts.configure_session_runtime(
+    session_parts.SessionRuntime(
+        resolve_state_db=_resolve_state_db,
+        resolve_config_path=_resolve_config_path,
+        open_toktrail_connection=_open_toktrail_connection,
+        exit_with_error=_exit_with_error,
         print_session_digest=_print_session_digest,
         print_session_compact_report=_print_session_compact_report,
         print_session_tool_call_report=_print_session_tool_call_report,

@@ -832,9 +832,14 @@ class StatsReport:
     models: tuple[dict[str, object], ...]
     providers: tuple[dict[str, object], ...]
     harnesses: tuple[dict[str, object], ...]
+    distributions: dict[str, object] = field(default_factory=dict)
+    archetypes: dict[str, object] = field(default_factory=dict)
+    health: dict[str, object] = field(default_factory=dict)
+    area_mix: tuple[dict[str, object], ...] = ()
+    generated_at_ms: int | None = None
 
     def as_dict(self) -> dict[str, object]:
-        return {
+        result: dict[str, object] = {
             "schema_version": self.schema_version,
             "range": dict(self.range),
             "totals": dict(self.totals),
@@ -843,8 +848,14 @@ class StatsReport:
             "models": list(self.models),
             "providers": list(self.providers),
             "harnesses": list(self.harnesses),
+            "distributions": dict(self.distributions),
+            "archetypes": dict(self.archetypes),
+            "health": dict(self.health),
+            "area_mix": list(self.area_mix),
         }
-
+        if self.generated_at_ms is not None:
+            result["generated_at_ms"] = self.generated_at_ms
+        return result
 
 @dataclass(frozen=True)
 class SubscriptionUsagePeriod:
@@ -1469,6 +1480,54 @@ class SessionToolHealth:
 
 
 @dataclass(frozen=True)
+class SessionHealthPenalty:
+    kind: str
+    points: int
+    detail: str | None = None
+
+    def as_dict(self) -> dict[str, object]:
+        payload: dict[str, object] = {
+            "kind": self.kind,
+            "points": self.points,
+        }
+        if self.detail is not None:
+            payload["detail"] = self.detail
+        return payload
+
+
+@dataclass(frozen=True)
+class SessionHealth:
+    score: int | None = None
+    grade: str | None = None
+    outcome: str = "unknown"
+    outcome_confidence: str = "low"
+    basis: tuple[str, ...] = ()
+    penalties: tuple[SessionHealthPenalty, ...] = ()
+    retry_count: int = 0
+    edit_churn_count: int = 0
+    consecutive_failure_max: int = 0
+    context_pressure_max: float | None = None
+    compaction_count: int = 0
+    mid_task_compaction_count: int = 0
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "score": self.score,
+            "grade": self.grade,
+            "outcome": self.outcome,
+            "outcome_confidence": self.outcome_confidence,
+            "basis": list(self.basis),
+            "penalties": [penalty.as_dict() for penalty in self.penalties],
+            "retry_count": self.retry_count,
+            "edit_churn_count": self.edit_churn_count,
+            "consecutive_failure_max": self.consecutive_failure_max,
+            "context_pressure_max": self.context_pressure_max,
+            "compaction_count": self.compaction_count,
+            "mid_task_compaction_count": self.mid_task_compaction_count,
+        }
+
+
+@dataclass(frozen=True)
 class SessionDigestSummary:
     one_line: str | None = None
     bullets: tuple[str, ...] = ()
@@ -1503,8 +1562,11 @@ class SessionDigest:
     message_count: int
     summary: SessionDigestSummary
     tool_health: SessionToolHealth
+    health: SessionHealth | None = None
     files_mentioned: tuple[str, ...] = ()
     commands_mentioned: tuple[str, ...] = ()
+    models: tuple[str, ...] = ()
+    providers: tuple[str, ...] = ()
     contains_raw_transcript: bool = False
     contains_snippets: bool = False
     generated_at_ms: int | None = None
@@ -1528,8 +1590,11 @@ class SessionDigest:
             "last_seen_ms": self.last_seen_ms,
             "usage": self.usage.as_dict(),
             "message_count": self.message_count,
+            "models": list(self.models),
+            "providers": list(self.providers),
             "summary": self.summary.as_dict(),
             "tool_health": self.tool_health.as_dict(),
+            "health": None if self.health is None else self.health.as_dict(),
             "privacy": {
                 "contains_raw_transcript": self.contains_raw_transcript,
                 "contains_snippets": self.contains_snippets,
@@ -1567,6 +1632,7 @@ class SessionCompactReport:
     providers: tuple[str, ...] = ()
     summary: SessionDigestSummary | None = None
     tool_health: SessionToolHealth | None = None
+    health: SessionHealth | None = None
     digest_available: bool = False
     generated_at_ms: int | None = None
     source_fingerprint: str | None = None
@@ -1623,6 +1689,7 @@ class SessionCompactReport:
                 if self.tool_health is not None
                 else SessionToolHealth(warnings=("no-session-digest",)).as_dict()
             ),
+            "health": None if self.health is None else self.health.as_dict(),
             "digest_available": self.digest_available,
             "privacy": {
                 "contains_raw_transcript": False,
@@ -1843,6 +1910,8 @@ __all__ = [
     "StateImportConflict",
     "StateImportResult",
     "SessionCacheAnalysisReport",
+    "SessionHealth",
+    "SessionHealthPenalty",
     "SessionCompactReport",
     "SessionDigest",
     "SessionDigestSummary",

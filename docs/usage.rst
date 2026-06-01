@@ -231,6 +231,30 @@ Session usage by period
 The default sessions output is line-based. Use ``--table`` for the wide tabular
 view. In table mode, ``usage sessions`` includes an ``area`` column.
 
+Stable session automation
+-------------------------
+
+Use the stable ``toktrail session`` group when an agent or script needs a
+predictable source-session surface backed by imported toktrail state.
+
+.. code-block:: bash
+
+   toktrail session list --today
+   toktrail session list --area work --harness codex --json
+   toktrail session get "machine-1/codex/codex_ses_123"
+   toktrail session health --last --json
+   toktrail session usage "machine-1/opencode/ses-1" --json
+   toktrail session tool-calls "machine-1/codex/codex_ses_123" --bad-only --json
+
+Session keys use the existing ``machine/harness/source_session_id`` shape printed
+by ``toktrail usage sessions``. JSON output is additive-only: existing fields
+keep their names, new fields may appear, and consumers should ignore unknown
+fields.
+
+``toktrail session tool-calls`` resolves the imported source files recorded for
+that session key. If those files are no longer accessible, toktrail fails
+explicitly instead of silently scanning a different source tree.
+
 Area workflow
 -------------
 

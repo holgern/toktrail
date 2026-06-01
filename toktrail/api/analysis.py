@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from pathlib import Path
+from typing import cast
 
 from toktrail import db as db_module
 from toktrail.analysis import (
@@ -31,6 +32,7 @@ from toktrail.api.models import (
     TokenBreakdown,
     ToolCallRow,
 )
+from toktrail.api.reports import _resolve_usage_session_row
 from toktrail.config import CostingConfig
 from toktrail.errors import (
     AmbiguousSourceSessionError,
@@ -133,24 +135,47 @@ def session_digest(
     *,
     db_path: Path | None = None,
     config_path: Path | None = None,
-    harness: str,
+    harness: str | None = None,
     source_session_id: str | None = None,
     last: bool = False,
     source_path: Path | None = None,
     refresh: bool = True,
     persist: bool = False,
     include_snippets: bool = False,
-) -> object:
+    session_key: str | None = None,
+) -> SessionDigest:
     if include_snippets:
         msg = "include_snippets is not supported for phase-1 session digests."
+        raise InvalidAPIUsageError(msg)
+    if session_key is not None and (
+        harness is not None or source_session_id is not None or last
+    ):
+        msg = "session_key cannot be combined with harness, source_session_id, or last."
         raise InvalidAPIUsageError(msg)
     if source_session_id is not None and last:
         msg = "source_session_id and last=True cannot be used together."
         raise InvalidAPIUsageError(msg)
+    if session_key is None and harness is None:
+        msg = "harness is required unless session_key is provided."
+        raise InvalidAPIUsageError(msg)
 
-    definition = _get_harness(harness)
-    harness_name = definition.name
     costing_config = _load_costing_config(config_path)
+    if session_key is not None:
+        conn, _ = _open_state_db(db_path)
+        try:
+            usage_session = _resolve_usage_session_row(
+                conn,
+                costing_config=costing_config,
+                session_key=session_key,
+            )
+        finally:
+            conn.close()
+        harness_name = usage_session.harness
+        source_session_id = usage_session.source_session_id
+    else:
+        assert harness is not None
+        harness_name = _get_harness(harness).name
+    definition = _get_harness(harness_name)
     if refresh:
         import_usage(
             db_path,
@@ -163,13 +188,20 @@ def session_digest(
 
     conn, _ = _open_state_db(db_path)
     try:
-        usage_session = _resolve_usage_session_for_digest(
-            conn=conn,
-            harness=harness_name,
-            source_session_id=source_session_id,
-            last=last,
-            costing_config=costing_config,
-        )
+        if session_key is not None:
+            usage_session = _resolve_usage_session_row(
+                conn,
+                costing_config=costing_config,
+                session_key=session_key,
+            )
+        else:
+            usage_session = _resolve_usage_session_row(
+                conn,
+                costing_config=costing_config,
+                harness=harness_name,
+                source_session_id=source_session_id,
+                last=last,
+            )
         transcript_events = []
         event_source = _resolve_digest_source_path(
             definition=definition,
@@ -195,31 +227,54 @@ def session_digest(
         raise StateDatabaseError(str(exc)) from exc
     finally:
         conn.close()
-    return public_digest_from_internal(digest)
+    return cast(SessionDigest, public_digest_from_internal(digest))
 
 
 def session_report(
     *,
     db_path: Path | None = None,
     config_path: Path | None = None,
-    harness: str,
+    harness: str | None = None,
     source_session_id: str | None = None,
     last: bool = False,
     source_path: Path | None = None,
     refresh: bool = True,
     persist: bool = False,
     include_snippets: bool = False,
+    session_key: str | None = None,
 ) -> SessionCompactReport:
     if include_snippets:
         msg = "include_snippets is not supported for compact session reports."
         raise InvalidAPIUsageError(msg)
+    if session_key is not None and (
+        harness is not None or source_session_id is not None or last
+    ):
+        msg = "session_key cannot be combined with harness, source_session_id, or last."
+        raise InvalidAPIUsageError(msg)
     if source_session_id is not None and last:
         msg = "source_session_id and last=True cannot be used together."
         raise InvalidAPIUsageError(msg)
+    if session_key is None and harness is None:
+        msg = "harness is required unless session_key is provided."
+        raise InvalidAPIUsageError(msg)
 
-    definition = _get_harness(harness)
-    harness_name = definition.name
     costing_config = _load_costing_config(config_path)
+    if session_key is not None:
+        conn, _ = _open_state_db(db_path)
+        try:
+            usage_session = _resolve_usage_session_row(
+                conn,
+                costing_config=costing_config,
+                session_key=session_key,
+            )
+        finally:
+            conn.close()
+        harness_name = usage_session.harness
+        source_session_id = usage_session.source_session_id
+    else:
+        assert harness is not None
+        harness_name = _get_harness(harness).name
+    definition = _get_harness(harness_name)
     if refresh:
         import_usage(
             db_path,
@@ -232,13 +287,20 @@ def session_report(
 
     conn, _ = _open_state_db(db_path)
     try:
-        usage_session = _resolve_usage_session_for_digest(
-            conn=conn,
-            harness=harness_name,
-            source_session_id=source_session_id,
-            last=last,
-            costing_config=costing_config,
-        )
+        if session_key is not None:
+            usage_session = _resolve_usage_session_row(
+                conn,
+                costing_config=costing_config,
+                session_key=session_key,
+            )
+        else:
+            usage_session = _resolve_usage_session_row(
+                conn,
+                costing_config=costing_config,
+                harness=harness_name,
+                source_session_id=source_session_id,
+                last=last,
+            )
         digest = _load_or_build_session_digest(
             conn=conn,
             definition=definition,
@@ -331,54 +393,11 @@ def _compact_report_from_usage_session(
             if digest is not None
             else SessionToolHealth(warnings=("no-session-digest",))
         ),
+        health=digest.health if digest is not None else None,
         digest_available=digest is not None,
         generated_at_ms=digest.generated_at_ms if digest is not None else None,
         source_fingerprint=digest.source_fingerprint if digest is not None else None,
     )
-
-
-def _resolve_usage_session_for_digest(
-    *,
-    conn: sqlite3.Connection,
-    harness: str,
-    source_session_id: str | None,
-    last: bool,
-    costing_config: CostingConfig,
-) -> UsageSessionRow:
-    from toktrail.reporting import UsageSessionsFilter
-
-    report = db_module.summarize_usage_sessions(
-        conn,
-        UsageSessionsFilter(
-            harness=harness,
-            source_session_id=source_session_id,
-            limit=1 if last else None,
-            order="desc",
-        ),
-        costing_config=costing_config,
-    )
-    if source_session_id is not None:
-        if not report.sessions:
-            msg = f"Source session not found for harness {harness}: {source_session_id}"
-            raise SourcePathError(msg)
-        return report.sessions[0]  # type: ignore[no-any-return]
-    if last:
-        if not report.sessions:
-            msg = f"No usage events found for harness {harness}."
-            raise SourcePathError(msg)
-        return report.sessions[0]  # type: ignore[no-any-return]
-    if len(report.sessions) == 1:
-        return report.sessions[0]  # type: ignore[no-any-return]
-    if not report.sessions:
-        msg = f"No usage events found for harness {harness}."
-        raise SourcePathError(msg)
-    candidates = ", ".join(row.source_session_id for row in report.sessions[:10])
-    msg = (
-        f"Multiple source sessions found for harness {harness}: {candidates}. "
-        "Provide source_session_id or use last=True."
-    )
-    raise AmbiguousSourceSessionError(msg)
-
 
 def _resolve_digest_source_path(
     *,
@@ -387,12 +406,21 @@ def _resolve_digest_source_path(
     usage_source_paths: tuple[str, ...],
 ) -> Path | None:
     if source_path is not None:
-        return definition.resolve_source_path(source_path)  # type: ignore[no-any-return, attr-defined]
+        return cast(
+            Path | None,
+            definition.resolve_source_path(source_path),  # type: ignore[attr-defined]
+        )
     for value in usage_source_paths:
         path = Path(value).expanduser()
         if path.exists():
             return path
-    return definition.resolve_source_path(None)  # type: ignore[no-any-return, attr-defined]
+    default_path = cast(
+        Path | None,
+        definition.resolve_source_path(None),  # type: ignore[attr-defined]
+    )
+    if default_path is not None and default_path.exists():
+        return default_path
+    return None
 
 
 def _load_events_from_state(
@@ -612,7 +640,7 @@ def _to_public_cluster(value: CacheClusterAnalysis) -> CacheClusterRow:
 
 def session_tool_call_analysis(
     *,
-    harness: str,
+    harness: str | None = None,
     db_path: Path | None = None,
     config_path: Path | None = None,
     source_path: Path | None = None,
@@ -623,42 +651,86 @@ def session_tool_call_analysis(
     include_raw_json: bool = False,
     limit: int | None = None,
     max_snippet_chars: int = 1000,
+    session_key: str | None = None,
 ) -> SessionToolCallReport:
     """Analyze tool calls in a source session for failures and diagnostics.
 
     This is a read-only operation. It does not import or persist any data.
     Currently only 'codex' harness is supported.
     """
+    if session_key is not None and (
+        harness is not None
+        or source_path is not None
+        or source_session_id is not None
+        or last
+    ):
+        msg = (
+            "session_key cannot be combined with harness, source_path, "
+            "source_session_id, or last."
+        )
+        raise InvalidAPIUsageError(msg)
     if source_session_id is not None and last:
         msg = "source_session_id and last=True cannot be used together."
+        raise InvalidAPIUsageError(msg)
+    if session_key is None and harness is None:
+        msg = "harness is required unless session_key is provided."
         raise InvalidAPIUsageError(msg)
 
     if include_raw_json and not _tool_call_analysis_json_allowed():
         pass  # raw_json is allowed in API, just documented as JSON-only in CLI
 
-    definition = _get_harness(harness)
-    harness_name = definition.name
+    selected_session_id = source_session_id
+    if session_key is not None:
+        conn, _ = _open_state_db(db_path)
+        try:
+            usage_session = _resolve_usage_session_row(
+                conn,
+                costing_config=_load_costing_config(config_path),
+                session_key=session_key,
+            )
+        finally:
+            conn.close()
+        harness_name = usage_session.harness
+        selected_session_id = usage_session.source_session_id
+        resolved_paths = [
+            Path(value).expanduser()
+            for value in usage_session.source_paths
+            if Path(value).expanduser().exists()
+        ]
+        if not resolved_paths:
+            msg = (
+                f"Session source files are unavailable for {session_key}. "
+                "Re-import from an accessible source or pass a source-backed "
+                "session key."
+            )
+            raise SourcePathError(msg)
+        resolved_source = resolved_paths[0]
+    else:
+        assert harness is not None
+        definition = _get_harness(harness)
+        harness_name = definition.name
 
     if harness_name != "codex":
-        msg = f"Tool-call analysis is not supported for harness {harness!r}."
+        msg = f"Tool-call analysis is not supported for harness {harness_name!r}."
         raise InvalidAPIUsageError(msg)
 
-    # Resolve source path
-    resolved_source = definition.resolve_source_path(source_path)
-    if resolved_source is None or not resolved_source.exists():
-        msg = _missing_source_path_message(
-            harness_name,
-            resolved_source,
-            explicit_source=source_path,
-        )
-        raise SourcePathError(msg)
+    if session_key is None:
+        definition = _get_harness(harness_name)
+        resolved = definition.resolve_source_path(source_path)
+        if resolved is None or not resolved.exists():
+            msg = _missing_source_path_message(
+                harness_name,
+                resolved,
+                explicit_source=source_path,
+            )
+            raise SourcePathError(msg)
+        resolved_source = resolved
 
     # Import the scanner
     from toktrail.adapters.codex_tool_calls import scan_codex_tool_calls
 
     # Resolve session
-    selected_session_id = source_session_id
-    if selected_session_id is None:
+    if session_key is None and selected_session_id is None:
         costing_config = _load_costing_config(config_path)
         try:
             sessions = definition.list_sessions(

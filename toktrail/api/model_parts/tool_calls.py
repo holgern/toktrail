@@ -107,8 +107,16 @@ class SessionToolCallReport:
             "timeout_count": self.timeout_count,
         }
         if include_calls:
-            bad = self.bad_calls
             raw_map = raw_json_by_ordinal or {}
+            payload["calls"] = [
+                row.as_dict(
+                    include_output=include_output,
+                    include_raw_json=include_raw_json,
+                    raw_json=raw_map.get(row.ordinal),
+                )
+                for row in self.calls
+            ]
+            bad = self.bad_calls
             payload["bad_calls"] = [
                 row.as_dict(
                     include_output=include_output,

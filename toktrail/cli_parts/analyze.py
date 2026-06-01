@@ -187,7 +187,7 @@ def analyze_session_impl(
 
     if json_output:
         if details:
-            payload = digest.as_dict(include_artifacts=rich_output)  # type: ignore[attr-defined]
+            payload = digest.as_dict(include_artifacts=rich_output)
             typer.echo(json.dumps(payload, indent=2))
         else:
             typer.echo(json.dumps(report.as_dict(), indent=2))

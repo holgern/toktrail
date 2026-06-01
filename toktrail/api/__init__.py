@@ -117,6 +117,7 @@ from toktrail.api.paths import (
     resolve_toktrail_db_path,
 )
 from toktrail.api.reports import (
+    get_usage_session,
     session_report,
     subscription_usage_report,
     usage_report,
@@ -227,6 +228,7 @@ __all__ = [
     "get_active_run",
     "get_harness_definition",
     "get_run",
+    "get_usage_session",
     "import_configured_usage",
     "import_usage",
     "list_areas",

@@ -58,6 +58,8 @@ from toktrail.reporting import (
     RunReport,
     SessionDigest,
     SessionDigestSummary,
+    SessionHealth,
+    SessionHealthPenalty,
     SessionToolHealth,
     SessionTotals,
     SimulationSummaryRow,
@@ -81,7 +83,7 @@ from toktrail.reporting import (
     UsageSessionsReport,
 )
 
-SCHEMA_VERSION = 16
+SCHEMA_VERSION = 17
 _PERIOD_SORT: dict[str, int] = {
     "5h": 0,
     "daily": 1,
@@ -345,6 +347,9 @@ def migrate(conn: sqlite3.Connection) -> None:
     if current_version == 15:
         _migrate_v15_to_v16(conn)
         current_version = 16
+    if current_version == 16:
+        _migrate_v16_to_v17(conn)
+        current_version = 17
 
     _ensure_machine_id(conn)
     conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
@@ -671,6 +676,18 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             tool_failure_count INTEGER NOT NULL DEFAULT 0,
             tool_timeout_count INTEGER NOT NULL DEFAULT 0,
             failed_tools_json TEXT NOT NULL DEFAULT '{}',
+            health_score INTEGER,
+            health_grade TEXT,
+            outcome TEXT NOT NULL DEFAULT 'unknown',
+            outcome_confidence TEXT NOT NULL DEFAULT 'low',
+            health_basis_json TEXT NOT NULL DEFAULT '[]',
+            health_penalties_json TEXT NOT NULL DEFAULT '[]',
+            retry_count INTEGER NOT NULL DEFAULT 0,
+            edit_churn_count INTEGER NOT NULL DEFAULT 0,
+            consecutive_failure_max INTEGER NOT NULL DEFAULT 0,
+            compaction_count INTEGER NOT NULL DEFAULT 0,
+            mid_task_compaction_count INTEGER NOT NULL DEFAULT 0,
+            context_pressure_max REAL,
             files_mentioned_json TEXT NOT NULL DEFAULT '[]',
             commands_mentioned_json TEXT NOT NULL DEFAULT '[]',
             warnings_json TEXT NOT NULL DEFAULT '[]',
@@ -1368,6 +1385,18 @@ def _create_source_session_digests_table(conn: sqlite3.Connection) -> None:
             tool_failure_count INTEGER NOT NULL DEFAULT 0,
             tool_timeout_count INTEGER NOT NULL DEFAULT 0,
             failed_tools_json TEXT NOT NULL DEFAULT '{}',
+            health_score INTEGER,
+            health_grade TEXT,
+            outcome TEXT NOT NULL DEFAULT 'unknown',
+            outcome_confidence TEXT NOT NULL DEFAULT 'low',
+            health_basis_json TEXT NOT NULL DEFAULT '[]',
+            health_penalties_json TEXT NOT NULL DEFAULT '[]',
+            retry_count INTEGER NOT NULL DEFAULT 0,
+            edit_churn_count INTEGER NOT NULL DEFAULT 0,
+            consecutive_failure_max INTEGER NOT NULL DEFAULT 0,
+            compaction_count INTEGER NOT NULL DEFAULT 0,
+            mid_task_compaction_count INTEGER NOT NULL DEFAULT 0,
+            context_pressure_max REAL,
             files_mentioned_json TEXT NOT NULL DEFAULT '[]',
             commands_mentioned_json TEXT NOT NULL DEFAULT '[]',
             warnings_json TEXT NOT NULL DEFAULT '[]',
@@ -1390,6 +1419,71 @@ def _create_source_session_digests_table(conn: sqlite3.Connection) -> None:
 
 def _migrate_v15_to_v16(conn: sqlite3.Connection) -> None:
     _create_source_session_digests_table(conn)
+
+
+def _migrate_v16_to_v17(conn: sqlite3.Connection) -> None:
+    _add_column_if_missing(conn, "source_session_digests", "health_score", "INTEGER")
+    _add_column_if_missing(conn, "source_session_digests", "health_grade", "TEXT")
+    _add_column_if_missing(
+        conn,
+        "source_session_digests",
+        "outcome",
+        "TEXT NOT NULL DEFAULT 'unknown'",
+    )
+    _add_column_if_missing(
+        conn,
+        "source_session_digests",
+        "outcome_confidence",
+        "TEXT NOT NULL DEFAULT 'low'",
+    )
+    _add_column_if_missing(
+        conn,
+        "source_session_digests",
+        "health_basis_json",
+        "TEXT NOT NULL DEFAULT '[]'",
+    )
+    _add_column_if_missing(
+        conn,
+        "source_session_digests",
+        "health_penalties_json",
+        "TEXT NOT NULL DEFAULT '[]'",
+    )
+    _add_column_if_missing(
+        conn,
+        "source_session_digests",
+        "retry_count",
+        "INTEGER NOT NULL DEFAULT 0",
+    )
+    _add_column_if_missing(
+        conn,
+        "source_session_digests",
+        "edit_churn_count",
+        "INTEGER NOT NULL DEFAULT 0",
+    )
+    _add_column_if_missing(
+        conn,
+        "source_session_digests",
+        "consecutive_failure_max",
+        "INTEGER NOT NULL DEFAULT 0",
+    )
+    _add_column_if_missing(
+        conn,
+        "source_session_digests",
+        "compaction_count",
+        "INTEGER NOT NULL DEFAULT 0",
+    )
+    _add_column_if_missing(
+        conn,
+        "source_session_digests",
+        "mid_task_compaction_count",
+        "INTEGER NOT NULL DEFAULT 0",
+    )
+    _add_column_if_missing(
+        conn,
+        "source_session_digests",
+        "context_pressure_max",
+        "REAL",
+    )
 
 
 def _create_machine_active_areas_table(conn: sqlite3.Connection) -> None:
@@ -3277,11 +3371,15 @@ def upsert_source_session_digest(
             origin_machine_id, harness, source_session_id, schema_version, generator,
             generated_at_ms, source_fingerprint, one_line, bullets_json, confidence,
             tool_call_count, tool_failure_count, tool_timeout_count, failed_tools_json,
+            health_score, health_grade, outcome, outcome_confidence,
+            health_basis_json, health_penalties_json, retry_count, edit_churn_count,
+            consecutive_failure_max, compaction_count, mid_task_compaction_count,
+            context_pressure_max,
             files_mentioned_json, commands_mentioned_json, warnings_json,
             contains_raw_transcript, contains_snippets, created_at_ms, updated_at_ms,
             imported_at_ms
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(origin_machine_id, harness, source_session_id, generator)
         DO UPDATE SET
             schema_version = excluded.schema_version,
@@ -3294,6 +3392,18 @@ def upsert_source_session_digest(
             tool_failure_count = excluded.tool_failure_count,
             tool_timeout_count = excluded.tool_timeout_count,
             failed_tools_json = excluded.failed_tools_json,
+            health_score = excluded.health_score,
+            health_grade = excluded.health_grade,
+            outcome = excluded.outcome,
+            outcome_confidence = excluded.outcome_confidence,
+            health_basis_json = excluded.health_basis_json,
+            health_penalties_json = excluded.health_penalties_json,
+            retry_count = excluded.retry_count,
+            edit_churn_count = excluded.edit_churn_count,
+            consecutive_failure_max = excluded.consecutive_failure_max,
+            compaction_count = excluded.compaction_count,
+            mid_task_compaction_count = excluded.mid_task_compaction_count,
+            context_pressure_max = excluded.context_pressure_max,
             files_mentioned_json = excluded.files_mentioned_json,
             commands_mentioned_json = excluded.commands_mentioned_json,
             warnings_json = excluded.warnings_json,
@@ -3317,6 +3427,29 @@ def upsert_source_session_digest(
             digest.tool_health.tool_failure_count,
             digest.tool_health.tool_timeout_count,
             json.dumps(digest.tool_health.failed_tools, separators=(",", ":")),
+            None if digest.health is None else digest.health.score,
+            None if digest.health is None else digest.health.grade,
+            "unknown" if digest.health is None else digest.health.outcome,
+            "low" if digest.health is None else digest.health.outcome_confidence,
+            json.dumps(
+                [] if digest.health is None else list(digest.health.basis),
+                separators=(",", ":"),
+            ),
+            json.dumps(
+                []
+                if digest.health is None
+                else [
+                    penalty.as_dict()
+                    for penalty in digest.health.penalties
+                ],
+                separators=(",", ":"),
+            ),
+            0 if digest.health is None else digest.health.retry_count,
+            0 if digest.health is None else digest.health.edit_churn_count,
+            0 if digest.health is None else digest.health.consecutive_failure_max,
+            0 if digest.health is None else digest.health.compaction_count,
+            0 if digest.health is None else digest.health.mid_task_compaction_count,
+            None if digest.health is None else digest.health.context_pressure_max,
             json.dumps(list(digest.files_mentioned), separators=(",", ":")),
             json.dumps(list(digest.commands_mentioned), separators=(",", ":")),
             json.dumps(list(digest.tool_health.warnings), separators=(",", ":")),
@@ -3409,6 +3542,7 @@ def _digest_from_row(row: sqlite3.Row) -> SessionDigest:
             },
             warnings=_json_tuple(_optional_str(row["warnings_json"]) or "[]"),
         ),
+        health=_health_from_row(row),
         files_mentioned=_json_tuple(_optional_str(row["files_mentioned_json"]) or "[]"),
         commands_mentioned=_json_tuple(
             _optional_str(row["commands_mentioned_json"]) or "[]"
@@ -3418,6 +3552,85 @@ def _digest_from_row(row: sqlite3.Row) -> SessionDigest:
         generated_at_ms=_required_int(row["generated_at_ms"]),
         source_fingerprint=_optional_str(row["source_fingerprint"]),
     )
+
+
+def _health_from_row(row: sqlite3.Row) -> SessionHealth | None:
+    keys = row.keys()
+    if "outcome" not in keys:
+        return None
+    outcome = _optional_str(row["outcome"]) or "unknown"
+    score = _optional_int(row["health_score"]) if "health_score" in keys else None
+    grade = _optional_str(row["health_grade"]) if "health_grade" in keys else None
+    outcome_confidence = (
+        _optional_str(row["outcome_confidence"]) or "low"
+        if "outcome_confidence" in keys
+        else "low"
+    )
+    basis = (
+        _json_tuple(_optional_str(row["health_basis_json"]) or "[]")
+        if "health_basis_json" in keys
+        else ()
+    )
+    penalties_json = (
+        _optional_str(row["health_penalties_json"]) or "[]"
+        if "health_penalties_json" in keys
+        else "[]"
+    )
+    penalties = tuple(
+        SessionHealthPenalty(
+            kind=str(item.get("kind", "unknown")),
+            points=int(item.get("points", 0)),
+            detail=(
+                None
+                if item.get("detail") in (None, "")
+                else str(item.get("detail"))
+            ),
+        )
+        for item in json.loads(penalties_json)
+        if isinstance(item, dict)
+    )
+    health = SessionHealth(
+        score=score,
+        grade=grade,
+        outcome=outcome,
+        outcome_confidence=outcome_confidence,
+        basis=basis,
+        penalties=penalties,
+        retry_count=(
+            _required_int(row["retry_count"])
+            if "retry_count" in keys and row["retry_count"] is not None
+            else 0
+        ),
+        edit_churn_count=(
+            _required_int(row["edit_churn_count"])
+            if "edit_churn_count" in keys and row["edit_churn_count"] is not None
+            else 0
+        ),
+        consecutive_failure_max=(
+            _required_int(row["consecutive_failure_max"])
+            if "consecutive_failure_max" in keys
+            and row["consecutive_failure_max"] is not None
+            else 0
+        ),
+        context_pressure_max=(
+            _required_float(row["context_pressure_max"])
+            if "context_pressure_max" in keys
+            and row["context_pressure_max"] is not None
+            else None
+        ),
+        compaction_count=(
+            _required_int(row["compaction_count"])
+            if "compaction_count" in keys and row["compaction_count"] is not None
+            else 0
+        ),
+        mid_task_compaction_count=(
+            _required_int(row["mid_task_compaction_count"])
+            if "mid_task_compaction_count" in keys
+            and row["mid_task_compaction_count"] is not None
+            else 0
+        ),
+    )
+    return health
 
 
 def _merge_adapter_source_session_metadata(

@@ -223,6 +223,9 @@ def test_cli_analyze_session_codex_json_compact_and_persisted_usage_summary(
     assert payload["cache"]["cache_read_tokens"] == 0
     assert payload["tool_health"]["tool_call_count"] == 1
     assert payload["tool_health"]["tool_failure_count"] == 1
+    assert payload["health"]["score"] == 67
+    assert payload["health"]["grade"] == "C"
+    assert payload["health"]["outcome"] == "errored"
     assert payload["digest_available"] is True
     assert payload["privacy"]["contains_raw_transcript"] is False
     assert payload["privacy"]["artifacts_included"] is False
@@ -245,7 +248,27 @@ def test_cli_analyze_session_codex_json_compact_and_persisted_usage_summary(
 
     assert usage.exit_code == 0, usage.output
     assert "Summary:" in usage.output
+    assert "Health:" in usage.output
     assert "tool_failures=1" in usage.output
+
+    usage_json = runner.invoke(
+        app,
+        [
+            "--db",
+            str(state_db),
+            "usage",
+            "sessions",
+            "--with-summary",
+            "--json",
+            "--no-refresh",
+        ],
+    )
+
+    assert usage_json.exit_code == 0, usage_json.output
+    usage_payload = json.loads(usage_json.output)
+    assert usage_payload["sessions"][0]["health"]["score"] == 67
+    assert usage_payload["sessions"][0]["health"]["grade"] == "C"
+    assert usage_payload["sessions"][0]["tool_health"]["tool_failure_count"] == 1
 
 
 def test_cli_analyze_session_codex_details_json_can_include_artifacts(
@@ -277,6 +300,7 @@ def test_cli_analyze_session_codex_details_json_can_include_artifacts(
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
     assert payload["type"] == "session_digest"
+    assert payload["health"]["score"] == 67
     assert payload["privacy"]["artifacts_included"] is True
     assert payload["artifacts"]["files_mentioned"] == [
         "tests/test_codex_session_digest.py"
@@ -500,3 +524,4 @@ def test_cli_analyze_session_without_bad_calls_unaffected(tmp_path: Path) -> Non
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
     assert payload["type"] == "session_compact_report"
+    assert payload["health"]["score"] == 67
