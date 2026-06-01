@@ -10,7 +10,7 @@ from textual.widgets import ContentSwitcher, Footer, Header, Static, Tab, Tabs
 from textual.worker import Worker, WorkerState
 
 from toktrail.api.models import PriceRow
-from toktrail.errors import InvalidAPIUsageError
+from toktrail.errors import InvalidAPIUsageError, ToktrailError
 from toktrail.periods import resolve_timezone
 from toktrail.tui.clipboard import copy_fallback_path, copy_to_clipboard, export_dir
 from toktrail.tui.layout import TuiDisplay, TuiMode, resolve_tui_display
@@ -24,6 +24,7 @@ from toktrail.tui.screens.area_form import AreaFormScreen
 from toktrail.tui.screens.confirm import ConfirmScreen
 from toktrail.tui.screens.help import HelpScreen
 from toktrail.tui.screens.price_form import PriceFormScreen
+from toktrail.tui.screens.session_detail import SessionDetailScreen
 from toktrail.tui.services import DashboardView, ToktrailTuiService
 from toktrail.tui.state import ToktrailTuiState
 
@@ -83,7 +84,9 @@ class ToktrailTuiApp(App[None]):
         Binding("y", "copy_current_view", "Copy"),
         Binding("Y", "export_current_view", "Export"),
         Binding("i", "toggle_details", "Details", show=False),
-        Binding("enter", "toggle_details", "Details", show=False),
+        Binding(
+            "enter", "open_session_detail", "Open session", show=False, priority=True
+        ),
         Binding("question_mark", "help", "Help"),
         Binding("h", "help", "Help", show=False),
         Binding("left", "day_back", "Day back", show=False, priority=True),
@@ -286,6 +289,24 @@ class ToktrailTuiApp(App[None]):
     def action_toggle_price_subview(self) -> None:
         selected = self._prices.toggle_subview()
         self._status.update(f"Prices view: {selected}")
+
+    def action_open_session_detail(self) -> None:
+        if self._current_pane_id() != "sessions":
+            self.action_toggle_details()
+            return
+
+        key = self._sessions.selected_session_key
+        if not key:
+            self._status.update("No session selected.")
+            return
+
+        try:
+            text = self.service.session_detail_text(key)
+        except (ToktrailError, OSError, ValueError) as exc:
+            self._status.update(f"Session detail failed: {exc}")
+            return
+
+        self.push_screen(SessionDetailScreen(text, session_key=key))
 
     def action_toggle_details(self) -> None:
         display = self._tui_display or self._resolve_display()

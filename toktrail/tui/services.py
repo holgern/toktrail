@@ -6,6 +6,7 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Literal
 
+from toktrail.api.analysis import session_digest as session_digest_api
 from toktrail.api.areas import (
     assign_area_to_session,
     assign_area_to_session_key,
@@ -43,6 +44,7 @@ from toktrail.db import connect as connect_db
 from toktrail.db import get_source_session_digest
 from toktrail.errors import InvalidAPIUsageError
 from toktrail.periods import resolve_timezone
+from toktrail.tui.session_detail import render_session_health_text
 from toktrail.tui.state import ToktrailTuiState
 
 
@@ -203,6 +205,21 @@ class ToktrailTuiService:
         return SessionsData(
             sessions=tuple(report.sessions),
             digests=self._session_digest_data(tuple(report.sessions)),
+        )
+
+    def session_detail_text(self, session_key: str) -> str:
+        digest = session_digest_api(
+            db_path=self.state.db_path,
+            config_path=self.state.config_path,
+            session_key=session_key,
+            refresh=False,
+            persist=False,
+        )
+        return render_session_health_text(
+            session_key,
+            digest,
+            utc=self.state.utc,
+            rich_output=True,
         )
 
     def _session_digest_data(

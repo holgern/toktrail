@@ -102,6 +102,17 @@ async def test_sessions_compact_uses_reduced_columns(make_tui_app) -> None:
         assert labels == ["Time", "Area", "Model", "Health", "Fails", "Tokens", "Cost"]
 
 
+async def test_i_still_toggles_inline_details_in_compact_mode(make_tui_app) -> None:
+    app = make_tui_app(tui_mode="compact")
+    async with app.run_test(size=(72, 22)) as pilot:
+        await pilot.press("2")
+        await pilot.pause()
+        assert app.has_class("compact-details-hidden")
+        await pilot.press("i")
+        await pilot.pause()
+        assert not app.has_class("compact-details-hidden")
+
+
 async def test_day_back_updates_date_offset(make_tui_app) -> None:
     app = make_tui_app()
     async with app.run_test(size=(120, 40)) as pilot:
@@ -173,6 +184,62 @@ async def test_status_bar_shows_date_on_areas(make_tui_app) -> None:
         assert "Areas: today" in str(status_text)
 
 
+async def test_enter_opens_session_detail_and_escape_returns(make_tui_app) -> None:
+    from time import time
+
+    from toktrail.api.events import record_usage_event
+    from toktrail.api.models import TokenBreakdown
+    from toktrail.tui.screens.session_detail import SessionDetailScreen
+
+    app = make_tui_app()
+    record_usage_event(
+        app.state.db_path,
+        harness="opencode",
+        source_session_id="s1",
+        source_message_id="m1",
+        provider_id="openai",
+        model_id="gpt-5.5",
+        tokens=TokenBreakdown(input=10, output=5),
+        created_ms=int(time() * 1000),
+    )
+
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.press("2")
+        await pilot.pause()
+        assert app.query_one("#content").current == "sessions"
+
+        await pilot.press("enter")
+        await pilot.pause()
+        assert isinstance(app.screen_stack[-1], SessionDetailScreen)
+
+        detail_text = str(
+            app.screen_stack[-1].query_one("#session-detail-content").render()
+        )
+        assert "Key:" in detail_text
+        assert "opencode source session s1" in detail_text
+        assert "Usage:" in detail_text
+        assert "Summary" in detail_text
+        assert "Tool health" in detail_text
+        assert "Health" in detail_text
+
+        await pilot.press("escape")
+        await pilot.pause()
+        assert not any(
+            isinstance(screen, SessionDetailScreen) for screen in app.screen_stack
+        )
+        assert app.query_one("#content").current == "sessions"
+
+
+async def test_enter_on_empty_sessions_shows_status(make_tui_app) -> None:
+    app = make_tui_app()
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.press("2")
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        assert "No session selected." in str(app.query_one("#status").render())
+
+
 async def test_help_overlay_opens_and_closes(make_tui_app) -> None:
     app = make_tui_app()
     async with app.run_test(size=(120, 40)) as pilot:
@@ -185,6 +252,9 @@ async def test_help_overlay_opens_and_closes(make_tui_app) -> None:
         help_screen = app.screen_stack[-1]
         help_text = str(help_screen.query_one("#help-content").render())
         assert "Keybindings" in help_text or "Keys" in help_text
+        assert "enter" in help_text.lower()
+        assert "open" in help_text.lower()
+        assert "session" in help_text.lower()
         await pilot.press("escape")
         await pilot.pause()
         assert not any(isinstance(s, HelpScreen) for s in app.screen_stack)
@@ -211,6 +281,9 @@ async def test_help_compact_mode(make_tui_app) -> None:
         help_screen = app.screen_stack[-1]
         help_text = str(help_screen.query_one("#help-content").render())
         assert "Keybindings" in help_text
+        assert "enter" in help_text.lower()
+        assert "open session" in help_text.lower()
+        assert "esc" in help_text.lower()
         await pilot.press("escape")
         await pilot.pause()
 
@@ -223,6 +296,8 @@ async def test_help_micro_mode(make_tui_app) -> None:
         help_screen = app.screen_stack[-1]
         help_text = str(help_screen.query_one("#help-content").render())
         assert "Keys" in help_text
+        assert "enter open sess" in help_text.lower()
+        assert "esc back" in help_text.lower()
         await pilot.press("escape")
         await pilot.pause()
 
@@ -278,7 +353,7 @@ async def test_refresh_action_uses_thread_worker(make_tui_app, monkeypatch) -> N
 
 
 async def test_sessions_full_mode_has_health_and_fails_columns(make_tui_app) -> None:
-    app = make_tui_app()
+    app = make_tui_app(tui_mode="full")
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.press("2")
         await pilot.pause()
