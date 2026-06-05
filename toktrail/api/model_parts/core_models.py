@@ -836,6 +836,8 @@ class StatsReport:
     archetypes: dict[str, object] = field(default_factory=dict)
     health: dict[str, object] = field(default_factory=dict)
     area_mix: tuple[dict[str, object], ...] = ()
+    tools: tuple[dict[str, object], ...] = ()
+    tool_usage: dict[str, object] = field(default_factory=dict)
     generated_at_ms: int | None = None
 
     def as_dict(self) -> dict[str, object]:
@@ -852,6 +854,8 @@ class StatsReport:
             "archetypes": dict(self.archetypes),
             "health": dict(self.health),
             "area_mix": list(self.area_mix),
+            "tools": list(self.tools),
+            "tool_usage": dict(self.tool_usage),
         }
         if self.generated_at_ms is not None:
             result["generated_at_ms"] = self.generated_at_ms
@@ -1467,6 +1471,7 @@ class SessionToolHealth:
     tool_call_count: int = 0
     tool_failure_count: int = 0
     tool_timeout_count: int = 0
+    tools: dict[str, int] = field(default_factory=dict)
     failed_tools: dict[str, int] = field(default_factory=dict)
     warnings: tuple[str, ...] = ()
 
@@ -1475,6 +1480,7 @@ class SessionToolHealth:
             "tool_call_count": self.tool_call_count,
             "tool_failure_count": self.tool_failure_count,
             "tool_timeout_count": self.tool_timeout_count,
+            "tools": dict(sorted(self.tools.items())),
             "failed_tools": dict(sorted(self.failed_tools.items())),
             "warnings": list(self.warnings),
         }

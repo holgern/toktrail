@@ -18,6 +18,23 @@ def _format_model_list(models: tuple[str, ...], *, limit: int = 2) -> str:
     return ", ".join(visible) + suffix
 
 
+def _format_tokens_short(value: int) -> str:
+    if value >= 1_000_000_000:
+        return f"{value / 1_000_000_000:.1f}B"
+    if value >= 1_000_000:
+        return f"{value / 1_000_000:.1f}M"
+    if value >= 1_000:
+        return f"{value / 1_000:.1f}K"
+    return str(value)
+
+
+def _format_tool_bar(count: int, max_count: int, width: int) -> str:
+    if max_count <= 0 or width <= 0:
+        return ""
+    filled = max(1, round(width * count / max_count))
+    return chr(9608) * filled  # chr(9608) is the full block character
+
+
 class DashboardPane(ExportablePaneMixin, Static):
     def __init__(self, *args, **kwargs) -> None:  # type: ignore[no-untyped-def]
         super().__init__(*args, **kwargs)
@@ -35,9 +52,18 @@ class DashboardPane(ExportablePaneMixin, Static):
 
     def _build_full_text(self, data: DashboardData) -> str:
         active = data.active_area or "none"
+
+        if data.view == "overview":
+            return self._build_overview_text(data, active)
+        if data.view == "tools":
+            return self._build_tools_text(data, active)
+
         lines = [
             f"Dashboard: {data.title}",
-            "Shortcuts: t today, d daily, w weekly | 1-5 panes | r refresh",
+            (
+                "Shortcuts: o overview, t today, d daily,"
+                " w weekly, g tools | 1-6 panes | r refresh"
+            ),
             "",
             "Totals in shown buckets",
             f"  Tokens:       {_format_int(data.total_tokens)}",
@@ -104,6 +130,68 @@ class DashboardPane(ExportablePaneMixin, Static):
             ]
         )
         return "\n".join(lines)
+
+    def _build_overview_text(self, data: DashboardData, active: str) -> str:
+        lines = [
+            "Overview",
+            (
+                "Shortcuts: o overview, t today, d daily,"
+                " w weekly, g tools | 1-6 panes | r refresh"
+            ),
+            "",
+            "OVERVIEW",
+            f"Sessions          {_format_int(data.session_count):>10}",
+            f"Messages          {_format_int(data.message_count):>10}",
+            "",
+            "COST & TOKENS",
+            f"Total Cost        {_format_cost(data.actual_cost_usd):>12}",
+            f"Input tokens      {_format_tokens_short(data.input_tokens):>12}",
+            f"Output tokens     {_format_tokens_short(data.output_tokens):>12}",
+            f"Cache read        {_format_tokens_short(data.cache_read_tokens):>12}",
+            f"Cache write       {_format_tokens_short(data.cache_write_tokens):>12}",
+        ]
+        lines.extend(self._tool_usage_lines(data))
+        lines.extend(["", f"Active area: {active}"])
+        return "\n".join(lines)
+
+    def _build_tools_text(self, data: DashboardData, active: str) -> str:
+        lines = [
+            "Tool usage",
+            (
+                "Shortcuts: o overview, t today, d daily,"
+                " w weekly, g tools | 1-6 panes | r refresh"
+            ),
+        ]
+        lines.extend(self._tool_usage_lines(data, width=30))
+        lines.extend(["", f"Active area: {active}"])
+        return "\n".join(lines)
+
+    def _tool_usage_lines(self, data: DashboardData, width: int = 24) -> list[str]:
+        lines: list[str] = []
+        lines.append("")
+        lines.append("TOOL USAGE")
+        if not data.tool_rows:
+            if data.tool_missing_session_count:
+                lines.append(
+                    f"  No persisted tool stats yet"
+                    f" ({data.tool_missing_session_count} sessions missing)."
+                )
+            else:
+                lines.append("  (none)")
+            return lines
+        max_count = max(row.get("count", 0) for row in data.tool_rows)
+        for row in data.tool_rows[:10]:
+            name = row.get("name", "?")
+            count = row.get("count", 0)
+            percent = row.get("percent", 0.0)
+            bar = _format_tool_bar(count, max_count, width)
+            lines.append(
+                
+                    f"  {name:<12} {bar:<{width}}"
+                    f" {_format_int(count):>8} ({percent * 100:>4.1f}%)"
+                
+            )
+        return lines
 
     def _build_compact_text(self, data: DashboardData) -> str:
         lines = [

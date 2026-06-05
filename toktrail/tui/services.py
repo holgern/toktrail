@@ -64,9 +64,24 @@ class DashboardData:
     config_path: str
     prices_path: str
     subscriptions_path: str
+    session_count: int = 0
+    message_count: int = 0
+    active_days: int = 0
+    avg_cost_per_day: float = 0.0
+    avg_tokens_per_session: float = 0.0
+    median_tokens_per_session: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    reasoning_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
+    cache_output_tokens: int = 0
+    tool_rows: tuple[dict[str, object], ...] = ()
+    tool_total: int = 0
+    tool_missing_session_count: int = 0
 
 
-DashboardView = Literal["today", "daily", "weekly"]
+DashboardView = Literal["overview", "today", "daily", "weekly", "tools"]
 
 
 @dataclass(frozen=True)
@@ -114,8 +129,82 @@ class ToktrailTuiService:
         self.state = state
 
     def dashboard(self, view: DashboardView = "today") -> DashboardData:
+        from toktrail.api.reports import stats_report, tool_usage_report
+
         active = get_active_area_status(self.state.db_path).area
         summary = config_summary(self.state.config_path)
+        config = {
+            "config_path": str(summary["config_path"]),
+            "prices_path": str(summary["manual_prices_path"]),
+            "subscriptions_path": str(summary["subscriptions_path"]),
+        }
+
+        if view == "overview":
+            stats = stats_report(
+                self.state.db_path,
+                timezone=self.state.timezone_name,
+                utc=self.state.utc,
+                config_path=self.state.config_path,
+            )
+            tokens = stats.totals.get("tokens", {})
+            sessions = stats.sessions
+            tool_report = tool_usage_report(
+                self.state.db_path,
+                timezone=self.state.timezone_name,
+                utc=self.state.utc,
+                config_path=self.state.config_path,
+                limit=10,
+            )
+            return DashboardData(
+                view=view,
+                title="Overview",
+                total_tokens=tokens.get("total", 0),
+                actual_cost_usd=float(stats.totals.get("actual_usd", 0)),
+                virtual_cost_usd=float(stats.totals.get("virtual_usd", 0)),
+                savings_usd=float(stats.totals.get("savings_usd", 0)),
+                active_area=None if active is None else active.path,
+                unpriced_count=stats.totals.get("unpriced_count", 0),
+                top_providers=(),
+                top_models=(),
+                series_buckets=(),
+                session_count=sessions.get("session_count", 0),
+                message_count=sessions.get("message_count", 0),
+                input_tokens=tokens.get("input", 0),
+                output_tokens=tokens.get("output", 0),
+                cache_read_tokens=tokens.get("cache_read", 0),
+                cache_write_tokens=tokens.get("cache_write", 0),
+                tool_rows=tuple(row.as_dict() for row in tool_report.tools),
+                tool_total=tool_report.total_tool_calls,
+                tool_missing_session_count=tool_report.missing_session_count,
+                **config,
+            )
+
+        if view == "tools":
+            tool_report = tool_usage_report(
+                self.state.db_path,
+                timezone=self.state.timezone_name,
+                utc=self.state.utc,
+                config_path=self.state.config_path,
+                limit=20,
+            )
+            return DashboardData(
+                view=view,
+                title="Tool usage",
+                total_tokens=0,
+                actual_cost_usd=0.0,
+                virtual_cost_usd=0.0,
+                savings_usd=0.0,
+                active_area=None if active is None else active.path,
+                unpriced_count=0,
+                top_providers=(),
+                top_models=(),
+                series_buckets=(),
+                tool_rows=tuple(row.as_dict() for row in tool_report.tools),
+                tool_total=tool_report.total_tool_calls,
+                tool_missing_session_count=tool_report.missing_session_count,
+                **config,
+            )
+
         if view == "today":
             report = usage_report(
                 self.state.db_path,
@@ -136,9 +225,7 @@ class ToktrailTuiService:
                 top_providers=tuple(report.by_provider[:3]),
                 top_models=tuple(report.by_model[:3]),
                 series_buckets=(),
-                config_path=str(summary["config_path"]),
-                prices_path=str(summary["manual_prices_path"]),
-                subscriptions_path=str(summary["subscriptions_path"]),
+                **config,
             )
         granularity = "daily" if view == "daily" else "weekly"
         title = "Daily" if view == "daily" else "Weekly"
@@ -162,9 +249,7 @@ class ToktrailTuiService:
             top_providers=(),
             top_models=(),
             series_buckets=tuple(series.buckets[:limit]),
-            config_path=str(summary["config_path"]),
-            prices_path=str(summary["manual_prices_path"]),
-            subscriptions_path=str(summary["subscriptions_path"]),
+            **config,
         )
 
     def _day_bounds(self, date_offset: int) -> tuple[int, int]:

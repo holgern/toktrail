@@ -843,6 +843,7 @@ class SessionToolHealth:
     tool_call_count: int = 0
     tool_failure_count: int = 0
     tool_timeout_count: int = 0
+    tools: dict[str, int] = field(default_factory=dict)
     failed_tools: dict[str, int] = field(default_factory=dict)
     warnings: tuple[str, ...] = ()
 
@@ -851,6 +852,7 @@ class SessionToolHealth:
             "tool_call_count": self.tool_call_count,
             "tool_failure_count": self.tool_failure_count,
             "tool_timeout_count": self.tool_timeout_count,
+            "tools": dict(sorted(self.tools.items())),
             "failed_tools": dict(sorted(self.failed_tools.items())),
             "warnings": list(self.warnings),
         }

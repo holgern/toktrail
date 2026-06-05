@@ -83,7 +83,7 @@ from toktrail.reporting import (
     UsageSessionsReport,
 )
 
-SCHEMA_VERSION = 17
+SCHEMA_VERSION = 18
 _PERIOD_SORT: dict[str, int] = {
     "5h": 0,
     "daily": 1,
@@ -350,6 +350,9 @@ def migrate(conn: sqlite3.Connection) -> None:
     if current_version == 16:
         _migrate_v16_to_v17(conn)
         current_version = 17
+    if current_version == 17:
+        _migrate_v17_to_v18(conn)
+        current_version = 18
 
     _ensure_machine_id(conn)
     conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
@@ -675,6 +678,7 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             tool_call_count INTEGER NOT NULL DEFAULT 0,
             tool_failure_count INTEGER NOT NULL DEFAULT 0,
             tool_timeout_count INTEGER NOT NULL DEFAULT 0,
+            tools_json TEXT NOT NULL DEFAULT '{}',
             failed_tools_json TEXT NOT NULL DEFAULT '{}',
             health_score INTEGER,
             health_grade TEXT,
@@ -1384,6 +1388,7 @@ def _create_source_session_digests_table(conn: sqlite3.Connection) -> None:
             tool_call_count INTEGER NOT NULL DEFAULT 0,
             tool_failure_count INTEGER NOT NULL DEFAULT 0,
             tool_timeout_count INTEGER NOT NULL DEFAULT 0,
+            tools_json TEXT NOT NULL DEFAULT '{}',
             failed_tools_json TEXT NOT NULL DEFAULT '{}',
             health_score INTEGER,
             health_grade TEXT,
@@ -1485,6 +1490,15 @@ def _migrate_v16_to_v17(conn: sqlite3.Connection) -> None:
         "REAL",
     )
 
+
+
+def _migrate_v17_to_v18(conn: sqlite3.Connection) -> None:
+    _add_column_if_missing(
+        conn,
+        "source_session_digests",
+        "tools_json",
+        "TEXT NOT NULL DEFAULT '{}'",
+    )
 
 def _create_machine_active_areas_table(conn: sqlite3.Connection) -> None:
     conn.execute(
@@ -3370,7 +3384,8 @@ def upsert_source_session_digest(
         INSERT INTO source_session_digests (
             origin_machine_id, harness, source_session_id, schema_version, generator,
             generated_at_ms, source_fingerprint, one_line, bullets_json, confidence,
-            tool_call_count, tool_failure_count, tool_timeout_count, failed_tools_json,
+            tool_call_count, tool_failure_count, tool_timeout_count,
+            tools_json, failed_tools_json,
             health_score, health_grade, outcome, outcome_confidence,
             health_basis_json, health_penalties_json, retry_count, edit_churn_count,
             consecutive_failure_max, compaction_count, mid_task_compaction_count,
@@ -3379,7 +3394,7 @@ def upsert_source_session_digest(
             contains_raw_transcript, contains_snippets, created_at_ms, updated_at_ms,
             imported_at_ms
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                 ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(origin_machine_id, harness, source_session_id, generator)
         DO UPDATE SET
@@ -3392,6 +3407,7 @@ def upsert_source_session_digest(
             tool_call_count = excluded.tool_call_count,
             tool_failure_count = excluded.tool_failure_count,
             tool_timeout_count = excluded.tool_timeout_count,
+            tools_json = excluded.tools_json,
             failed_tools_json = excluded.failed_tools_json,
             health_score = excluded.health_score,
             health_grade = excluded.health_grade,
@@ -3427,7 +3443,8 @@ def upsert_source_session_digest(
             digest.tool_health.tool_call_count,
             digest.tool_health.tool_failure_count,
             digest.tool_health.tool_timeout_count,
-            json.dumps(digest.tool_health.failed_tools, separators=(",", ":")),
+            json.dumps(digest.tool_health.tools, separators=(',', ':')),
+            json.dumps(digest.tool_health.failed_tools, separators=(',', ':')),
             None if digest.health is None else digest.health.score,
             None if digest.health is None else digest.health.grade,
             "unknown" if digest.health is None else digest.health.outcome,
@@ -3532,6 +3549,12 @@ def _digest_from_row(row: sqlite3.Row) -> SessionDigest:
             tool_call_count=_required_int(row["tool_call_count"]),
             tool_failure_count=_required_int(row["tool_failure_count"]),
             tool_timeout_count=_required_int(row["tool_timeout_count"]),
+            tools={
+                str(key): int(value)
+                for key, value in json.loads(
+                    _optional_str(row["tools_json"]) or "{}"
+                ).items()
+            },
             failed_tools={
                 str(key): int(value)
                 for key, value in json.loads(

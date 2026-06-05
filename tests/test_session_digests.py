@@ -56,7 +56,7 @@ def test_build_session_digest_redacts_and_aggregates_tool_failures() -> None:
     assert payload["type"] == "session_digest"
     assert digest.tool_health.tool_call_count == 1
     assert digest.tool_health.tool_failure_count == 1
-    assert digest.tool_health.failed_tools == {"shell": 1}
+    assert digest.tool_health.failed_tools == {"bash": 1}  # shell normalizes to bash
     assert digest.health is not None
     assert digest.health.score == 97
     assert digest.health.grade == "A"

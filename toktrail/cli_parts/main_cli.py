@@ -1190,7 +1190,98 @@ def stats(
                 seconds = int(median) // 1000
                 typer.echo(f"Median duration: {format_duration_seconds(seconds)}")
 
+    # Tool usage section
+    tools = report.tools
+    tool_usage = report.tool_usage
+    if tools:
+        typer.echo("")
+        typer.echo("Tool usage:")
+        for row in tools:
+            name = row.get("name", "?")
+            count = row.get("count", 0)
+            percent = row.get("percent", 0.0)
+            typer.echo(f"  {name:<14} {_format_int(count):>8} ({percent * 100:>4.1f}%)")
+    elif tool_usage:
+        missing = tool_usage.get("missing_session_count", 0)
+        if missing:
+            typer.echo("")
+            typer.echo(
+                f"Tool usage: unavailable; {missing} sessions"
+                " have no persisted tool stats."
+            )
 
+
+
+
+@stats_app.command("tools", help="Show ranked tool usage with bars.")
+def stats_tools(
+    ctx: typer.Context,
+    format_: Annotated[
+        str, typer.Option("--format", help="Output format: human or json.")
+    ] = "human",
+    period: UsagePeriodOption = None,
+    since: Annotated[str | None, typer.Option("--since")] = None,
+    until: Annotated[str | None, typer.Option("--until")] = None,
+    timezone_name: TimezoneOption = None,
+    utc: UtcOption = False,
+    harness: HarnessOption = None,
+    area: AreaOption = None,
+    limit: Annotated[int, typer.Option("--limit", help="Max tools to show.")] = 20,
+) -> None:
+    from toktrail.api.reports import tool_usage_report
+    from toktrail.periods import _resolve_timezone, parse_cli_boundary
+
+    if format_ not in {"human", "json"}:
+        _exit_with_error("--format must be one of: human, json.")
+
+    tz = _resolve_timezone(timezone_name=timezone_name, utc=utc)
+    since_ms = parse_cli_boundary(since, tz=tz, is_until=False)
+    until_ms = parse_cli_boundary(until, tz=tz, is_until=True)
+
+    report = tool_usage_report(
+        _resolve_state_db(ctx),
+        period=period,
+        since_ms=since_ms,
+        until_ms=until_ms,
+        timezone=timezone_name,
+        utc=utc,
+        harness=harness,
+        area=area,
+        limit=limit,
+        config_path=_resolve_config_path(ctx),
+    )
+
+    if format_ == "json":
+        typer.echo(json.dumps(report.as_dict(), indent=2))
+        return
+
+    if not report.tools:
+        if report.missing_session_count:
+            typer.echo(
+                f"Tool usage: unavailable;"
+                f" {report.missing_session_count} sessions"
+                " have no persisted tool stats."
+            )
+        else:
+            typer.echo("Tool usage: no data.")
+        return
+
+    typer.echo("Tool usage")
+    max_count = max(row.count for row in report.tools)
+    for row in report.tools:
+        bar = _format_bar(row.count, max_count)
+        typer.echo(
+            f"{row.name:<14} {bar:<24}"
+            f" {_format_int(row.count):>8}"
+            f" ({row.percent * 100:>4.1f}%)"
+        )
+
+
+def _format_bar(count: int, max_count: int, *, width: int = 24) -> str:
+    if max_count <= 0 or width <= 0:
+        return ""
+    filled = max(1, round(width * count / max_count))
+    return chr(9608) * filled  # chr(9608) is the full block character
 @usage_app.command("daily", help="Show daily usage breakdown.")
 @usage_app.command("weekly", help="Show weekly usage breakdown.")
 @usage_app.command("monthly", help="Show monthly usage breakdown.")
@@ -2512,6 +2603,71 @@ def analyze_session(
         rich_output=rich_output,
     )
 
+
+
+@analyze_app.command(
+    "digests",
+    help="Backfill persisted session digests for tool-usage stats.",
+)
+def analyze_digests(
+    ctx: typer.Context,
+    period: UsagePeriodOption = None,
+    since: Annotated[str | None, typer.Option("--since")] = None,
+    until: Annotated[str | None, typer.Option("--until")] = None,
+    timezone_name: TimezoneOption = None,
+    utc: UtcOption = False,
+    harness: HarnessOption = None,
+    area: AreaOption = None,
+    limit: Annotated[
+        int | None,
+        typer.Option("--limit", help="Max sessions to process.")
+    ] = None,
+    refresh: Annotated[
+        bool,
+        typer.Option(
+            "--refresh/--no-refresh",
+            help="Re-import before digesting."
+        )
+    ] = False,
+    json_output: JsonOption = False,
+) -> None:
+    from toktrail.api.analysis import backfill_session_digests
+    from toktrail.periods import _resolve_timezone
+
+    _ = _resolve_timezone(timezone_name=timezone_name, utc=utc)
+
+    report = backfill_session_digests(
+        db_path=_resolve_state_db(ctx),
+        config_path=_resolve_config_path(ctx),
+        period=period,
+        timezone=timezone_name,
+        utc=utc,
+        harness=harness,
+        area=area,
+        limit=limit,
+        refresh=refresh,
+    )
+
+    if json_output:
+        typer.echo(json.dumps({
+            "scanned": report.scanned,
+            "persisted": report.persisted,
+            "skipped": report.skipped,
+            "failed": report.failed,
+            "warnings": list(report.warnings),
+        }, indent=2))
+        return
+
+    typer.echo(f"Scanned: {report.scanned}")
+    typer.echo(f"Persisted: {report.persisted}")
+    typer.echo(f"Skipped: {report.skipped}")
+    typer.echo(f"Failed: {report.failed}")
+    if report.warnings:
+        typer.echo("Warnings:")
+        for w in report.warnings[:10]:
+            typer.echo(f"  {w}")
+        if len(report.warnings) > 10:
+            typer.echo(f"  ... and {len(report.warnings) - 10} more")
 
 @copilot_app.command(
     "run",

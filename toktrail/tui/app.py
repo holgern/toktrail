@@ -85,9 +85,11 @@ class ToktrailTuiApp(App[None]):
         Binding("4", "switch_pane('prices')", "Prices", show=False),
         Binding("5", "switch_pane('subscriptions')", "Subscriptions", show=False),
         Binding("6", "switch_pane('config')", "Config", show=False),
+        Binding("o", "switch_dashboard('overview')", "Overview", show=False),
         Binding("t", "switch_dashboard('today')", "Today", show=False),
         Binding("d", "switch_dashboard('daily')", "Daily", show=False),
         Binding("w", "switch_dashboard('weekly')", "Weekly", show=False),
+        Binding("g", "switch_dashboard('tools')", "Tools", show=False),
         Binding("r", "refresh", "Refresh"),
         Binding("a", "create_area", "Create area"),
         Binding("u", "set_active_area", "Use area"),
@@ -293,7 +295,7 @@ class ToktrailTuiApp(App[None]):
         self.push_screen(PriceFormScreen(seed), self._on_price_saved)
 
     def action_switch_dashboard(self, view: str) -> None:
-        if view not in {"today", "daily", "weekly"}:
+        if view not in {"overview", "today", "daily", "weekly", "tools"}:
             self._status.update(f"Unknown dashboard: {view}")
             return
         self._dashboard_view = cast(DashboardView, view)

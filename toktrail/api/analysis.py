@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
@@ -824,9 +825,87 @@ def _tool_call_analysis_json_allowed() -> bool:
     return True
 
 
+@dataclass(frozen=True)
+class DigestBackfillReport:
+    scanned: int
+    persisted: int
+    skipped: int
+    failed: int
+    warnings: tuple[str, ...]
+
+
+def backfill_session_digests(
+    *,
+    db_path: Path | None = None,
+    config_path: Path | None = None,
+    period: str | None = None,
+    timezone: str | None = None,
+    utc: bool = False,
+    harness: str | None = None,
+    area: str | None = None,
+    limit: int | None = None,
+    refresh: bool = False,
+) -> DigestBackfillReport:
+    """Persist session digests for sessions that lack them."""
+    from toktrail.api.reports import usage_sessions_report
+
+    sessions_report = usage_sessions_report(
+        db_path,
+        period=period,
+        timezone=timezone,
+        utc=utc,
+        harness=harness,
+        area=area,
+        limit=limit,
+        config_path=config_path,
+    )
+
+    scanned = 0
+    persisted = 0
+    skipped = 0
+    failed = 0
+    warnings: list[str] = []
+
+    for session in sessions_report.sessions:
+        scanned += 1
+        definition = None
+        try:
+            from toktrail.adapters.registry import get_harness
+            definition = get_harness(session.harness)
+        except (ValueError, KeyError):
+            skipped += 1
+            continue
+        if definition.extract_session_events is None:
+            skipped += 1
+            continue
+        try:
+            session_digest(
+                db_path=db_path,
+                config_path=config_path,
+                harness=session.harness,
+                source_session_id=session.source_session_id,
+                refresh=refresh,
+                persist=True,
+            )
+            persisted += 1
+        except Exception as exc:
+            failed += 1
+            warnings.append(f"{session.harness}/{session.source_session_id}: {exc}")
+
+    return DigestBackfillReport(
+        scanned=scanned,
+        persisted=persisted,
+        skipped=skipped,
+        failed=failed,
+        warnings=tuple(warnings),
+    )
+
+
 __all__ = [
     "session_cache_analysis",
     "session_digest",
     "session_report",
     "session_tool_call_analysis",
+    "backfill_session_digests",
+    "DigestBackfillReport",
 ]

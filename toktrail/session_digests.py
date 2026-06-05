@@ -127,23 +127,77 @@ def build_digest_summary(
     )
 
 
+_TOOL_NAME_ALIASES: dict[str, str] = {
+    "bash": "bash",
+    "shell": "bash",
+    "exec": "bash",
+    "exec_command": "bash",
+    "command": "bash",
+    "run_command": "bash",
+
+    "read": "read",
+    "read_file": "read",
+    "readfile": "read",
+    "view": "read",
+
+    "edit": "edit",
+    "edit_file": "edit",
+    "multiedit": "edit",
+    "multi_edit": "edit",
+    "replace": "edit",
+
+    "write": "write",
+    "write_file": "write",
+    "create_file": "write",
+
+    "grep": "grep",
+    "search": "grep",
+    "ripgrep": "grep",
+
+    "glob": "glob",
+    "ls": "ls",
+
+    "todowrite": "todowrite",
+    "todo_write": "todowrite",
+    "todo": "todowrite",
+
+    "task": "task",
+    "agent": "task",
+    "question": "question",
+    "ask_question": "question",
+    "apply_patch": "apply_patch",
+    "patch": "apply_patch",
+}
+
+
+def normalize_tool_name(name: str | None, raw_kind: str | None = None) -> str:
+    raw = (name or raw_kind or "unknown").strip()
+    raw = raw.replace("-", "_").replace(" ", "_")
+    raw = raw.lower()
+    return _TOOL_NAME_ALIASES.get(raw, raw or "unknown")
+
+
 def summarize_tool_health(
     events: Iterable[SessionTranscriptEvent],
 ) -> SessionToolHealth:
     call_count = 0
     failure_count = 0
     timeout_count = 0
+    tools: dict[str, int] = {}
     failed_tools: dict[str, int] = {}
     warnings: set[str] = set()
     for event in events:
         if event.kind in {"tool_call", "tool_result", "command", "error"}:
             call_count += 1
+        if event.kind in {"tool_call", "command"}:
+            name = normalize_tool_name(event.name, event.raw_kind)
+            tools[name] = tools.get(name, 0) + 1
         failed = (
             event.success is False or event.kind == "error" or bool(event.error_text)
         )
         if failed:
             failure_count += 1
-            name = event.name or event.raw_kind or event.kind
+            name = normalize_tool_name(event.name, event.raw_kind)
             failed_tools[name] = failed_tools.get(name, 0) + 1
         text = " ".join(part for part in (event.error_text, event.text) if part)
         if "timeout" in text.lower():
@@ -154,6 +208,7 @@ def summarize_tool_health(
         tool_call_count=call_count,
         tool_failure_count=failure_count,
         tool_timeout_count=timeout_count,
+        tools=tools,
         failed_tools=failed_tools,
         warnings=tuple(sorted(warnings)),
     )
@@ -202,6 +257,103 @@ def extract_pi_session_events(
         events.extend(
             _extract_pi_file_events(path, source_session_id=source_session_id)
         )
+    return events
+
+
+def extract_claude_session_events(
+    source_path: Path,
+    *,
+    source_session_id: str,
+) -> list[SessionTranscriptEvent]:
+    events: list[SessionTranscriptEvent] = []
+    for path in _jsonl_paths(source_path):
+        events.extend(
+            _extract_claude_file_events(path, source_session_id=source_session_id)
+        )
+    return events
+
+
+def _extract_claude_file_events(
+    path: Path,
+    *,
+    source_session_id: str,
+) -> list[SessionTranscriptEvent]:
+    events: list[SessionTranscriptEvent] = []
+    tool_names_by_id: dict[str, str] = {}
+    for entry in _iter_jsonl(path):
+        entry_session_id = _as_str(entry.get("sessionId")) or path.stem
+        if entry_session_id != source_session_id:
+            continue
+        entry_type = _as_str(entry.get("type"))
+        created_ms = _timestamp_ms(entry.get("timestamp"))
+        message = _as_mapping(entry.get("message")) or entry
+
+        if entry_type == "assistant":
+            content = message.get("content")
+            if not isinstance(content, list):
+                continue
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+                block_type = _as_str(block.get("type"))
+                if block_type == "tool_use":
+                    tool_id = _as_str(block.get("id"))
+                    tool_name = _as_str(block.get("name"))
+                    if tool_id and tool_name:
+                        tool_names_by_id[tool_id] = tool_name
+                    name = tool_name or tool_id
+                    # Extract command for bash-like tools
+                    inp = _as_mapping(block.get("input"))
+                    text = None
+                    bash_names = {"bash", "shell", "exec", "command"}
+                    if inp and tool_name and tool_name.lower() in bash_names:
+                        text = _as_str(inp.get("command"))
+                    elif inp:
+                        text = _first_str(inp, "file_path", "filePath", "path")
+                    events.append(
+                        SessionTranscriptEvent(
+                            harness="claude",
+                            source_session_id=source_session_id,
+                            created_ms=created_ms,
+                            role="assistant",
+                            kind="tool_call",
+                            name=name,
+                            text=text,
+                            raw_kind=block_type,
+                        )
+                    )
+
+        elif entry_type == "user":
+            content = message.get("content")
+            if not isinstance(content, list):
+                continue
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+                block_type = _as_str(block.get("type"))
+                if block_type == "tool_result":
+                    tool_use_id = _as_str(block.get("tool_use_id"))
+                    name = tool_names_by_id.get(tool_use_id) if tool_use_id else None
+                    is_error = block.get("is_error", block.get("isError"))
+                    error_text = (
+                        _as_str(block.get("error"))
+                        or _as_str(block.get("errorText"))
+                    )
+                    kind = "error" if is_error is True else "tool_result"
+                    success = not is_error if isinstance(is_error, bool) else None
+                    events.append(
+                        SessionTranscriptEvent(
+                            harness="claude",
+                            source_session_id=source_session_id,
+                            created_ms=created_ms,
+                            role="user",
+                            kind=kind,
+                            name=name,
+                            success=success,
+                            error_text=error_text,
+                            raw_kind=block_type,
+                        )
+                    )
     return events
 
 
@@ -558,6 +710,7 @@ def public_digest_from_internal(digest: SessionDigest) -> object:
             tool_call_count=digest.tool_health.tool_call_count,
             tool_failure_count=digest.tool_health.tool_failure_count,
             tool_timeout_count=digest.tool_health.tool_timeout_count,
+            tools=dict(digest.tool_health.tools),
             failed_tools=dict(digest.tool_health.failed_tools),
             warnings=digest.tool_health.warnings,
         ),

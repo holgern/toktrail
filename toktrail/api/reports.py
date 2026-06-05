@@ -21,6 +21,8 @@ from toktrail.api.models import (
     RunReport,
     StatsReport,
     SubscriptionUsageReport,
+    ToolUsageReport,
+    ToolUsageRow,
     UsageAreasReport,
     UsageSeriesReport,
     UsageSessionRow,
@@ -519,6 +521,63 @@ def _compute_area_mix(
             }
         )
     return tuple(rows)
+def _tools_for_stats(
+    db_path: Path | None,
+    *,
+    period: str | None = None,
+    timezone: str | None = None,
+    utc: bool = False,
+    since_ms: int | None = None,
+    until_ms: int | None = None,
+    config_path: Path | None = None,
+) -> tuple[dict[str, object], ...]:
+    try:
+        report = tool_usage_report(
+            db_path,
+            period=period,
+            timezone=timezone,
+            utc=utc,
+            since_ms=since_ms,
+            until_ms=until_ms,
+            config_path=config_path,
+            limit=10,
+        )
+        return tuple(row.as_dict() for row in report.tools)
+    except Exception:
+        return ()
+
+
+def _tool_usage_summary(
+    db_path: Path | None,
+    *,
+    period: str | None = None,
+    timezone: str | None = None,
+    utc: bool = False,
+    since_ms: int | None = None,
+    until_ms: int | None = None,
+    config_path: Path | None = None,
+) -> dict[str, object]:
+    try:
+        report = tool_usage_report(
+            db_path,
+            period=period,
+            timezone=timezone,
+            utc=utc,
+            since_ms=since_ms,
+            until_ms=until_ms,
+            config_path=config_path,
+            limit=10,
+        )
+        return {
+            "total_tool_calls": report.total_tool_calls,
+            "sessions_considered": report.sessions_considered,
+            "sessions_with_tool_stats": report.sessions_with_tool_stats,
+            "missing_session_count": report.missing_session_count,
+        }
+    except Exception:
+        return {}
+
+
 
 
 def stats_report(
@@ -604,6 +663,24 @@ def stats_report(
         archetypes=archetypes,
         health=health,
         area_mix=area_mix,
+        tools=_tools_for_stats(
+            db_path,
+            period=period,
+            timezone=timezone,
+            utc=utc,
+            since_ms=since_ms,
+            until_ms=until_ms,
+            config_path=config_path,
+        ),
+        tool_usage=_tool_usage_summary(
+            db_path,
+            period=period,
+            timezone=timezone,
+            utc=utc,
+            since_ms=since_ms,
+            until_ms=until_ms,
+            config_path=config_path,
+        ),
         generated_at_ms=generated_at_ms,
     )
 
@@ -1010,4 +1087,121 @@ __all__ = [
     "subscription_usage_report",
     "usage_runs_report",
     "usage_areas_report",
+    "tool_usage_report",
 ]
+
+
+def tool_usage_report(
+    db_path: Path | None = None,
+    *,
+    period: str | None = None,
+    timezone: str | None = None,
+    utc: bool = False,
+    since_ms: int | None = None,
+    until_ms: int | None = None,
+    machine_id: str | None = None,
+    harness: str | None = None,
+    source_session_id: str | None = None,
+    provider_id: str | None = None,
+    model_id: str | None = None,
+    agent: str | None = None,
+    area: str | None = None,
+    area_leaf: str | None = None,
+    area_exact: bool = False,
+    unassigned_area: bool = False,
+    limit: int | None = 10,
+    config_path: Path | None = None,
+) -> ToolUsageReport:
+    """Aggregate tool usage counts from persisted session digests."""
+    from collections import Counter
+
+    from toktrail.db import list_source_session_digests, migrate
+
+    sessions_report = usage_sessions_report(
+        db_path,
+        period=period,
+        timezone=timezone,
+        utc=utc,
+        since_ms=since_ms,
+        until_ms=until_ms,
+        machine_id=machine_id,
+        harness=harness,
+        source_session_id=source_session_id,
+        provider_id=provider_id,
+        model_id=model_id,
+        agent=agent,
+        area=area,
+        area_leaf=area_leaf,
+        area_exact=area_exact,
+        unassigned_area=unassigned_area,
+        limit=None,
+        order="desc",
+        breakdown=False,
+        config_path=config_path,
+    )
+
+    conn, _ = _open_state_db(db_path)
+    migrate(conn)
+
+    all_digests = list_source_session_digests(conn)
+    digest_lookup: dict[tuple[str, str, str], object] = {}
+    for d in all_digests:
+        key = (d.origin_machine_id or "", d.harness, d.source_session_id)
+        digest_lookup[key] = d
+
+    tool_counts: Counter[str] = Counter()
+    tool_failures: Counter[str] = Counter()
+    sessions_considered = 0
+    sessions_with_stats = 0
+    missing_count = 0
+
+    for session in sessions_report.sessions:
+        sessions_considered += 1
+        machine = session.origin_machine_id or ""
+        key = (machine, session.harness, session.source_session_id)
+        digest = digest_lookup.get(key)
+        if digest is None:
+            missing_count += 1
+            continue
+        tool_health = digest.tool_health
+        if not tool_health.tools and not tool_health.warnings:
+            missing_count += 1
+            continue
+        sessions_with_stats += 1
+        for name, count in tool_health.tools.items():
+            tool_counts[name] += count
+        for name, count in tool_health.failed_tools.items():
+            tool_failures[name] += count
+
+    conn.close()
+
+    total = sum(tool_counts.values())
+    rows: list[ToolUsageRow] = []
+    for name, count in sorted(tool_counts.items(), key=lambda x: (-x[1], x[0])):
+        percent = count / total if total > 0 else 0.0
+        rows.append(ToolUsageRow(
+            name=name,
+            count=count,
+            percent=percent,
+            failure_count=tool_failures.get(name, 0),
+        ))
+
+    if limit is not None:
+        rows = rows[:limit]
+
+    filters: dict[str, object] = {}
+    if period is not None:
+        filters["period"] = period
+    if harness is not None:
+        filters["harness"] = harness
+    if area is not None:
+        filters["area"] = area
+
+    return ToolUsageReport(
+        filters=filters,
+        total_tool_calls=total,
+        sessions_considered=sessions_considered,
+        sessions_with_tool_stats=sessions_with_stats,
+        missing_session_count=missing_count,
+        tools=tuple(rows),
+    )

@@ -46,6 +46,7 @@ from toktrail.paths import (
     resolve_vibe_logs_path,
 )
 from toktrail.session_digests import (
+    extract_claude_session_events,
     extract_codex_session_events,
     extract_pi_session_events,
 )
@@ -255,6 +256,7 @@ HARNESS_REGISTRY: dict[str, HarnessDefinition] = {
         resolve_source_path=resolve_claude_projects_path,
         scan=scan_claude_path,
         list_sessions=list_claude_sessions,
+        extract_session_events=extract_claude_session_events,
         supports_watch=True,
         config_key="claude_projects",
         id_prefix="claude",

@@ -130,4 +130,47 @@ class SessionToolCallReport:
         return payload
 
 
-__all__ = ["ToolCallRow", "SessionToolCallReport"]
+@dataclass(frozen=True)
+class ToolUsageRow:
+    """A single tool in a global tool-usage report."""
+
+    name: str
+    count: int
+    percent: float
+    failure_count: int = 0
+    timeout_count: int = 0
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "name": self.name,
+            "count": self.count,
+            "percent": self.percent,
+            "failure_count": self.failure_count,
+            "timeout_count": self.timeout_count,
+        }
+
+
+@dataclass(frozen=True)
+class ToolUsageReport:
+    """Global tool-usage aggregation across sessions."""
+
+    filters: dict[str, object]
+    total_tool_calls: int
+    sessions_considered: int
+    sessions_with_tool_stats: int
+    missing_session_count: int
+    tools: tuple[ToolUsageRow, ...]
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "type": "tool_usage",
+            "filters": dict(self.filters),
+            "total_tool_calls": self.total_tool_calls,
+            "sessions_considered": self.sessions_considered,
+            "sessions_with_tool_stats": self.sessions_with_tool_stats,
+            "missing_session_count": self.missing_session_count,
+            "tools": [row.as_dict() for row in self.tools],
+        }
+
+
+__all__ = ["ToolCallRow", "SessionToolCallReport", "ToolUsageRow", "ToolUsageReport"]
