@@ -62,8 +62,6 @@ from toktrail.api.model_parts.tokens import TokenBreakdown
 from toktrail.api.model_parts.tool_calls import (
     SessionToolCallReport,
     ToolCallRow,
-    ToolUsageReport,
-    ToolUsageRow,
 )
 from toktrail.api.model_parts.usage import (
     HarnessDefinition,

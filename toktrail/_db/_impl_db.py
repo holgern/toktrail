@@ -1491,7 +1491,6 @@ def _migrate_v16_to_v17(conn: sqlite3.Connection) -> None:
     )
 
 
-
 def _migrate_v17_to_v18(conn: sqlite3.Connection) -> None:
     _add_column_if_missing(
         conn,
@@ -1499,6 +1498,7 @@ def _migrate_v17_to_v18(conn: sqlite3.Connection) -> None:
         "tools_json",
         "TEXT NOT NULL DEFAULT '{}'",
     )
+
 
 def _create_machine_active_areas_table(conn: sqlite3.Connection) -> None:
     conn.execute(
@@ -3443,8 +3443,8 @@ def upsert_source_session_digest(
             digest.tool_health.tool_call_count,
             digest.tool_health.tool_failure_count,
             digest.tool_health.tool_timeout_count,
-            json.dumps(digest.tool_health.tools, separators=(',', ':')),
-            json.dumps(digest.tool_health.failed_tools, separators=(',', ':')),
+            json.dumps(digest.tool_health.tools, separators=(",", ":")),
+            json.dumps(digest.tool_health.failed_tools, separators=(",", ":")),
             None if digest.health is None else digest.health.score,
             None if digest.health is None else digest.health.grade,
             "unknown" if digest.health is None else digest.health.outcome,

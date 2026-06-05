@@ -134,33 +134,26 @@ _TOOL_NAME_ALIASES: dict[str, str] = {
     "exec_command": "bash",
     "command": "bash",
     "run_command": "bash",
-
     "read": "read",
     "read_file": "read",
     "readfile": "read",
     "view": "read",
-
     "edit": "edit",
     "edit_file": "edit",
     "multiedit": "edit",
     "multi_edit": "edit",
     "replace": "edit",
-
     "write": "write",
     "write_file": "write",
     "create_file": "write",
-
     "grep": "grep",
     "search": "grep",
     "ripgrep": "grep",
-
     "glob": "glob",
     "ls": "ls",
-
     "todowrite": "todowrite",
     "todo_write": "todowrite",
     "todo": "todowrite",
-
     "task": "task",
     "agent": "task",
     "question": "question",
@@ -335,9 +328,8 @@ def _extract_claude_file_events(
                     tool_use_id = _as_str(block.get("tool_use_id"))
                     name = tool_names_by_id.get(tool_use_id) if tool_use_id else None
                     is_error = block.get("is_error", block.get("isError"))
-                    error_text = (
-                        _as_str(block.get("error"))
-                        or _as_str(block.get("errorText"))
+                    error_text = _as_str(block.get("error")) or _as_str(
+                        block.get("errorText")
                     )
                     kind = "error" if is_error is True else "tool_result"
                     success = not is_error if isinstance(is_error, bool) else None

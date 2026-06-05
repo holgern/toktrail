@@ -521,6 +521,8 @@ def _compute_area_mix(
             }
         )
     return tuple(rows)
+
+
 def _tools_for_stats(
     db_path: Path | None,
     *,
@@ -576,8 +578,6 @@ def _tool_usage_summary(
         }
     except Exception:
         return {}
-
-
 
 
 def stats_report(
@@ -1179,12 +1179,14 @@ def tool_usage_report(
     rows: list[ToolUsageRow] = []
     for name, count in sorted(tool_counts.items(), key=lambda x: (-x[1], x[0])):
         percent = count / total if total > 0 else 0.0
-        rows.append(ToolUsageRow(
-            name=name,
-            count=count,
-            percent=percent,
-            failure_count=tool_failures.get(name, 0),
-        ))
+        rows.append(
+            ToolUsageRow(
+                name=name,
+                count=count,
+                percent=percent,
+                failure_count=tool_failures.get(name, 0),
+            )
+        )
 
     if limit is not None:
         rows = rows[:limit]

@@ -1211,8 +1211,6 @@ def stats(
             )
 
 
-
-
 @stats_app.command("tools", help="Show ranked tool usage with bars.")
 def stats_tools(
     ctx: typer.Context,
@@ -1282,6 +1280,8 @@ def _format_bar(count: int, max_count: int, *, width: int = 24) -> str:
         return ""
     filled = max(1, round(width * count / max_count))
     return chr(9608) * filled  # chr(9608) is the full block character
+
+
 @usage_app.command("daily", help="Show daily usage breakdown.")
 @usage_app.command("weekly", help="Show weekly usage breakdown.")
 @usage_app.command("monthly", help="Show monthly usage breakdown.")
@@ -2604,7 +2604,6 @@ def analyze_session(
     )
 
 
-
 @analyze_app.command(
     "digests",
     help="Backfill persisted session digests for tool-usage stats.",
@@ -2619,15 +2618,10 @@ def analyze_digests(
     harness: HarnessOption = None,
     area: AreaOption = None,
     limit: Annotated[
-        int | None,
-        typer.Option("--limit", help="Max sessions to process.")
+        int | None, typer.Option("--limit", help="Max sessions to process.")
     ] = None,
     refresh: Annotated[
-        bool,
-        typer.Option(
-            "--refresh/--no-refresh",
-            help="Re-import before digesting."
-        )
+        bool, typer.Option("--refresh/--no-refresh", help="Re-import before digesting.")
     ] = False,
     json_output: JsonOption = False,
 ) -> None:
@@ -2649,13 +2643,18 @@ def analyze_digests(
     )
 
     if json_output:
-        typer.echo(json.dumps({
-            "scanned": report.scanned,
-            "persisted": report.persisted,
-            "skipped": report.skipped,
-            "failed": report.failed,
-            "warnings": list(report.warnings),
-        }, indent=2))
+        typer.echo(
+            json.dumps(
+                {
+                    "scanned": report.scanned,
+                    "persisted": report.persisted,
+                    "skipped": report.skipped,
+                    "failed": report.failed,
+                    "warnings": list(report.warnings),
+                },
+                indent=2,
+            )
+        )
         return
 
     typer.echo(f"Scanned: {report.scanned}")
@@ -2668,6 +2667,7 @@ def analyze_digests(
             typer.echo(f"  {w}")
         if len(report.warnings) > 10:
             typer.echo(f"  ... and {len(report.warnings) - 10} more")
+
 
 @copilot_app.command(
     "run",

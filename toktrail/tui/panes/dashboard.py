@@ -186,10 +186,8 @@ class DashboardPane(ExportablePaneMixin, Static):
             percent = row.get("percent", 0.0)
             bar = _format_tool_bar(count, max_count, width)
             lines.append(
-                
-                    f"  {name:<12} {bar:<{width}}"
-                    f" {_format_int(count):>8} ({percent * 100:>4.1f}%)"
-                
+                f"  {name:<12} {bar:<{width}}"
+                f" {_format_int(count):>8} ({percent * 100:>4.1f}%)"
             )
         return lines
 

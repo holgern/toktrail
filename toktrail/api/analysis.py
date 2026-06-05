@@ -871,6 +871,7 @@ def backfill_session_digests(
         definition = None
         try:
             from toktrail.adapters.registry import get_harness
+
             definition = get_harness(session.harness)
         except (ValueError, KeyError):
             skipped += 1
